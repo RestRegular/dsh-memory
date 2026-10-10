@@ -82,6 +82,26 @@ export class CordisMemoryService extends Service {
     return this.impl.stopEmbedServerManually()
   }
 
+  /** Panel: download llama.cpp + the GGML model, then adopt and start them. */
+  installVectorBackend()       {
+    this.impl.installVectorBackend()
+  }
+
+  /** Panel: abort an in-flight download. */
+  cancelVectorInstall()       {
+    this.impl.cancelVectorInstall()
+  }
+
+  /** Panel: remove the runtime + model we installed (never the memory store). */
+  uninstallVectorBackend()                                                           {
+    return this.impl.uninstallVectorBackend()
+  }
+
+  /** Panel: delete every record in every scope. */
+  wipeAllRecords()                                                   {
+    return this.impl.wipeAllRecords()
+  }
+
   search(query             )                       {
     return this.impl.search(query)
   }

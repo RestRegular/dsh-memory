@@ -45,6 +45,22 @@ for (const [label, pkgDir, mustHave] of [
   }
   const meta = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'))
   console.log(`${label}: ${meta.name}@${meta.version} — ${meta.description?.slice(0, 48) ?? ''}`)
+
+  // Invariant that cost a boot failure on 2026-10-10: a client bundle must
+  // register under the PACKAGE NAME. client-modules keys graph rows by package
+  // name; a bundle declaring anything else makes the host fall back to
+  // re-fetching it, which registers the factory twice and aborts the web boot
+  // with "duplicate factory registration".
+  if (meta.dsh?.client && existsSync(join(pkgDir, 'lib', 'client.js'))) {
+    const source = readFileSync(join(pkgDir, 'lib', 'client.js'), 'utf8')
+    const declared = source.match(/__ModuleLoader__\.load\(\{\s*id:\s*'([^']+)'/)?.[1]?.replace(/\/client$/, '')
+    if (declared !== meta.name) {
+      console.error(`  CLIENT ID MISMATCH: bundle registers "${declared}" but the package is "${meta.name}"`)
+      bad++
+    } else {
+      console.log('  client id matches package name ✓')
+    }
+  }
 }
 
 // 2) patches ----------------------------------------------------------------

@@ -110,6 +110,38 @@ async function handle(ctx, routePath, req, res) {
       writeJson(res, { ok: true, value: { ...out, ...(await memory.embedServerStatus()) } })
       return
     }
+    if (method === 'POST' && path === '/embed/install') {
+      if (typeof memory.installVectorBackend !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供自动安装接口（请升级 @restregular/dsh-memory）')
+      memory.installVectorBackend()
+      console.log('[dsh-memory-panel] 开始下载本地向量服务')
+      writeJson(res, { ok: true, value: { ...(await memory.embedServerStatus()) } })
+      return
+    }
+    if (method === 'POST' && path === '/embed/install/cancel') {
+      if (typeof memory.cancelVectorInstall !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供自动安装接口（请升级 @restregular/dsh-memory）')
+      memory.cancelVectorInstall()
+      console.log('[dsh-memory-panel] 取消下载本地向量服务')
+      writeJson(res, { ok: true, value: { ...(await memory.embedServerStatus()) } })
+      return
+    }
+    if (method === 'POST' && path === '/embed/uninstall') {
+      if (typeof memory.uninstallVectorBackend !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供卸载接口（请升级 @restregular/dsh-memory）')
+      const out = memory.uninstallVectorBackend()
+      console.log(`[dsh-memory-panel] 卸载向量服务 -> ${out.reason}，释放 ${(out.freedBytes / 1048576).toFixed(1)} MB`)
+      writeJson(res, { ok: true, value: { ...out, ...(await memory.embedServerStatus()) } })
+      return
+    }
+    if (method === 'POST' && path === '/data/wipe') {
+      if (typeof memory.wipeAllRecords !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供数据清理接口（请升级 @restregular/dsh-memory）')
+      const body = await readJsonBody(req)
+      // Deleting everything is irreversible: require the caller to say so out
+      // loud, not just to click a button.
+      if (String(body.confirm ?? '') !== 'delete') throw new ApiError(400, 'CONFIRM_REQUIRED', '需要 confirm: "delete" 才执行删除')
+      const out = memory.wipeAllRecords()
+      console.log(`[dsh-memory-panel] 清空记忆数据 -> ${out.removed} 条 / ${out.scopes.length} 个作用域`)
+      writeJson(res, { ok: true, value: { ...out, ...(await memory.embedServerStatus()) } })
+      return
+    }
     if (method === 'GET' && path === '/records') {
       const scope = url.searchParams.get('scope')
       const query = (url.searchParams.get('q') ?? '').trim().toLowerCase()
@@ -173,7 +205,6 @@ async function handle(ctx, routePath, req, res) {
 }
 
 export const name = 'dsh-memory-panel'
-
 export function apply(ctx, config = {}) {
   const routePath = String(config.route || '/memory/api').replace(/\/$/, '')
   try {

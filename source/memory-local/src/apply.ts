@@ -82,6 +82,26 @@ export class CordisMemoryService extends Service {
     return this.impl.stopEmbedServerManually()
   }
 
+  /** Panel: download llama.cpp + the GGML model, then adopt and start them. */
+  installVectorBackend(): void {
+    this.impl.installVectorBackend()
+  }
+
+  /** Panel: abort an in-flight download. */
+  cancelVectorInstall(): void {
+    this.impl.cancelVectorInstall()
+  }
+
+  /** Panel: remove the runtime + model we installed (never the memory store). */
+  uninstallVectorBackend(): ReturnType<LocalMemoryService['uninstallVectorBackend']> {
+    return this.impl.uninstallVectorBackend()
+  }
+
+  /** Panel: delete every record in every scope. */
+  wipeAllRecords(): ReturnType<LocalMemoryService['wipeAllRecords']> {
+    return this.impl.wipeAllRecords()
+  }
+
   search(query: MemoryQuery): Promise<MemoryHit[]> {
     return this.impl.search(query)
   }

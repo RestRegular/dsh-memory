@@ -1,6 +1,6 @@
 {
   "name": "@restregular/dsh-memory-panel",
-  "version": "0.1.1",
+  "version": "0.1.0",
   "description": "DSH 记忆面板：设置页里浏览/搜索/编辑/删除记忆，并手动启停本地向量服务。",
   "icon": "./icon.svg",
   "type": "module",
@@ -28,7 +28,7 @@
     }
   },
   "peerDependencies": {
-    "@restregular/dsh-memory": "^0.1.1"
+    "@restregular/dsh-memory": "^0.1.0"
   },
   "peerDependenciesMeta": {
     "@restregular/dsh-memory": {

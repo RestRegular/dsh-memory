@@ -21,6 +21,29 @@ import { DailyBudget, blendScores, rerank, type LlmInvoke, type RerankConfig } f
 import { RerankCache } from './rerank-cache.ts'
 import { scanSecrets, redactSecrets } from './secrets.ts'
 import { EmbedServerManager, type EmbedServerConfig, type EmbedServerState } from './embed-server.ts'
+import { VectorInstaller, detectInstalled, installPaths, type InstallProgress } from './embed-install.ts'
+import { existsSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { homedir } from 'node:os'
+
+/** Recursive byte count; 0 for anything unreadable. */
+function pathSize(path: string): number {
+  try {
+    const st = statSync(path)
+    if (!st.isDirectory()) return st.size
+    let total = 0
+    for (const entry of readdirSync(path)) total += pathSize(join(path, entry))
+    return total
+  } catch {
+    return 0
+  }
+}
+
+/** True when `child` is `parent` or lives under it (both resolved). */
+function isInside(parent: string, child: string): boolean {
+  const rel = relative(resolve(parent), resolve(child))
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
 
 export interface MemoryLocalConfig {
   /** Store root directory. Created if missing. */
@@ -51,6 +74,22 @@ export interface MemoryLocalConfig {
       backfillBatchSize?: number
       /** Manage the llama-server process lifecycle (spawn on start, stop on exit). */
       spawn?: EmbedServerConfig
+      /**
+       * Where the panel's one-click installer puts llama.cpp + the GGML model.
+       * Defaults to the store's parent directory (so the layout is
+       * `<root>/llamacpp/llama-server*` + `<root>/models/*.gguf`, matching a
+       * hand-made install). Existing files there are adopted automatically —
+       * nothing is ever downloaded unless the user clicks the button.
+       */
+      autoInstall?: {
+        dir?: string
+        /**
+         * Model download URLs tried in order. Defaults to hf-mirror →
+         * ModelScope → huggingface.co: the official host is unreachable from
+         * mainland China, and the first two serve the identical GGUF.
+         */
+        modelSources?: string[]
+      }
     }
     llm?: Partial<RerankConfig>
   }
@@ -70,6 +109,14 @@ export interface ResolvedConfig {
   halfLifeDays: number
   vector: {
     enabled: boolean
+    /** true when the user actually pointed us at a backend (endpoint and/or spawn) */
+    configured: boolean
+    endpointConfigured: boolean
+    spawnConfigured: boolean
+    /** Where the panel's one-click installer puts (or already found) a backend. */
+    installRoot: string
+    /** Model URLs the installer tries in order (undefined → built-in fallbacks). */
+    installModelSources?: string[]
     endpoint: string
     model: string
     dims: number
@@ -89,8 +136,32 @@ export interface ResolvedConfig {
 
 export function resolveConfig(config: MemoryLocalConfig = {}): ResolvedConfig {
   const v = config.retrieval?.vector ?? {}
+  // Do not touch an embedding backend the user never asked for: pointing at the
+  // stock localhost endpoint on a machine that has nothing listening means
+  // failed embeds, a tripped breaker and scary log lines for a feature that is
+  // optional. Vector retrieval is therefore opt-in by CONFIGURATION — writing
+  // `endpoint` (any OpenAI-compatible service), configuring `spawn`, or having
+  // the panel's installer put a backend on disk implies intent; an explicit
+  // `enabled` always wins.
+  const storeDir = config.storeDir ?? '.dsh-memory'
+  // Installer target: explicit config → that directory; explicit storeDir →
+  // its parent (so a hand-made `<root>/llamacpp` + `<root>/models` layout is
+  // recognised as-is); otherwise a stable per-user directory under ~/.dsh.
+  const installRoot = v.autoInstall?.dir
+    ?? (config.storeDir !== undefined ? dirname(resolve(storeDir)) : join(homedir(), '.dsh', 'memory-vector'))
+  const installed = detectInstalled(installRoot)
+  const endpointConfigured = v.endpoint !== undefined
+  // A configured spawn path that no longer exists (plugin uninstalled the
+  // backend, or the user moved it) must not count as configured: that would
+  // leave the panel showing a managed server that can never start, instead of
+  // offering the download button again.
+  const spawnExe = v.spawn?.exe
+  const spawnExeUsable = spawnExe === undefined || spawnExe === '' || existsSync(spawnExe)
+  const spawnConfigured = ((v.spawn?.enabled === true || (spawnExe ?? '') !== '') && spawnExeUsable) || installed !== null
+  const configured = endpointConfigured || spawnConfigured
+  const vectorEnabled = v.enabled ?? configured
   return {
-    storeDir: config.storeDir ?? '.dsh-memory',
+    storeDir,
     globalEnabled: config.scopes?.global ?? true,
     projectEnabled: config.scopes?.project ?? true,
     topK: config.retrieval?.topK ?? 5,
@@ -99,7 +170,12 @@ export function resolveConfig(config: MemoryLocalConfig = {}): ResolvedConfig {
     projectThreshold: config.retrieval?.projectThreshold ?? 0.1,
     halfLifeDays: config.retrieval?.recencyHalfLifeDays ?? 30,
     vector: {
-      enabled: v.enabled ?? true,
+      enabled: vectorEnabled,
+      configured,
+      endpointConfigured,
+      spawnConfigured,
+      installRoot,
+      ...(v.autoInstall?.modelSources ? { installModelSources: v.autoInstall.modelSources } : {}),
       endpoint: v.endpoint ?? 'http://127.0.0.1:8078/v1/embeddings',
       model: v.model ?? 'bge-m3',
       dims: v.dims ?? 1024,
@@ -115,9 +191,19 @@ export function resolveConfig(config: MemoryLocalConfig = {}): ResolvedConfig {
       backfillBatchSize: v.backfillBatchSize ?? 32,
       // Port defaults to the one in the embeddings endpoint so the two can never
       // drift apart; opt-in (enabled:false) keeps dev/test runs from spawning.
+      // A backend the panel installed (or a hand-made one at installRoot) is
+      // adopted as the spawn target when the user configured no explicit paths.
       spawn: {
         ...(v.spawn ?? {}),
-        enabled: v.spawn?.enabled ?? false,
+        enabled: v.spawn?.enabled ?? installed !== null,
+        ...(installed
+          ? {
+              exe: v.spawn?.exe ?? installed.exe,
+              model: v.spawn?.model ?? installed.model,
+              cwd: v.spawn?.cwd ?? installed.cwd,
+              logFile: v.spawn?.logFile ?? installed.logFile,
+            }
+          : {}),
         port: v.spawn?.port ?? portOf(v.endpoint ?? 'http://127.0.0.1:8078/v1/embeddings') ?? 8078,
       },
     },
@@ -154,6 +240,12 @@ export class LocalMemoryService implements MemoryServiceApi {
     this.cfg = resolveConfig(config)
     this.rerankBudget = new DailyBudget(this.cfg.llm.dailyBudgetTokens)
     this.store = new MemoryStore(this.cfg.storeDir, { onWarn: (m) => console.warn(`[dsh-memory-local] ${m}`) })
+    // Identity BEFORE the eager load (issue #1): ScopeStore skips its sidecar
+    // validation entirely while the identity is unset (`if (this.vecIdentity && …)`),
+    // so loading first would accept vectors from a previous embedding model
+    // whenever the dimensions matched — and the next flush would then rewrite the
+    // header as the new model, making the mismatch permanent.
+    this.store.setVecIdentity(this.cfg.vector.model, this.cfg.vector.dims)
     this.store.loadAll(this.cfg.projectEnabled && this.cfg.globalEnabled ? [this.defaultScope, 'global'] : [this.defaultScope])
     this.embed = new EmbedClient({
       endpoint: this.cfg.vector.endpoint,
@@ -161,14 +253,15 @@ export class LocalMemoryService implements MemoryServiceApi {
       dims: this.cfg.vector.dims,
       timeoutMs: this.cfg.vector.timeoutMs,
     })
-    // sidecar validation: model/dims change discards old vectors on load
-    this.store.setVecIdentity(this.cfg.vector.model, this.cfg.vector.dims)
     this.startMaintenance()
     this.startEmbedServer()
   }
 
   /** Own the embedding backend's lifetime: spawn on activation, stop on dispose. */
   private startEmbedServer(): void {
+    // Nothing configured and retrieval switched off → do not even build the
+    // manager, so no probe, no spawn attempt, no misleading panel state.
+    if (!this.cfg.vector.enabled || !this.cfg.vector.configured) return
     this.embedServer = new EmbedServerManager(this.cfg.vector.spawn)
     // fire-and-forget: activation must never block on a model load
     void this.ensureEmbedServer(60_000).catch(() => { /* lifecycle never breaks activation */ })
@@ -210,20 +303,213 @@ export class LocalMemoryService implements MemoryServiceApi {
     return { stopped: mgr.stop(), reason: mgr.isOwned ? 'NOT_RUNNING' : 'STOPPED' }
   }
 
-  /** Lifecycle snapshot for the memory panel. */
+  /**
+   * Lifecycle snapshot for the memory panel.
+   *
+   * `mode` is what the panel needs to decide whether a start/stop switch even
+   * makes sense:
+   *   - 'off'      nothing configured → no switch, show how to opt in
+   *   - 'external' we only know an endpoint (cloud or a server the user runs)
+   *                → no switch, we must not claim ownership of that process
+   *   - 'managed'  spawn is configured → the switch toggles OUR child process
+   * `enabled` is the retrieval switch from config; when it is false while a
+   * backend IS configured the panel explains the config instead of showing a
+   * switch that cannot turn retrieval on.
+   */
   async embedServerStatus(): Promise<{
     enabled: boolean
+    configured: boolean
+    mode: 'off' | 'external' | 'managed'
+    endpoint: string
+    model: string
+    spawnConfigured: boolean
     owned: boolean
     pid: number | null
     baseUrl: string
     reachable: boolean
     pendingEmbeds: number
+    install: InstallProgress & { installed: boolean; root: string }
+    /** What an uninstall would free, and how much data a wipe would remove. */
+    maintenance: { usageBytes: number; paths: string[]; storeDir: string; records: number }
   }> {
     const mgr = this.embedServer
+    const cfg = this.cfg.vector
     const pendingEmbeds = this.pendingEmbedCount
-    if (!mgr) return { enabled: false, owned: false, pid: null, baseUrl: '', reachable: false, pendingEmbeds }
+    const mode = !cfg.configured ? 'off' : cfg.spawnConfigured ? 'managed' : 'external'
+    const usage = this.vectorInstallUsage()
+    const base = {
+      enabled: cfg.enabled,
+      configured: cfg.configured,
+      mode,
+      endpoint: cfg.endpoint,
+      model: cfg.model,
+      spawnConfigured: cfg.spawnConfigured,
+      pendingEmbeds,
+      install: this.installSnapshot(),
+      maintenance: {
+        usageBytes: usage.bytes,
+        paths: usage.paths,
+        // NOTE: `cfg` is the VECTOR config here, not the whole config — reading
+        // cfg.storeDir would silently yield undefined (and JSON drops it).
+        storeDir: this.cfg.storeDir,
+        records: this.store.allScopes().reduce((n, s) => n + s.records.size, 0),
+      },
+    } as const
+    if (!mgr) return { ...base, owned: false, pid: null, baseUrl: '', reachable: false }
     const reachable = await mgr.healthCheck()
-    return { ...mgr.info(), reachable, pendingEmbeds }
+    return { ...base, ...mgr.info(), reachable, pendingEmbeds }
+  }
+
+  /** Installer state for the panel (idle when nothing was ever requested). */
+  private installSnapshot(): InstallProgress & { installed: boolean; root: string } {
+    const root = this.cfg.vector.installRoot
+    const installed = detectInstalled(root) !== null
+    const progress = this.installer?.progress ?? {
+      phase: 'idle' as const,
+      message: '',
+      receivedBytes: 0,
+      totalBytes: null,
+      error: null,
+      paths: installed ? installPaths(root) : null,
+    }
+    return { ...progress, installed, root }
+  }
+
+  /**
+   * Panel action: download llama.cpp + the GGML model into installRoot, then
+   * adopt them (start the managed server). Never runs on its own — a fresh
+   * install downloads nothing until the user asks.
+   */
+  installVectorBackend(): void {
+    if (detectInstalled(this.cfg.vector.installRoot)) {
+      this.adoptInstalledBackend()
+      return
+    }
+    if (!this.installer) {
+      this.installer = new VectorInstaller({
+        root: this.cfg.vector.installRoot,
+        ...(this.cfg.vector.installModelSources ? { modelSources: this.cfg.vector.installModelSources } : {}),
+        onProgress: (progress) => {
+          if (progress.phase === 'done') this.adoptInstalledBackend()
+        },
+      })
+    }
+    this.installer.start()
+  }
+
+  /** Panel action: abort an in-flight download. */
+  cancelVectorInstall(): void {
+    this.installer?.cancel()
+  }
+
+  /**
+   * What the installer put on disk, so the panel can say "释放 xxx MB" before
+   * offering to remove it. Counts only our own layout (runtime dir, models dir,
+   * log + pid), never the memory store.
+   */
+  vectorInstallUsage(): { bytes: number; paths: string[] } {
+    const paths = installPaths(this.cfg.vector.installRoot)
+    const roots = [paths.dir, join(this.cfg.vector.installRoot, 'models')]
+    const files = [paths.logFile, `${paths.logFile}.pid`, `${paths.logFile}.err`]
+    let bytes = 0
+    const seen: string[] = []
+    for (const p of [...roots, ...files]) {
+      if (!existsSync(p)) continue
+      seen.push(p)
+      bytes += pathSize(p)
+    }
+    return { bytes, paths: seen }
+  }
+
+  /**
+   * Remove the vector backend we installed (runtime + model + logs).
+   *
+   * Refuses when the configured backend lives outside installRoot: that is a
+   * server the user installed and manages, and deleting it would be destroying
+   * something we never created. The memory store is never touched — it lives
+   * beside the runtime, not inside it.
+   */
+  uninstallVectorBackend(): {
+    removed: boolean
+    reason: 'REMOVED' | 'NOT_INSTALLED' | 'EXTERNAL_BACKEND'
+    freedBytes: number
+    paths: string[]
+  } {
+    const root = this.cfg.vector.installRoot
+    const configuredExe = this.cfg.vector.spawn.exe
+    if (configuredExe && !isInside(root, configuredExe)) {
+      return { removed: false, reason: 'EXTERNAL_BACKEND', freedBytes: 0, paths: [] }
+    }
+    const usage = this.vectorInstallUsage()
+    if (usage.paths.length === 0) {
+      return { removed: false, reason: 'NOT_INSTALLED', freedBytes: 0, paths: [] }
+    }
+    // Stop our child first: on Windows the executable and its DLLs are locked
+    // while it runs, so removal would fail with EBUSY/EPERM.
+    try { this.embedServer?.stop() } catch { /* best effort */ }
+    const removedPaths: string[] = []
+    for (const p of usage.paths) {
+      // Belt and braces: never step outside the install root, and never delete
+      // the memory store even if someone pointed storeDir inside it.
+      if (!isInside(root, p)) continue
+      if (isInside(p, this.cfg.storeDir) || resolve(p) === resolve(this.cfg.storeDir)) continue
+      try {
+        rmSync(p, { recursive: true, force: true })
+        removedPaths.push(p)
+      } catch { /* leave it; the panel reports what went */ }
+    }
+    this.cfg.vector.configured = false
+    this.cfg.vector.spawnConfigured = false
+    this.cfg.vector.enabled = false
+    this.embedServer = null
+    return { removed: true, reason: 'REMOVED', freedBytes: usage.bytes, paths: removedPaths }
+  }
+
+  /**
+   * Delete every memory record in every scope (the panel's "delete all data"
+   * action, used when someone wants the plugin gone without leaving notes
+   * behind). Goes through the store so the JSONL + vector sidecars stay
+   * consistent instead of ripping files out from under a live store.
+   */
+  wipeAllRecords(): { removed: number; scopes: string[] } {
+    let removed = 0
+    const scopes: string[] = []
+    for (const scope of this.store.allScopes()) {
+      const ids = [...scope.records.keys()]
+      if (ids.length === 0) continue
+      let local = 0
+      for (const id of ids) if (scope.remove(id)) local += 1
+      removed += local
+      scopes.push(scope.scope)
+    }
+    try { this.store.flushSync() } catch { /* scheduled flush covers it */ }
+    return { removed, scopes }
+  }
+
+  /**
+   * Switch the provider over to a backend that is now on disk: fill the spawn
+   * config from the installed layout and start it. Idempotent.
+   */
+  private adoptInstalledBackend(): void {
+    const paths = detectInstalled(this.cfg.vector.installRoot)
+    if (!paths) return
+    this.cfg.vector.configured = true
+    this.cfg.vector.spawnConfigured = true
+    this.cfg.vector.enabled = true
+    this.cfg.vector.spawn = {
+      ...this.cfg.vector.spawn,
+      enabled: true,
+      exe: this.cfg.vector.spawn.exe ?? paths.exe,
+      model: this.cfg.vector.spawn.model ?? paths.model,
+      cwd: this.cfg.vector.spawn.cwd ?? paths.cwd,
+      logFile: this.cfg.vector.spawn.logFile ?? paths.logFile,
+      port: this.cfg.vector.spawn.port,
+    }
+    if (!this.embedServer) {
+      this.startEmbedServer()
+      return
+    }
+    void this.ensureEmbedServer(60_000).catch(() => { /* panel shows the outcome */ })
   }
 
   /**
@@ -261,6 +547,8 @@ export class LocalMemoryService implements MemoryServiceApi {
   private initialDrainTimer: ReturnType<typeof setTimeout> | null = null
   /** Owns the llama-server child process when vector.spawn.enabled. */
   private embedServer: EmbedServerManager | null = null
+  /** Lazily created by the panel's "download and configure" action. */
+  private installer: VectorInstaller | null = null
   private exitHook: (() => void) | null = null
 
   /**
@@ -270,6 +558,9 @@ export class LocalMemoryService implements MemoryServiceApi {
    * only path that can flip that flag back to healthy).
    */
   async retryPendingEmbeds(): Promise<number> {
+    // Vector retrieval opt-in: with no configured backend there is nothing to
+    // retry, and probing would only produce failed requests in the log.
+    if (!this.cfg.vector.enabled || !this.cfg.vector.configured) return 0
     // Scopes load lazily, so without discovery the queue of an untouched scope
     // (e.g. a project store written by a previous session) is invisible here and
     // would never drain — exactly the 待嵌入>0 the panel showed on 2026-10-10.
@@ -340,6 +631,7 @@ export class LocalMemoryService implements MemoryServiceApi {
   }
 
   private async embedRecord(record: MemoryRecord): Promise<void> {
+    if (!this.cfg.vector.enabled || !this.cfg.vector.configured) return
     const s = this.store.scope(record.scope)
     // save-time budget: one full record, much slower than a search query
     const vec = await this.embed.embed([record.content], undefined, { timeoutMs: this.cfg.vector.writeTimeoutMs }).catch(() => null)
@@ -354,6 +646,7 @@ export class LocalMemoryService implements MemoryServiceApi {
    * interactive timeout would abort every attempt.
    */
   async backfillEmbeddings(): Promise<number> {
+    if (!this.cfg.vector.enabled || !this.cfg.vector.configured) return 0
     if (!this.embed.isHealthy) return 0
     let done = 0
     for (const s of this.store.allScopes()) {
@@ -438,7 +731,11 @@ export class LocalMemoryService implements MemoryServiceApi {
     }
 
     // --- channel 2: vector recall over embedded records ---
-    const qvec = await this.embed.embed([query.text], query.signal).catch(() => null)
+    // Skipped entirely when no backend is configured (lexical recall above
+    // already produced the candidates; a request here would just fail).
+    const qvec = this.cfg.vector.enabled && this.cfg.vector.configured
+      ? await this.embed.embed([query.text], query.signal).catch(() => null)
+      : null
     if (qvec?.[0]) {
       const vectorScores = new Map<string, number>()
       for (const { store } of stores) {

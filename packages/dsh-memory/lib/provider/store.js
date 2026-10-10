@@ -198,6 +198,12 @@ export class ScopeStore {
             discard(`identity mismatch (${trimmed.slice(1)} != ${this.vecIdentity})`)
             return
           }
+          // Loading before the identity is declared means NO validation happens
+          // (the guards below are all identity-gated). That ordering bug shipped
+          // once — see RestRegular/dsh-memory#1 — so make any recurrence visible.
+          if (!this.vecIdentity) {
+            this.events.onWarn?.(`${this.scope}: loading a vector sidecar before setVecIdentity(); its ${trimmed.slice(1)} vectors are accepted unvalidated`)
+          }
           sawHeader = true
           continue
         }

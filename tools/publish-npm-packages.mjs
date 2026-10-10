@@ -28,6 +28,7 @@ function arg(name, fallback) {
 const SCOPE_ARG = typeof arg('scope', '') === 'string' ? arg('scope', '') : ''
 const VERSION = typeof arg('version', '0.1.0') === 'string' ? arg('version', '0.1.0') : '0.1.0'
 const CREDENTIAL = typeof arg('credential', 'npm-myself-use') === 'string' ? arg('credential', 'npm-myself-use') : 'npm-myself-use'
+const REPO = typeof arg('repo', '') === 'string' ? arg('repo', '') : ''
 const TOKEN_FILE = typeof arg('token-file', '') === 'string' ? arg('token-file', '') : ''
 const DRY_RUN = arg('dry-run', false) === true
 if (!SCOPE_ARG) {
@@ -105,7 +106,9 @@ try {
   console.log(`authenticated as: ${user}`)
 
   console.log(`\nbuilding packages for scope ${SCOPE} version ${VERSION} …`)
-  const build = spawnSync(NODE, [join(HERE, 'build-npm-packages.mjs'), '--scope', SCOPE, '--version', VERSION], { encoding: 'utf8', cwd: ROOT })
+  const buildArgs = [join(HERE, 'build-npm-packages.mjs'), '--scope', SCOPE, '--version', VERSION]
+  if (REPO) buildArgs.push('--repo', REPO)
+  const build = spawnSync(NODE, buildArgs, { encoding: 'utf8', cwd: ROOT })
   process.stdout.write(build.stdout ?? '')
   if (build.status !== 0) {
     console.error(build.stderr ?? '')
