@@ -1,0 +1,10 @@
+# @restregular/dsh-memory bundle patch: local memory provider + model-facing tools + recall injection.
+# 三个 entry 共用本包,但本包不声明 dsh.client —— 声明了客户端 bundle 的包只允许一个活跃
+# entry(dsh-client-modules: "resolves from multiple active Loader sources")。
+- insert:
+    - id: dsh-memory-local
+      name: '@restregular/dsh-memory'
+    - id: dsh-tool-memory
+      name: '@restregular/dsh-memory/tools'
+    - id: dsh-memory-inject
+      name: '@restregular/dsh-memory/inject'

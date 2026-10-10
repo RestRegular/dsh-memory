@@ -1,0 +1,24 @@
+{
+  "name": "dsh-tool-memory",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Model-facing memory tools for the DSH memory service",
+  "main": "src/apply.ts",
+  "types": "src/apply.ts",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "dsh-memory": "workspace:*"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-tools": "*"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-tools": "*"
+  }
+}

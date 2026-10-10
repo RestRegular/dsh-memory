@@ -1,0 +1,37 @@
+# dsh-memory-local bundle patch — 按包名引用（官方 bundle 规范）
+# 宿主组合通过 `dsh: { bundle: { patch: './cordis.patch.yml' } }` 自动带入。
+- id: dsh-memory-local
+  name: dsh-memory-local
+  config:
+    storeDir: !!js process.env.DSH_MEMORY_DIR ?? '.dsh-memory'
+    scopes:
+      global: true
+      project: true
+    retrieval:
+      topK: 5
+      recallN: 30
+      globalThreshold: 0.12
+      projectThreshold: 0.1
+      recencyHalfLifeDays: 30
+      vector:
+        enabled: true
+        endpoint: !!js process.env.DSH_MEMORY_EMBED_ENDPOINT ?? 'http://127.0.0.1:8078/v1/embeddings'
+        model: bge-m3
+        dims: 1024
+        timeoutMs: 300
+        minScore: 0.5
+        backfillBatchSize: 32
+      llm:
+        enabled: false          # 需要重排序时置 true 并填 model
+        provider: ''
+        model: ''
+        timeoutMs: 1500
+        dailyBudgetTokens: 200000
+        weight: 0.6
+        topN: 10
+    limits:
+      maxRecordsPerScope: 2000
+      maxRecordChars: 4000
+    secrets:
+      enabled: true
+      mode: refuse

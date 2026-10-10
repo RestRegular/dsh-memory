@@ -1,0 +1,7 @@
+# dsh-tool-memory bundle patch — inject 在插件模块内声明（export const inject）
+- id: dsh-tool-memory
+  name: dsh-tool-memory
+  config:
+    defaultScope: project
+    # projectScope 缺省用 project:<cwd>；要固定团队库可显式指定
+    # projectScope: project:/abs/path/to/workspace

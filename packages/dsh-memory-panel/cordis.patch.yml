@@ -1,0 +1,6 @@
+# @restregular/dsh-memory-panel bundle patch: the memory management panel.
+# 数据来自 @restregular/dsh-memory 提供的 memory 服务;未安装核心包时面板仍在设置页出现,
+# 但会显示「memory provider 未加载」而不是让应用起不来。
+- insert:
+    - id: dsh-memory-panel
+      name: '@restregular/dsh-memory-panel'

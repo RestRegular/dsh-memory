@@ -1,0 +1,7 @@
+# dsh-memory-inject bundle patch
+- id: dsh-memory-inject
+  name: dsh-memory-inject
+  config:
+    enabled: true
+    tokenBudget: 500
+    topK: 5

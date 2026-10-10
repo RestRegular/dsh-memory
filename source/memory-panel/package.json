@@ -1,0 +1,22 @@
+{
+  "name": "dsh-memory-panel",
+  "version": "0.2.0",
+  "description": "DSH web plugin: memory panel — browse, search, edit and inspect local memory records from the settings page.",
+  "icon": "./icon.svg",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "inject": ["@deepseek-ai/dsh-client-ui-slots"],
+      "platform": "web"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

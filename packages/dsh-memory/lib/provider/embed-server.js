@@ -1,0 +1,296 @@
+/**
+ * Lifecycle manager for the local embedding backend (llama-server).
+ *
+ * Why: the provider degrades to lexical-only search whenever the embedding
+ * backend is down, and a machine reboot silently leaves it down (observed
+ * 2026-10-10 — the panel then shows 待嵌入>0 forever). The backend should live
+ * exactly as long as the app does: spawned in the background on activation,
+ * terminated when the plugin is disposed (which cordis does on quit).
+ *
+ * Rules:
+ *  - opt-in: `enabled` defaults to false, so dev/test runs never spawn anything
+ *  - an already-healthy endpoint is adopted instead of double-spawning; if we
+ *    have a PID file for it, we also own it and will stop it on exit
+ *  - every failure resolves to a state string; nothing here ever throws
+ *
+ * Dependency-injected (spawn/probe/fs/kill) so the whole lifecycle is testable
+ * without starting a real model server.
+ */
+import { spawn as nodeSpawn,                   } from 'node:child_process'
+import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+
+                                    
+                                                                                   
+                   
+                                             
+              
+                                          
+                
+                                                                               
+              
+                                                                                      
+                  
+                                                                                     
+                  
+                                          
+                  
+                                          
+               
+                                                                    
+               
+                                          
+                      
+                                                                         
+                           
+ 
+
+                                                                                                 
+
+                                  
+                         
+                                                                  
+                                                             
+                                  
+                             
+                                
+                                                       
+                                      
+ 
+
+const DEFAULTS = {
+  host: '127.0.0.1',
+  port: 8078,
+  threads: 6,
+  startupTimeoutMs: 60_000,
+}
+
+async function defaultProbe(url        , timeoutMs        )                   {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+function defaultKill(pid        )       {
+  try {
+    process.kill(pid)
+  } catch {
+    // already gone, or not ours to kill
+  }
+}
+
+export const defaultEmbedServerDeps                  = {
+  spawn: nodeSpawn,
+  probe: defaultProbe,
+  kill: defaultKill,
+  log: (message) => console.log(`[dsh-memory-local] ${message}`),
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+}
+
+export class EmbedServerManager {
+          cfg                   
+          deps                 
+          child                      = null
+          pid                = null
+  /** True when this manager started (or adopted a PID-tracked) server. */
+          owned = false
+          stopping = false
+  /** PID recorded by a previous run that we adopted. */
+          adoptedPid                = null
+
+  constructor(cfg                    = {}, deps                           = {}) {
+    this.cfg = cfg
+    this.deps = { ...defaultEmbedServerDeps, ...deps }
+  }
+
+  get baseUrl()         {
+    const host = this.cfg.host ?? DEFAULTS.host
+    const port = this.cfg.port ?? DEFAULTS.port
+    return `http://${host}:${port}`
+  }
+
+  get pidFile()                {
+    if (this.cfg.pidFile) return this.cfg.pidFile
+    if (this.cfg.logFile) return `${this.cfg.logFile}.pid`
+    if (this.cfg.cwd) return join(this.cfg.cwd, 'llama-server.pid')
+    if (this.cfg.exe) return join(dirname(this.cfg.exe), 'llama-server.pid')
+    return null
+  }
+
+  get isOwned()          {
+    return this.owned
+  }
+
+  /** Static lifecycle facts for a management UI (no network I/O). */
+  info()                                                                            {
+    return {
+      enabled: this.cfg.enabled === true,
+      owned: this.owned,
+      pid: this.pid ?? this.adoptedPid,
+      baseUrl: this.baseUrl,
+    }
+  }
+
+  /** Probe the health endpoint right now. */
+  async healthCheck(timeoutMs = 2000)                   {
+    return this.deps.probe(`${this.baseUrl}/health`, timeoutMs)
+  }
+
+  /**
+   * Start (or adopt) the backend. Never throws; resolves to what actually
+   * happened so the caller can log it.
+   */
+  async ensureRunning()                            {
+    if (!this.cfg.enabled) return 'disabled'
+    if (!this.cfg.exe || !this.cfg.model) {
+      this.deps.log('embed server: spawn.enabled 但缺少 exe/model,跳过自启')
+      return 'failed'
+    }
+    // a manual restart must be possible after a manual stop
+    this.stopping = false
+    try {
+      if (await this.deps.probe(`${this.baseUrl}/health`, 1500)) {
+        const recorded = this.readPidFile()
+        if (recorded && this.isAlive(recorded)) {
+          // leftover from a previous run (or a crash) → adopt and own it
+          this.adoptedPid = recorded
+          this.pid = recorded
+          this.owned = true
+          this.deps.log(`embed server: 复用上轮实例 pid=${recorded}(${this.baseUrl}),退出时一并关闭`)
+          return 'adopted-managed'
+        }
+        this.deps.log(`embed server: 复用外部实例(${this.baseUrl}),不接管生命周期`)
+        return 'external'
+      }
+      return this.spawnServer()
+    } catch (error) {
+      this.deps.log(`embed server: 启动失败(已忽略): ${(error         )?.message ?? String(error)}`)
+      return 'failed'
+    }
+  }
+
+  /** Poll until the health endpoint answers or the budget runs out. */
+  async waitUntilReady(timeoutMs         )                   {
+    if (!this.owned && !this.child) return true
+    const deadline = Date.now() + (timeoutMs ?? this.cfg.startupTimeoutMs ?? DEFAULTS.startupTimeoutMs)
+    while (Date.now() < deadline) {
+      if (await this.deps.probe(`${this.baseUrl}/health`, 1500)) return true
+      if (this.child && this.child.exitCode !== null) return false
+      await this.deps.sleep(500)
+    }
+    return false
+  }
+
+  /**
+   * Stop the backend if (and only if) this manager owns it.
+   * @returns true when a process was actually signalled.
+   */
+  stop()          {
+    if (!this.owned || this.stopping) return false
+    this.stopping = true
+    const pid = this.pid ?? this.adoptedPid
+    let killed = false
+    if (pid !== null) {
+      this.deps.kill(pid)
+      killed = true
+      this.deps.log(`embed server: 已停止 pid=${pid}`)
+    }
+    this.child = null
+    this.pid = null
+    this.adoptedPid = null
+    this.owned = false
+    this.removePidFile()
+    return killed
+  }
+
+          spawnServer()                   {
+    const host = this.cfg.host ?? DEFAULTS.host
+    const port = this.cfg.port ?? DEFAULTS.port
+    const args = [
+      '-m', this.cfg.model          ,
+      '--embeddings',
+      '--pooling', 'cls',
+      '--host', host,
+      '--port', String(port),
+      '-t', String(this.cfg.threads ?? DEFAULTS.threads),
+      ...(this.cfg.extraArgs ?? []),
+    ]
+    const logFile = this.cfg.logFile
+    if (logFile) {
+      try { mkdirSync(dirname(logFile), { recursive: true }) } catch { /* best effort */ }
+    }
+    let out                    = 'ignore'
+    if (logFile) {
+      try { out = openSync(logFile, 'a') } catch { out = 'ignore' }
+    }
+    const child = this.deps.spawn(this.cfg.exe          , args, {
+      cwd: this.cfg.cwd,
+      windowsHide: true,
+      detached: false,
+      stdio: out === 'ignore' ? 'ignore' : ['ignore', out, out],
+    })
+    this.child = child
+    this.owned = true
+    this.pid = child.pid ?? null
+    if (this.pid !== null) this.writePidFile(this.pid)
+    if (logFile) {
+      appendLogLine(logFile, `\n=== ${new Date().toISOString()} llama-server 由 DSH 启动 pid=${child.pid ?? '?'} args=${args.join(' ')}`)
+    }
+    child.once('exit', () => {
+      if (!this.stopping) this.deps.log('embed server: 进程已退出')
+      this.child = null
+      this.owned = false
+      this.removePidFile()
+    })
+    child.once('error', (error) => {
+      this.deps.log(`embed server: 进程错误(已忽略): ${error.message}`)
+      this.child = null
+      this.owned = false
+    })
+    this.deps.log(`embed server: 已后台启动 pid=${child.pid ?? '?'}(${this.baseUrl})`)
+    return 'spawned'
+  }
+
+          readPidFile()                {
+    const file = this.pidFile
+    if (!file || !existsSync(file)) return null
+    try {
+      const pid = Number.parseInt(readFileSync(file, 'utf8').trim(), 10)
+      return Number.isFinite(pid) && pid > 0 ? pid : null
+    } catch {
+      return null
+    }
+  }
+
+          writePidFile(pid        )       {
+    const file = this.pidFile
+    if (!file) return
+    try { writeFileSync(file, String(pid), 'utf8') } catch { /* best effort */ }
+  }
+
+          removePidFile()       {
+    const file = this.pidFile
+    if (!file || !existsSync(file)) return
+    try { rmSync(file, { force: true }) } catch { /* best effort */ }
+  }
+
+          isAlive(pid        )          {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+}
+
+/** Append a line to a log file (used by callers that want their own tracing). */
+export function appendLogLine(file        , line        )       {
+  try { appendFileSync(file, `${line}\n`, 'utf8') } catch { /* best effort */ }
+}
+
+
+//# sourceURL=D:\.deepseek\memory-plugin\packages\memory-local\src\embed-server.ts

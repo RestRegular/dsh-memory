@@ -1,0 +1,5 @@
+- insert:
+    - id: dsh-memory-panel
+      name: 'file:///D:/.deepseek/memory-plugin/packages/memory-panel/lib/index.ts'
+      config:
+        port: 0

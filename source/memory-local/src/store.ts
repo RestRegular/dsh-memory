@@ -1,0 +1,482 @@
+/**
+ * JSONL-backed store. One file per scope, append-on-write semantics with
+ * atomic compaction (tmp + rename). Vectors live in memory for M1; the .vec
+ * sidecar format arrives in M1.5.
+ */
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { Buffer } from 'node:buffer'
+import { dirname, join } from 'node:path'
+import type { MemoryRecord, MemorySaveInput, MemoryScope } from 'dsh-memory'
+
+export interface ScopeStoreEvents {
+  onWarn?(message: string): void
+}
+
+export function scopeFileName(scope: MemoryScope): string {  if (scope === 'global') return 'global.jsonl'
+  const hash = createHash('sha1').update(scope).digest('hex')
+  return join('projects', `${hash}.jsonl`)
+}
+
+/** Derive the scope for records loaded from a file path. */
+export function scopeFromFile(file: string, knownScopes: Map<string, MemoryScope>): MemoryScope | null {
+  if (file.endsWith('global.jsonl')) return 'global'
+  const base = file.split(/[\\/]/).pop() ?? ''
+  for (const [scope, name] of knownScopes) if (name === base) return scope
+  return null
+}
+
+/**
+ * Read the first well-formed record's scope from a scope file. Project files are
+ * named by hash, so this is the only way back to the scope key without the
+ * provider having created that scope in this process already.
+ */
+export function firstScopeInFile(file: string): MemoryScope | null {
+  let text: string
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch {
+    return null
+  }
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    try {
+      const rec = JSON.parse(trimmed) as { scope?: unknown }
+      if (typeof rec.scope === 'string' && rec.scope) return rec.scope as MemoryScope
+    } catch {
+      // skip malformed line, keep looking
+    }
+  }
+  return null
+}
+
+export function normalizeContent(content: string): string {
+  return content.replace(/\s+/g, ' ').trim().toLowerCase()
+}
+
+export function contentHash(scope: MemoryScope, content: string): string {
+  return createHash('sha1').update(`${scope}::${normalizeContent(content)}`).digest('hex')
+}
+
+export function newId(): string {
+  return randomUUID()
+}
+
+export class ScopeStore {
+  readonly scope: MemoryScope
+  readonly records = new Map<string, MemoryRecord>()
+  readonly vectors = new Map<string, Float32Array>()
+  /** ids saved while the embed backend was down; retried opportunistically. */
+  readonly embedPending = new Set<string>()
+  dirty = false
+  /** true once vectors were touched since the last .vec flush. */
+  vectorsDirty = false
+  private vecFile: string
+  private events: ScopeStoreEvents
+  /** Embedding identity for sidecar validation; set via setVecIdentity(). */
+  private vecIdentity = ''
+
+  constructor(scope: MemoryScope, root: string, events: ScopeStoreEvents = {}) {
+    this.scope = scope
+    this.vecFile = join(root, scopeFileName(scope).replace(/\.jsonl$/, '.vec'))
+    this.events = events
+  }
+
+  /**
+   * Declare which model+dims produced the in-memory vectors. When it differs
+   * from the sidecar header on load, the sidecar is discarded and every record
+   * re-enters the embed queue — old vectors for a new model are wrong, not
+   * merely stale.
+   */
+  setVecIdentity(model: string, dims: number): void {
+    this.vecIdentity = `${model}\t${dims}`
+  }
+
+  get size(): number {
+    return this.records.size
+  }
+
+  insert(record: MemoryRecord): void {
+    this.records.set(record.id, record)
+    this.dirty = true
+  }
+
+  remove(id: string): boolean {
+    const had = this.records.delete(id)
+    if (had) {
+      this.vectors.delete(id)
+      this.embedPending.delete(id)
+      this.dirty = true
+      this.vectorsDirty = true
+    }
+    return had
+  }
+
+  setVector(id: string, vec: Float32Array): void {
+    this.vectors.set(id, vec)
+    this.vectorsDirty = true
+  }
+
+  /**
+   * Append a record to the sidecar: `<id> \t <base64 dim vec>` per line.
+   * Vectors are written immediately on embed (single-line append) and fully
+   * rewritten on delete/compact — embeddings are expensive to recompute.
+   * A freshly created file starts with the `#model\tdims` identity header.
+   */
+  appendVector(id: string, vec: Float32Array): void {
+    this.setVector(id, vec)
+    try {
+      mkdirSync(dirname(this.vecFile), { recursive: true })
+      if (this.vecIdentity && this.readHeader() !== this.vecIdentity) {
+        // missing, legacy, or wrong-model file: rewrite fresh from memory
+        this.writeSidecar()
+        this.vectorsDirty = false
+        return
+      }
+      appendFileSync(this.vecFile, `${id}\t${encodeVec(vec)}\n`, 'utf8')
+      this.vectorsDirty = false
+    } catch (err) {
+      this.vectorsDirty = true // full rewrite on next flushVectors
+      this.events.onWarn?.(`vec: append failed: ${(err as Error).message}`)
+    }
+  }
+
+  /** First line of the sidecar if it is a header; '' when absent/headerless. */
+  private readHeader(): string {
+    if (!existsSync(this.vecFile)) return ''
+    try {
+      const first = readFileSync(this.vecFile, 'utf8').split('\n', 1)[0] ?? ''
+      return first.startsWith('#') ? first.slice(1) : ''
+    } catch {
+      return ''
+    }
+  }
+
+  /** Atomic full rewrite: identity header + every in-memory vector. */
+  private writeSidecar(): void {
+    mkdirSync(dirname(this.vecFile), { recursive: true })
+    const tmp = `${this.vecFile}.tmp`
+    const lines: string[] = this.vecIdentity ? [`#${this.vecIdentity}`] : []
+    for (const [id, v] of this.vectors) lines.push(`${id}\t${encodeVec(v)}`)
+    writeFileSync(tmp, lines.length ? `${lines.join('\n')}\n` : '', 'utf8')
+    renameSync(tmp, this.vecFile)
+  }
+
+  /** Rewrite the whole sidecar (after deletes / compaction / append failures). */
+  flushVectors(): void {
+    if (!this.vectorsDirty) return
+    try {
+      this.writeSidecar()
+      this.vectorsDirty = false
+    } catch (err) {
+      this.events.onWarn?.(`vec: flush failed: ${(err as Error).message}`)
+    }
+  }
+
+  /**
+   * Load vectors from the sidecar. The first line must be a `#model\tdims`
+   * header when an identity is configured — mismatch or a legacy headerless
+   * file discards the whole sidecar (re-embed). Unknown ids are skipped.
+   */
+  loadVectors(): void {
+    if (!existsSync(this.vecFile)) return
+    try {
+      const text = readFileSync(this.vecFile, 'utf8')
+      let sawHeader = false
+      let sawData = false
+      const discard = (why: string) => {
+        this.events.onWarn?.(`vec: ${why}; discarding sidecar for re-embed`)
+        this.vectors.clear()
+        this.vectorsDirty = true
+      }
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        if (trimmed.startsWith('#')) {
+          if (this.vecIdentity && trimmed.slice(1) !== this.vecIdentity) {
+            discard(`identity mismatch (${trimmed.slice(1)} != ${this.vecIdentity})`)
+            return
+          }
+          sawHeader = true
+          continue
+        }
+        if (!sawData) {
+          sawData = true
+          if (this.vecIdentity && !sawHeader) {
+            discard('legacy sidecar without identity header')
+            return
+          }
+        }
+        const tab = trimmed.indexOf('\t')
+        if (tab <= 0) continue
+        const id = trimmed.slice(0, tab)
+        if (!this.records.has(id)) continue // stale vector for a deleted record
+        const vec = decodeVec(trimmed.slice(tab + 1))
+        if (vec) this.vectors.set(id, vec)
+      }
+    } catch (err) {
+      this.events.onWarn?.(`vec: load failed: ${(err as Error).message}`)
+    }
+  }
+}
+
+// --- base64 vector codec (4 bytes per float, bit-exact) ---
+
+function encodeVec(vec: Float32Array): string {
+  return Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength).toString('base64')
+}
+
+function decodeVec(text: string): Float32Array | null {
+  try {
+    const buf = Buffer.from(text, 'base64')
+    if (buf.length === 0 || buf.length % 4 !== 0) return null
+    return new Float32Array(buf.buffer, buf.byteOffset, buf.length / 4)
+  } catch {
+    return null
+  }
+}
+
+export interface MemoryStoreEvents {
+  onWarn?(message: string): void
+}
+
+export class MemoryStore {
+  readonly root: string
+  private scopes = new Map<string, ScopeStore>()
+  /** scopes whose jsonl has been loaded from disk (lazy, once per scope). */
+  private loaded = new Set<string>()
+  /** scope -> its jsonl filename, so reload can map files back to scopes. */
+  private fileNames = new Map<MemoryScope, string>()
+  private flushTimer: ReturnType<typeof setTimeout> | null = null
+  private events: MemoryStoreEvents
+  /** `model\tdims` handed to every ScopeStore for sidecar validation. */
+  private vecIdentity = ''
+
+  constructor(root: string, events: MemoryStoreEvents = {}) {
+    this.root = root
+    this.events = events
+    mkdirSync(join(root, 'projects'), { recursive: true })
+  }
+
+  /** Declare the embedding identity; applies to existing and future scopes. */
+  setVecIdentity(model: string, dims: number): void {
+    this.vecIdentity = `${model}\t${dims}`
+    for (const s of this.scopes.values()) s.setVecIdentity(model, dims)
+  }
+
+  /** Preload specific scopes eagerly (e.g. defaults); others load on first access. */
+  loadAll(wanted: MemoryScope[]): void {
+    for (const scope of wanted) this.scope(scope)
+  }
+
+  private loadScope(scope: MemoryScope): void {
+    const file = this.fileFor(scope)
+    if (!existsSync(file)) return
+    let text: string
+    try {
+      text = readFileSync(file, 'utf8')
+    } catch (err) {
+      this.events.onWarn?.(`store: cannot read ${file}: ${(err as Error).message}`)
+      return
+    }
+    const store = this.scope(scope)
+    let lineNo = 0
+    for (const line of text.split('\n')) {
+      lineNo++
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      try {
+        const rec = JSON.parse(trimmed) as MemoryRecord
+        if (!rec || typeof rec.id !== 'string' || typeof rec.content !== 'string' || typeof rec.scope !== 'string') {
+          throw new Error('bad shape')
+        }
+        if (rec.scope !== scope) continue // file/scope mismatch: ignore, will be rewritten on flush
+        store.records.set(rec.id, rec)
+      } catch {
+        this.events.onWarn?.(`store: skipping malformed ${file}:${lineNo}`)
+      }
+    }
+    // sidecar vectors second; anything still un-embedded joins the backfill queue
+    store.loadVectors()
+    for (const id of store.records.keys()) {
+      if (!store.vectors.has(id)) store.embedPending.add(id)
+    }
+    store.dirty = false
+  }
+
+  scope(scope: MemoryScope): ScopeStore {
+    let s = this.scopes.get(scope)
+    if (!s) {
+      s = new ScopeStore(scope, this.root, this.events)
+      if (this.vecIdentity) s.setVecIdentity(...(this.vecIdentity.split('\t') as [string, string]))
+      this.scopes.set(scope, s)
+      this.fileNames.set(scope, scopeFileName(scope))
+    }
+    if (!this.loaded.has(scope)) {
+      this.loaded.add(scope)
+      this.loadScope(scope)
+    }
+    return s
+  }
+
+  allScopes(): ScopeStore[] {
+    return [...this.scopes.values()]
+  }
+
+  /**
+   * Eagerly load every scope that has data on disk and return the scope keys.
+   *
+   * Scopes are otherwise created lazily, so a long-lived process only knows the
+   * scopes it has already touched — a management UI (the memory panel) would
+   * silently miss project memories written in earlier sessions. Project files
+   * are named by scope hash, so the scope key is recovered from the first
+   * record inside each file.
+   */
+  loadDiscovered(): MemoryScope[] {
+    const discovered: MemoryScope[] = []
+    if (existsSync(join(this.root, 'global.jsonl'))) discovered.push('global')
+    const projDir = join(this.root, 'projects')
+    if (existsSync(projDir)) {
+      for (const file of readdirSync(projDir)) {
+        if (!file.endsWith('.jsonl')) continue
+        const scope = firstScopeInFile(join(projDir, file))
+        if (scope) discovered.push(scope)
+      }
+    }
+    for (const scope of discovered) this.scope(scope) // triggers lazy disk load
+    return discovered
+  }
+
+  private fileFor(scope: MemoryScope): string {
+    return join(this.root, this.fileNames.get(scope) ?? scopeFileName(scope))
+  }
+
+  anyDirty(): boolean {
+    for (const s of this.scopes.values()) if (s.dirty) return true
+    return false
+  }
+
+  scheduleFlush(delayMs = 500): void {
+    if (this.flushTimer) return
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null
+      this.flush()
+    }, delayMs)
+    // a debounced flush must not hold the event loop open
+    this.flushTimer.unref?.()
+  }
+
+  /** Write dirty scopes atomically (tmp + rename). */
+  flush(): void {
+    for (const s of this.scopes.values()) {
+      if (!s.dirty) continue
+      const file = this.fileFor(s.scope)
+      mkdirSync(dirname(file), { recursive: true })
+      const tmp = `${file}.tmp`
+      const lines = [...s.records.values()].map((r) => JSON.stringify(r))
+      writeFileSync(tmp, lines.length ? `${lines.join('\n')}\n` : '', 'utf8')
+      renameSync(tmp, file)
+      s.dirty = false
+    }
+    // vectors flush too: they are the expensive-to-recompute half
+    for (const s of this.scopes.values()) s.flushVectors()
+  }
+
+  /** Synchronous final flush — call on dispose. */
+  close(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer)
+      this.flushTimer = null
+    }
+    this.flush()
+  }
+
+  /**
+   * Dedupe-aware save: identical normalized content in the scope refreshes the
+   * existing record instead of duplicating it.
+   */
+  save(
+    input: MemorySaveInput,
+    defaults: { importance: number; source: MemoryRecord['source'] },
+  ): { record: MemoryRecord; deduped: boolean } {
+    const s = this.scope(input.scope)
+    const hash = contentHash(input.scope, input.content)
+    for (const rec of s.records.values()) {
+      if (contentHash(rec.scope, rec.content) === hash) {
+        rec.updatedAt = Date.now()
+        rec.accessCount += 1
+        rec.importance = Math.max(rec.importance, input.importance ?? defaults.importance)
+        if (input.supersedes) rec.supersedes = input.supersedes
+        s.dirty = true
+        return { record: rec, deduped: true }
+      }
+    }
+    const now = Date.now()
+    const record: MemoryRecord = {
+      id: newId(),
+      scope: input.scope,
+      kind: input.kind,
+      content: input.content,
+      tags: input.tags ?? [],
+      source: { ...defaults.source, ...input.source },
+      createdAt: now,
+      updatedAt: now,
+      lastAccessedAt: now,
+      accessCount: 0,
+      importance: input.importance ?? defaults.importance,
+      ...(input.supersedes ? { supersedes: input.supersedes } : {}),
+      ...(input.expiredAt ? { expiredAt: input.expiredAt } : {}),
+    }
+    s.insert(record)
+    return { record, deduped: false }
+  }
+
+  /** Substring match over normalized content, used by forget-by-query. */
+  findIdsByQuery(scope: MemoryScope, query: string): string[] {
+    const s = this.scope(scope)
+    const needle = normalizeContent(query)
+    if (!needle) return []
+    const ids: string[] = []
+    for (const rec of s.records.values()) {
+      if (normalizeContent(rec.content).includes(needle)) ids.push(rec.id)
+    }
+    return ids
+  }
+
+  /** Remove every expired record across scopes; returns removed ids. */
+  purgeExpired(now = Date.now()): string[] {
+    const removed: string[] = []
+    for (const s of this.scopes.values()) {
+      for (const rec of [...s.records.values()]) {
+        if (rec.expiredAt !== undefined && rec.expiredAt < now) {
+          s.remove(rec.id)
+          removed.push(rec.id)
+        }
+      }
+    }
+    return removed
+  }
+
+  /**
+   * Evict lowest-ranked records until each scope is within its cap. Ranking:
+   * recency (30d half-life) × importance — keep what retrieval would favor.
+   */
+  enforceLimit(maxPerScope: number, now = Date.now()): string[] {
+    const removed: string[] = []
+    for (const s of this.scopes.values()) {
+      if (s.records.size <= maxPerScope) continue
+      const ranked = [...s.records.values()]
+        .map((r) => ({
+          id: r.id,
+          rank: Math.pow(0.5, Math.max(0, now - r.updatedAt) / 86_400_000 / 30) * (0.1 + r.importance),
+        }))
+        .sort((a, b) => b.rank - a.rank)
+      for (const r of ranked.slice(maxPerScope)) {
+        s.remove(r.id)
+        removed.push(r.id)
+      }
+    }
+    return removed
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "dsh-memory-local",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Local JSONL + BGE-M3 provider for the DSH memory service",
+  "main": "src/apply.ts",
+  "types": "src/apply.ts",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "dsh-memory": "workspace:*"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "*"
+  }
+}

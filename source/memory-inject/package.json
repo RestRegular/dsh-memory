@@ -1,0 +1,22 @@
+{
+  "name": "dsh-memory-inject",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Injects relevant memories before each agent step (dsh-memory consumer)",
+  "main": "src/apply.ts",
+  "types": "src/apply.ts",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "dsh-memory": "workspace:*"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "*"
+  }
+}
