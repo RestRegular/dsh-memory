@@ -10,7 +10,6 @@ import { fileURLToPath } from 'node:url'
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const pairs = [
   [join(ROOT, '.build', 'core'), join(ROOT, 'packages', 'dsh-memory')],
-  [join(ROOT, '.build', 'panel'), join(ROOT, 'packages', 'dsh-memory-panel')],
 ]
 for (const [from, to] of pairs) {
   if (!existsSync(from)) {

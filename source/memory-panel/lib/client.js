@@ -867,8 +867,8 @@ window.__ModuleLoader__.load({
      * `package.json` 的 `icon`(那个只用于插件管理器的卡片/行),所以插件侧没有任何
      * "官方指定图标"的入口。
      *
-     * 因此只有一条路:用宿主自己的类名做一次**定向覆盖** —— 隐藏那颗齿轮,在同一格里贴上
-     * 我们的记号(与 icon.svg 同一套美术:蓝色渐变圆角瓦片 + 深墨蓝芯片)。
+     * 因此只有一条路:用宿主自己的类名做一次**定向覆盖** —— 把那颗齿轮**就地**换成我们的
+     * 记号(与 icon.svg 同一套美术:蓝色渐变圆角瓦片 + 深墨蓝芯片)。
      * 三条护栏让它不会把界面弄坏:
      *   1. 选择器只认 className 的**后缀**:宿主的类名是 CSS Modules 生成的
      *      `<hash>_navCell` / `<hash>_navIcon`(hash 随构建变),所以用
@@ -877,21 +877,20 @@ window.__ModuleLoader__.load({
      *      `dsh-memory-nav` 标记类,规则全部限定在它下面 —— 其它区块(账号/模型/插件市场)
      *      的图标一个都不碰。标记打在**按钮自己**身上而不是它所在的列表上:整列共用一个
      *      列表容器,标在容器上会波及所有区块。
-     *   3. 纯 CSS 画图,不插 DOM、不碰 React 树;万一宿主的类名约定整个变了,规则匹配不到,
-     *      图标就**自动退回原来那颗齿轮**,不会变成空白格。
-     * 尺寸沿用宿主写死的 16(它给图标的 size 就是 16),行高与 .navIcon{flex:none} 一致。
+     *   3. **不改布局、不插 DOM**:只给那颗 svg 加背景与去描边,它原本占的格子原样保留。
+     *
+     * 为什么不是"藏掉 svg + 用 ::before 补一个"—— 0.5.3 就是这么写的,结果在真机上
+     * **齿轮没了、芯片也没画出来**,留了个空位(伪元素的盒子在宿主那种 flex/内联样式的
+     * 组合里没成形)。改成给 svg 本身画背景后,盒子是宿主自己保证的,只要 svg 还在,
+     * 画出来的东西就一定会出现;而 svg 不在时(宿主改结构)什么都不匹配,图标保持原样 ——
+     * 两边都不会出现"空一格"。
+     * 尺寸沿用宿主写死的 16(它给图标的 size 就是 16)。
      */
     const NAV_ICON_CSS = [
-      // 只隐藏"我们自己那一行"的图标:标记类直接打在那一行的按钮上(见 wrapSettingsNav)
-      '.dsh-memory-nav [class*="_navIcon"] { display: none !important; }',
-      // 同一格里补上我们的记号(纯 CSS 画,不插 DOM)
-      '.dsh-memory-nav [class*="_navCell"]::before {',
-      '  content: "";',
-      '  flex: none;',
-      '  display: block;',
-      '  width: 16px;',
-      '  height: 16px;',
-      // 瓦片:圆角 26%(≈8/28,与 icon.svg 的 rx 一致)+ 同一组蓝色渐变
+      // 去描边并画上我们的记号 —— 就地覆盖,不动布局
+      '.dsh-memory-nav [class*="_navIcon"] {',
+      '  stroke: none !important;',
+      '  color: transparent !important;',
       '  border-radius: 26%;',
       '  background:',
       // 芯片:深墨蓝边框(上下两条横带 + 左右两条竖带)+ 中心点
