@@ -1,23 +1,30 @@
 {
   "name": "@restregular/dsh-memory",
-  "version": "0.1.0",
-  "description": "DeepSeek Harness 本地长期记忆：JSONL 存储 + 本地向量检索（BGE-M3）+ 四个模型工具 + 自动召回注入。",
+  "version": "0.4.0",
+  "description": "DeepSeek Harness 本地长期记忆(单包单入口):JSONL 存储 + 本地向量检索(BGE-M3)+ 四个模型工具 + 自动召回注入 + 管理面板。",
+  "icon": "./icon.svg",
   "type": "module",
   "exports": {
-    ".": "./lib/provider/apply.js",
-    "./tools": "./lib/tools/apply.js",
-    "./inject": "./lib/inject/apply.js",
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
     "./package.json": "./package.json"
   },
   "files": [
     "lib/",
     "cordis.patch.yml",
+    "icon.svg",
     "README.md",
     "LICENSE"
   ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
     }
   },
   "peerDependencies": {
@@ -41,13 +48,17 @@
     "url": "git+https://github.com/RestRegular/dsh-memory",
     "directory": "packages/dsh-memory"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "keywords": [
     "dsh-plugin",
     "deepseek-harness",
     "memory",
     "bge-m3",
     "embeddings",
-    "recall"
+    "recall",
+    "panel"
   ],
   "engines": {
     "node": ">=22.13.0"

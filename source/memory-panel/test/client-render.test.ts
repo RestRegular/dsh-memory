@@ -8,37 +8,60 @@
  * can run it) plus a stubbed `fetch`, then asserts what the user actually sees:
  *   - a record card is COLLAPSED by default (preview only, no full body, no actions)
  *   - expanding it surfaces the full content plus 编辑/删除
- *   - an UNCONFIGURED vector backend offers 下载并配置, and no dead switch
+ *   - an UNCONFIGURED vector backend offers the model list + 下载并安装, and no dead switch
  *   - only a backend this app manages gets a switch (external / disabled never do)
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+/**
+ * 合并后客户端 bundle 归单包所有:期望的注册 id 就是那个包的包名。
+ * 从包里读而不是写死字符串 —— 写死的那份在改名/合并时会静默过期,
+ * 而这类不一致的失败形态正是「面板不出现」。
+ */
+const PACKAGE_NAME = (
+  JSON.parse(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'memory-plugin', 'package.json'), 'utf8')) as { name: string }
+).name
 
 type VNode = { type: unknown; props: Record<string, unknown>; children: unknown[] }
 
 /** Minimal React: createElement + useState (with re-render) + collectable useEffect. */
 function makeReact() {
-  const states: unknown[] = []
+  // 每个组件实例一份状态槽:key 由 render 的路径推导(见 render 的 path 参数)。
+  // 早先是一个全局数组 + cursor,嵌套组件会把父组件的槽位写坏 —— 只有在"子组件渲染
+  // 发生在父组件读完自己的 state 之后"时才侥幸能过,而面板一加嵌套的有状态组件
+  // (ModelPicker)就静默把父组件的 embedServer 改成了空字符串。
+  const store = new Map<string, unknown[]>()
   const effects: (() => unknown)[] = []
+  /** effect 返回的清理函数:resetAll 时统一执行(等价于 React 卸载)。 */
+  const cleanups: Array<() => unknown> = []
+  let key = 'root'
   let cursor = 0
   let pending: (() => void) | null = null
 
   const createElement = (type: unknown, props: Record<string, unknown> | null, ...children: unknown[]): VNode => ({
     type,
     props: props ?? {},
-    children: children.flat().filter((c) => c !== null && c !== undefined && c !== false),
+    // 保留 null/undefined/false 槽位:React 的身份是**按位置**的,条件渲染时下标不能漂移,
+    // 否则兄弟节点一变,嵌套组件的状态就被重置(踩过:chipRow 出现后 ModelPicker 被重挂)。
+    children: children.flat(),
   })
 
   const React = {
     createElement,
     useState(initial: unknown) {
+      const slots = store.get(key) ?? []
       const i = cursor++
-      if (!(i in states)) states[i] = initial
+      if (!(i in slots)) slots[i] = initial
+      store.set(key, slots)
       const set = (v: unknown) => {
-        states[i] = typeof v === 'function' ? (v as (prev: unknown) => unknown)(states[i]) : v
+        slots[i] = typeof v === 'function' ? (v as (prev: unknown) => unknown)(slots[i]) : v
         if (pending) pending()
       }
-      return [states[i], set] as const
+      return [slots[i], set] as const
     },
     useEffect(fn: () => unknown) { effects.push(fn) },
   }
@@ -46,31 +69,50 @@ function makeReact() {
   return {
     React,
     createElement,
-    states,
-    reset: () => { cursor = 0 },
+    /** 进入一个组件/元素路径:它拥有自己的一组状态槽。 */
+    enter: (next: string) => { key = next; cursor = 0 },
     /** Drop all hook state so each test renders a component from a clean slate. */
-    resetAll: () => { states.length = 0; effects.length = 0; cursor = 0; pending = null },
+    resetAll: () => {
+      // 先卸载:effect 的清理函数要跑(否则 setInterval 之类的句柄会留在事件循环里,
+      // 测试全绿但进程永不退出)。
+      for (const cleanup of cleanups.splice(0)) { try { cleanup() } catch { /* 清理失败不影响测试 */ } }
+      store.clear()
+      effects.length = 0
+      key = 'root'
+      cursor = 0
+      pending = null
+    },
     setRerender: (fn: () => void) => { pending = fn },
     /** Run the effects collected during the last render (mount semantics). */
-    runEffects: () => { const list = effects.splice(0); for (const fn of list) fn() },
+    runEffects: () => {
+      const list = effects.splice(0)
+      for (const fn of list) {
+        const cleanup = fn()
+        if (typeof cleanup === 'function') cleanups.push(cleanup as () => unknown)
+      }
+    },
   }
 }
 
 interface RenderNode { tag?: unknown; props?: Record<string, unknown>; text?: string; children?: RenderNode[] }
 
-function render(node: unknown, hooks: ReturnType<typeof makeReact>): RenderNode | null {
+function render(node: unknown, hooks: ReturnType<typeof makeReact>, path = 'root'): RenderNode | null {
   if (node === null || node === undefined || node === false || node === true) return null
   if (typeof node === 'string' || typeof node === 'number') return { text: String(node) }
-  if (Array.isArray(node)) return { children: node.map((n) => render(n, hooks)).filter(Boolean) as RenderNode[] }
+  if (Array.isArray(node)) return { children: node.map((n, i) => render(n, hooks, `${path}[${i}]`)).filter(Boolean) as RenderNode[] }
   const vnode = node as VNode
   if (typeof vnode.type === 'function') {
-    hooks.reset()
-    return render((vnode.type as (p: Record<string, unknown>) => unknown)({ ...vnode.props, children: vnode.children }), hooks)
+    const component = vnode.type as (p: Record<string, unknown>) => unknown
+    const childPath = `${path}/${component.name || 'fn'}`
+    hooks.enter(childPath)
+    return render(component({ ...vnode.props, children: vnode.children }), hooks, childPath)
   }
+  const elementPath = `${path}/${String(vnode.type)}`
+  hooks.enter(elementPath)
   return {
     tag: vnode.type,
     props: vnode.props,
-    children: vnode.children.map((n) => render(n, hooks)).filter(Boolean) as RenderNode[],
+    children: vnode.children.map((n, i) => render(n, hooks, `${elementPath}/${i}`)).filter(Boolean) as RenderNode[],
   }
 }
 
@@ -107,7 +149,7 @@ async function loadBundleImpl() {
   await import('../lib/client.js')
   assert.ok(registration, 'bundle must call window.__ModuleLoader__.load')
   const reg = registration as unknown as { id: string; factory: (r: (n: string) => unknown) => Record<string, unknown> }
-  assert.equal(reg.id, '@restregular/dsh-memory-panel', 'ModuleLoader id must equal the package name')
+  assert.equal(reg.id, PACKAGE_NAME, 'ModuleLoader id must equal the package name')
   const exports = reg.factory(requireShim)
   assert.equal(typeof exports.apply, 'function')
   assert.deepEqual(exports.inject, ['slots'])
@@ -191,14 +233,46 @@ test('expanding a card reveals the full content and the actions', async () => {
   assert.ok(text.includes('编辑') && text.includes('删除'), 'actions available once expanded')
 })
 
+/** 面板里的「模型与硬件」会用到的报告(探测结果用假数据,理由文本断言用不到它)。 */
+const modelReport = () => ({
+  catalog: [
+    {
+      id: 'bge-m3', label: 'BGE-M3', note: '', dims: 1024, pooling: 'cls', languages: 'multilingual',
+      contextTokens: 8192, sizeBytes: 437778496, installed: false,
+      variants: [{ id: 'q4_k_m', label: 'Q4_K_M', bytes: 437778496, file: 'bge-m3-Q4_K_M.gguf', installed: false }],
+    },
+    {
+      id: 'qwen3-embedding-0.6b', label: 'Qwen3-Embedding-0.6B', note: '', dims: 1024, pooling: 'last', languages: 'multilingual',
+      contextTokens: 32768, sizeBytes: 639171584, installed: false,
+      variants: [{ id: 'q8_0', label: 'Q8_0', bytes: 639171584, file: 'Qwen3-Embedding-0.6B-Q8_0.gguf', installed: false }],
+    },
+  ],
+  current: {
+    presetId: 'bge-m3', variantId: 'q4_k_m', modelLabel: 'BGE-M3 · Q4_K_M', file: 'bge-m3-Q4_K_M.gguf',
+    dims: 1024, pooling: 'cls', flavor: 'cpu', model: 'bge-m3',
+  },
+  hardware: {
+    platform: 'win32', arch: 'x64', cpuCount: 12, totalRamMb: 14336, freeDiskMb: 9553,
+    diskPath: 'C:/x', gpu: null, flavors: ['cpu'], notes: [],
+  },
+  recommendation: {
+    modelId: 'qwen3-embedding-0.6b', variantId: 'q8_0', flavor: 'cpu',
+    reason: ['这台机器:12 核 · 14GB 内存'], warnings: [], alternatives: [], candidates: [],
+  },
+  locale: 'zh-CN',
+  records: 3,
+})
+
 /** Stub `fetch` the way the panel's api() uses it and let the mount effect run. */
-async function mountPanel(hooks: ReturnType<typeof makeReact>, state: { scopes: unknown[]; embedServer: unknown }) {
+async function mountPanel(hooks: ReturnType<typeof makeReact>, state: { scopes: unknown[]; embedServer: unknown }, report = modelReport()) {
   const globals = globalThis as Record<string, unknown>
   globals.fetch = async (url: string) => ({
     status: 200,
-    json: async () => (String(url).includes('/status')
-      ? { ok: true, value: state }
-      : { ok: true, value: { records: [] } }),
+    json: async () => (String(url).includes('/embed/model')
+      ? { ok: true, value: report }
+      : String(url).includes('/status')
+        ? { ok: true, value: state }
+        : { ok: true, value: { records: [] } }),
   })
   const { exports } = await loadBundle()
   const MemoryPanel = (exports.__test as { MemoryPanel: (p: Record<string, unknown>) => unknown }).MemoryPanel
@@ -207,14 +281,25 @@ async function mountPanel(hooks: ReturnType<typeof makeReact>, state: { scopes: 
   hooks.setRerender(() => { current = render(element(), hooks) })
   hooks.runEffects()
   for (let i = 0; i < 6; i++) await Promise.resolve()
+  // 第二轮:清单/状态请求回来后,才会把选择抛给面板(「当前」那行由它驱动)
+  hooks.runEffects()
+  for (let i = 0; i < 4; i++) await Promise.resolve()
   return () => current
+}
+
+/** 树里所有标签气泡的文字(按出现顺序)。 */
+function chipTexts(tree: RenderNode | null): string[] {
+  return collect(tree)
+    // 精确匹配 class 'chip':容器叫 'chips',用 includes 会把它也算进来
+    .filter((n) => String(n.props?.className ?? '').split(/\s+/).includes('chip'))
+    .map((n) => (n.children ?? []).map((c) => c.text).join(''))
 }
 
 const installIdle = (over: Record<string, unknown> = {}) => ({
   phase: 'idle', message: '', receivedBytes: 0, totalBytes: null, error: null, installed: false, root: 'D:/stack', ...over,
 })
 
-test('an unconfigured backend offers 下载并配置 instead of a dead switch', async () => {
+test('未配置的后端:展开「模型与硬件」给出模型列表与安装按钮,而不是一个死开关', async () => {
   const { hooks } = await loadBundle()
   hooks.resetAll()
   const tree = await mountPanel(hooks, {
@@ -227,20 +312,242 @@ test('an unconfigured backend offers 下载并配置 instead of a dead switch', 
   })
   const nodes = collect(tree())
   assert.equal(nodes.filter((n) => n.props?.role === 'switch').length, 0, 'no switch before a backend is configured')
+  assert.ok(textOf(tree()).includes('向量未启用'), 'the stats card does not pretend there is an embed backlog')
+  assert.ok(textOf(tree()).includes('向量检索为可选功能'), '可选说明紧跟在「模型与硬件」旁边')
+
+  // 展开「模型与硬件」→ 才会去拉清单(硬件探测要等这一次请求)
+  const details = nodes.find((n) => n.tag === 'details')
+  assert.ok(details, '「模型与硬件」是折叠区块')
+  ;(details!.props!.onToggle as (e: unknown) => void)({ target: { open: true } })
+  // 展开触发重渲染,新收集到的 effect 要显式跑一次(测试脚手架的 mount 语义)
+  hooks.runEffects()
+  for (let i = 0; i < 8; i++) await Promise.resolve()
+
   const text = textOf(tree())
-  assert.ok(text.includes('下载并配置'), 'the installer button is the action')
-  assert.ok(text.includes('向量未启用'), 'the stats card does not pretend there is an embed backlog')
-  // clicking it must POST to the install route
-  const calls: string[] = []
-  ;(globalThis as Record<string, unknown>).fetch = async (url: string) => {
-    calls.push(String(url))
+  assert.ok(chipTexts(tree()).includes('推荐'), `推荐项在列表里带「推荐」气泡(实际:${JSON.stringify(chipTexts(tree()))})`)
+  assert.ok(!text.includes('这台机器'), '不再显示推荐理由')
+  assert.ok(text.includes('下载并安装'), '安装按钮在模型区块里')
+
+  // 点它必须 POST 到安装接口,并带上选中的模型(默认就是推荐项)
+  const calls: Array<{ url: string; body: string | undefined }> = []
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string, init?: { body?: string }) => {
+    calls.push({ url: String(url), body: init?.body })
     return { status: 200, json: async () => ({ ok: true, value: { install: installIdle() } }) }
   }
-  const button = nodes.find((n) => n.tag === 'button' && (n.children ?? []).some((c) => c.text === '下载并配置'))
+  const button = collect(tree()).find((n) => n.tag === 'button' && (n.children ?? []).some((c) => c.text === '下载并安装'))
   assert.ok(button, 'installer button found')
   ;(button!.props!.onClick as () => void)()
   await Promise.resolve()
-  assert.ok(calls.some((u) => u.endsWith('/embed/install')), `expected an install POST, got ${calls.join(', ')}`)
+  const install = calls.find((c) => c.url.endsWith('/embed/install'))
+  assert.ok(install, `expected an install POST, got ${calls.map((c) => c.url).join(', ')}`)
+  assert.match(String(install!.body), /qwen3-embedding-0\.6b/, '安装请求带上推荐(默认选中)的模型')
+})
+
+test('「本机配置」「当前模型」两行:都带标题、都横向滚动,安装按钮在当前模型行右边', async () => {
+  const { hooks, exports } = await loadBundle()
+  hooks.resetAll()
+  // 未配置:挂载后立刻就有内容(不等展开),当前模型 = 默认选中的推荐项
+  const tree = await mountPanel(hooks, {
+    scopes: [{ scope: 'global', records: 0, pendingEmbeds: 0 }],
+    embedServer: {
+      enabled: false, configured: false, mode: 'off', endpoint: 'http://127.0.0.1:8078/v1/embeddings', model: 'bge-m3',
+      spawnConfigured: false, owned: false, pid: null, baseUrl: '', reachable: false, pendingEmbeds: 0, install: installIdle(),
+    },
+  })
+  const all = chipTexts(tree())
+  // 本机配置在上面一行,当前模型在下面一行
+  assert.deepEqual(all.slice(0, 4), ['12 核', '14GB 内存', '无独立显卡', '磁盘剩余 9GB'], `本机配置气泡:${JSON.stringify(all.slice(0, 4))}`)
+  assert.deepEqual(all.slice(4, 9), ['Qwen3-Embedding-0.6B', 'Q8_0', '1024 维', 'last', 'cpu'], `当前模型气泡:${JSON.stringify(all.slice(4, 9))}`)
+
+  const text = textOf(tree())
+  assert.ok(text.includes('本机配置：'), '本机配置行有标题')
+  assert.ok(text.includes('当前模型：'), '当前模型行有标题')
+  assert.ok(text.includes('▸') && text.includes('模型与硬件'), '折叠标题左边有展开标志')
+
+  // 两行结构:[标题][气泡(横向滚动)][动作按钮(居右)]
+  const lines = collect(tree()).filter((n) => String(n.props?.className ?? '') === 'chipline')
+  assert.equal(lines.length, 2, '两行:本机配置 / 当前模型')
+  const row1 = lines[0]!.children ?? []
+  const row2 = lines[1]!.children ?? []
+  assert.deepEqual(row1[0]!.children!.map((c) => c.text), ['本机配置：'])
+  assert.equal(String(row1[1]!.props?.className), 'chips')
+  assert.deepEqual(row1[2]!.children!.map((c) => c.text), ['重新检测硬件'], '重新检测硬件在本机配置行最右边')
+  assert.deepEqual(row2[0]!.children!.map((c) => c.text), ['当前模型：'])
+  assert.equal(String(row2[1]!.props?.className), 'chips')
+  assert.ok(String(row2[2]!.props?.className).includes('install'), '安装按钮在当前模型行、居右')
+  assert.ok(text.includes('下载并安装'))
+
+  // 两行都用同一套"不换行 + 横向滚动"的样式(CSS 契约)
+  const css = (exports.__test as { CSS: string }).CSS
+  const chipsRule = /\.memp \.chips\{([^}]*)\}/.exec(css)?.[1] ?? ''
+  assert.match(chipsRule, /flex-wrap:nowrap/, `气泡行不换行:${chipsRule}`)
+  assert.match(chipsRule, /overflow-x:auto/, `气泡行横向滚动:${chipsRule}`)
+  assert.match(chipsRule, /scrollbar-width:none/, `气泡行不显示滚动条:${chipsRule}`)
+  assert.match(css, /\.memp \.chips::-webkit-scrollbar\{display:none/, 'Chromium 下也藏掉滚动条')
+  assert.match(css, /button:hover\{[^}]*brand-primary/, '按钮统一有 hover 反馈')
+
+  // 已配置:显示实际配置(不受列表里的默认选择影响)
+  hooks.resetAll()
+  const configuredTree = await mountPanel(hooks, {
+    scopes: [{ scope: 'global', records: 0, pendingEmbeds: 0 }],
+    embedServer: {
+      enabled: true, configured: true, mode: 'managed', endpoint: 'http://127.0.0.1:8078/v1/embeddings', model: 'bge-m3',
+      modelLabel: 'BGE-M3 · Q4_K_M', presetId: 'bge-m3', variantId: 'q4_k_m', dims: 1024, pooling: 'cls', flavor: 'cpu',
+      spawnConfigured: true, owned: true, pid: 7, baseUrl: 'http://127.0.0.1:8078', reachable: true, pendingEmbeds: 0, install: installIdle({ installed: true }),
+    },
+  })
+  const configured = chipTexts(configuredTree())
+  assert.deepEqual(configured.slice(4, 9), ['BGE-M3', 'Q4_K_M', '1024 维', 'cls', 'cpu'], `已配置时的当前模型:${JSON.stringify(configured)}`)
+
+  // 三处下拉(模型 / 运行时 / 作用域)+ 记录卡编辑态的类型,统一都是自绘的
+  const nodes = collect(configuredTree())
+  assert.equal(nodes.filter((n) => n.tag === 'select').length, 0, '不再使用原生 select')
+  assert.equal(nodes.filter((n) => n.props?.['aria-haspopup'] === 'listbox').length, 3, '模型 / 运行时 / 作用域都是自绘下拉')
+
+  // 已装好的那一档:按钮显示「已安装」且不可点(点它只会重复下载)
+  const installBtn = nodes.find((n) => String(n.props?.className ?? '') === 'install')
+  assert.ok(installBtn, '安装按钮存在')
+  assert.equal((installBtn!.children ?? []).map((c) => c.text).join(''), '已安装', '已装好的档位按钮文案')
+  assert.equal(installBtn!.props?.disabled, true, '已装好的档位按钮不可点')
+
+  // 换一个还没装的档 → 已经装了 bge-m3,所以这里必须要求先卸载,而不是直接再装一个
+  // (第一个 listbox 触发器就是模型下拉:它在树里排在运行时/作用域前面)
+  const trigger = collect(configuredTree()).find((n) => n.props?.['aria-haspopup'] === 'listbox')!
+  ;(trigger.props!.onClick as () => void)()          // 展开
+  const option = collect(configuredTree()).find((n) => n.props?.role === 'option' && textOf(n).includes('Qwen3-Embedding-0.6B'))!
+  assert.ok(option, '下拉里能找到未安装的那一档')
+  ;(option.props!.onClick as () => void)()           // 选中 qwen3(未安装)
+  const after = collect(configuredTree()).find((n) => String(n.props?.className ?? '') === 'install')
+  assert.equal((after!.children ?? []).map((c) => c.text).join(''), '需先卸载', '已装过模型时不许再装第二个')
+  assert.equal(after!.props?.disabled, true, '必须先卸载才能换模型')
+})
+
+test('已经装了模型就不许再装:必须先卸载;卸载后按钮恢复可点', async () => {
+  const { hooks } = await loadBundle()
+  hooks.resetAll()
+
+  // 起点:装着 bge-m3(后端快照 + 清单都标已装),面板处于托管态
+  const report = modelReport()
+  report.catalog[0]!.installed = true
+  report.catalog[0]!.variants[0]!.installed = true
+  const state: { scopes: unknown[]; embedServer: Record<string, unknown> } = {
+    scopes: [{ scope: 'global', records: 0, pendingEmbeds: 0 }],
+    embedServer: {
+      enabled: true, configured: true, mode: 'managed', endpoint: 'http://127.0.0.1:8078/v1/embeddings', model: 'bge-m3',
+      modelLabel: 'BGE-M3 · Q4_K_M', presetId: 'bge-m3', variantId: 'q4_k_m', dims: 1024, pooling: 'cls', flavor: 'cpu',
+      spawnConfigured: true, owned: true, pid: 7, baseUrl: 'http://127.0.0.1:8078', reachable: true, pendingEmbeds: 0,
+      install: installIdle({ installed: true }),
+    },
+  }
+  const tree = await mountPanel(hooks, state, report)
+  const installBtn = () => collect(tree()).find((n) => String(n.props?.className ?? '') === 'install')
+  const label = () => (installBtn()!.children ?? []).map((c) => c.text).join('')
+  assert.equal(label(), '已安装', '装好的那一档显示已安装')
+  assert.equal(installBtn()!.props?.disabled, true, '已安装不可点')
+
+  // 选一个没装的档:不许直接再装一个 → 「需先卸载」
+  const trigger = collect(tree()).find((n) => n.props?.['aria-haspopup'] === 'listbox')!
+  ;(trigger.props!.onClick as () => void)()
+  const option = collect(tree()).find((n) => n.props?.role === 'option' && textOf(n).includes('Qwen3-Embedding-0.6B'))!
+  assert.ok(option, '下拉里能找到未安装的那一档')
+  ;(option.props!.onClick as () => void)()
+  assert.equal(label(), '需先卸载', '已装过模型时不许再装第二个')
+  assert.equal(installBtn()!.props?.disabled, true, '必须先卸载')
+
+  // 卸载:后端快照与清单都不再有已装档 → 点「刷新」重新取状态,按钮应当恢复
+  report.catalog[0]!.installed = false
+  report.catalog[0]!.variants[0]!.installed = false
+  state.embedServer = {
+    enabled: false, configured: false, mode: 'off', endpoint: '', model: 'bge-m3', spawnConfigured: false,
+    owned: false, pid: null, baseUrl: '', reachable: false, pendingEmbeds: 0, install: installIdle({ installed: false }),
+    maintenance: { usageBytes: 0, records: 0, storeDir: 'D:/stack/store' },
+  }
+  const refresh = collect(tree()).find((n) => n.tag === 'button' && textOf(n).includes('刷新'))!
+  ;(refresh.props!.onClick as () => void)()
+  for (let round = 0; round < 3; round++) {
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+    hooks.runEffects()
+  }
+  assert.equal(label(), '下载并安装', '卸载之后按钮回到「下载并安装」')
+  assert.notEqual(installBtn()!.props?.disabled, true, '卸载之后可以装了')
+})
+
+test('记录卡编辑态的类型下拉也是自绘的(全站没有原生 select)', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const RecordCard = (exports.__test as { RecordCard: (p: Record<string, unknown>) => unknown }).RecordCard
+  let tree: RenderNode | null = null
+  const element = () => hooks.React.createElement(RecordCard, { rec: makeRecord({ kind: 'note' }), onSaved: () => {}, onDeleted: () => {} })
+  hooks.setRerender(() => { tree = render(element(), hooks) })
+  tree = render(element(), hooks)
+  const head = collect(tree).find((n) => String(n.props?.className ?? '').startsWith('rec-head'))
+  assert.ok(head, '卡片头存在')
+  ;(head!.props!.onClick as () => void)()
+  const edit = collect(tree).find((n) => n.tag === 'button' && (n.children ?? []).some((c) => c.text === '编辑'))
+  assert.ok(edit, '展开后能看到编辑按钮')
+  ;(edit!.props!.onClick as () => void)()
+  assert.equal(collect(tree).filter((n) => n.tag === 'select').length, 0, '编辑态没有原生 select')
+  const dropdowns = collect(tree).filter((n) => n.props?.['aria-haspopup'] === 'listbox')
+  assert.equal(dropdowns.length, 1, '类型是一个自绘下拉')
+  // 打开后能选到别的类型
+  ;(dropdowns[0]!.props!.onClick as () => void)()
+  const options = collect(tree).filter((n) => n.props?.role === 'option').map((n) => textOf(n))
+  assert.ok(options.includes('decision') && options.includes('note'), `类型选项:${JSON.stringify(options)}`)
+})
+
+test('空状态:还没有记忆,居中一行', async () => {
+  const { hooks } = await loadBundle()
+  hooks.resetAll()
+  const tree = await mountPanel(hooks, {
+    scopes: [], embedServer: null,
+  })
+  const empty = collect(tree()).find((n) => String(n.props?.className ?? '') === 'empty')
+  assert.ok(empty, '空状态节点存在')
+  assert.equal((empty!.children ?? []).map((c) => c.text).join(''), '还没有记忆')
+})
+
+test('下拉列表:点选项选中,点列表外面(或 Esc)关闭', async () => {
+  const { hooks } = await loadBundle()
+  hooks.resetAll()
+  // 脚手架里的 document 只有 createElement/head —— 补一个记录监听器的最小实现
+  const listeners: Record<string, Array<(e: unknown) => void>> = {}
+  const doc = (globalThis as Record<string, unknown>).document as Record<string, unknown>
+  doc.addEventListener = (type: string, fn: (e: unknown) => void) => { (listeners[type] ??= []).push(fn) }
+  doc.removeEventListener = (type: string, fn: (e: unknown) => void) => {
+    listeners[type] = (listeners[type] ?? []).filter((f) => f !== fn)
+  }
+
+  const tree = await mountPanel(hooks, {
+    scopes: [{ scope: 'global', records: 0, pendingEmbeds: 0 }],
+    embedServer: {
+      enabled: false, configured: false, mode: 'off', endpoint: 'http://127.0.0.1:8078/v1/embeddings', model: 'bge-m3',
+      spawnConfigured: false, owned: false, pid: null, baseUrl: '', reachable: false, pendingEmbeds: 0, install: installIdle(),
+    },
+  })
+  const openList = () => {
+    const btn = collect(tree()).find((n) => n.props?.['aria-haspopup'] === 'listbox')!
+    ;(btn.props!.onClick as () => void)()
+    hooks.runEffects()
+  }
+  const options = () => collect(tree()).filter((n) => n.props?.role === 'option')
+
+  assert.equal(options().length, 0, '默认不展开')
+  openList()
+  assert.ok(options().length >= 2, '点开后列出所有档位')
+  assert.equal((listeners.click ?? []).length, 1, '打开时挂了外部点击监听')
+
+  // 点在列表里面:不关
+  for (const fn of listeners.click ?? []) fn({ target: { closest: () => ({}) } })
+  assert.ok(options().length >= 2, '点列表内部不关')
+
+  // 点在列表外面:关
+  for (const fn of listeners.click ?? []) fn({ target: { closest: () => null } })
+  assert.equal(options().length, 0, '点列表外面关闭')
+
+  // Esc 也能关
+  openList()
+  for (const fn of listeners.keydown ?? []) fn({ key: 'Escape' })
+  assert.equal(options().length, 0, 'Esc 关闭')
 })
 
 test('only a managed backend renders a switch; external and config-disabled do not', async () => {
@@ -304,8 +611,10 @@ test('maintenance asks before destroying: two-step confirm, and the right reques
 
   const text = textOf(tree())
   assert.ok(text.includes('维护'), 'maintenance section is rendered')
-  assert.ok(text.includes('484.0 MB'), `shows the size an uninstall would free (got: ${text.slice(0, 160)})`)
-  assert.ok(text.includes('记忆数据 4 条'), 'shows how much data a wipe would remove')
+  assert.ok(text.includes('卸载插件不会移除已配置的向量服务与记忆文件'), '说明卸载不会删文件')
+  assert.ok(!text.includes('卸载插件不会删除这里的文件'), '旧的那句已经移除')
+  assert.ok(text.includes('向量服务：484.0 MB'), `shows the size an uninstall would free (got: ${text.slice(0, 200)})`)
+  assert.ok(text.includes('记忆数据：4 条'), 'shows how much data a wipe would remove')
 
   // Swap in a capturing stub: the panel's actions go through the global fetch.
   // Status/records keep answering, so the reload that follows an action renders
@@ -365,6 +674,11 @@ test('the installer shows progress while downloading and an error with a retry',
   assert.ok(runningText.includes('正在下载 bge-m3 模型'), 'shows the installer message')
   assert.ok(/\d+%/.test(runningText), 'shows a percentage')
   assert.ok(runningText.includes('取消'), 'offers cancel while running')
+  // 下载中「下载并安装」必须不可用(否则能反复点,重复发起下载)
+  const installBtn = collect(runningTree()).find((n) => String(n.props?.className ?? '').includes('install'))
+  assert.ok(installBtn, '安装按钮在树上')
+  assert.equal(installBtn!.props?.disabled, true, '下载中安装按钮不可用')
+  assert.equal((installBtn!.children ?? []).map((c) => c.text).join(''), '下载中…', '按钮文案变成「下载中…」')
 
   hooks.resetAll()
   const failedTree = await mountPanel(hooks, {

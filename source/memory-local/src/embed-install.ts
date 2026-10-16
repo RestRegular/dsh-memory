@@ -39,6 +39,7 @@ import { chmodSync, createWriteStream, existsSync, mkdirSync, readFileSync, rena
 import type { WriteStream } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { gunzipSync, inflateRawSync } from 'node:zlib'
+import type { RuntimeFlavor } from './hardware.ts'
 
 /** 模型文件名：下载目标与「是否已安装」的判据都用它，不要在两处各写一遍。 */
 export const MODEL_FILE_NAME = 'bge-m3-Q4_K_M.gguf'
@@ -88,10 +89,19 @@ export interface InstallPaths {
   exe: string
   /** 子进程工作目录：llama.cpp 的 shim 从这里解析同目录的 dll/so */
   cwd: string
-  /** `<root>/models/bge-m3-Q4_K_M.gguf` */
+  /** `<root>/models/<所选模型的文件名>` —— 文件名来自模型清单，不再写死 */
   model: string
   /** `<root>/llama-server.log` */
   logFile: string
+}
+
+/** 要安装的模型：文件名是唯一事实来源（落盘名 + 「装没装」判据）。 */
+export interface InstallModel {
+  file: string
+  /** 已知体积，只用于提示与磁盘校验；以响应的 content-length 为准。 */
+  bytes?: number
+  /** 按序回退的下载源；不给则退回内置 MODEL_SOURCES（只适用于 bge-m3）。 */
+  sources?: string[]
 }
 
 /** 安装状态机。idle/error 都可能再次 start()。 */
@@ -127,7 +137,14 @@ export interface InstallerOptions {
   onProgress?: (p: InstallProgress) => void
   /** 外部取消信号（面板的「取消」走 cancel()，这个给调用方复用别处的 signal）。 */
   signal?: AbortSignal
-  /** 覆盖模型下载源列表（默认 MODEL_SOURCES）。测试与特殊网络环境用。 */
+  /**
+   * 要装的模型。不给则退回内置的 bge-m3 Q4_K_M —— 这样老配置(只写 modelSources)
+   * 的行为与合并前逐字一致。
+   */
+  model?: InstallModel
+  /** 运行时风味：cpu(默认) / vulkan / cuda / metal(macOS 等同 cpu 包)。 */
+  flavor?: RuntimeFlavor
+  /** 覆盖模型下载源列表（默认取 model.sources，其次内置 MODEL_SOURCES）。 */
   modelSources?: string[]
   /** 测试注入：只影响选中哪个运行时资产，目录布局始终跟随宿主平台。 */
   platform?: NodeJS.Platform
@@ -155,7 +172,7 @@ interface TarEntry {
   data: Buffer
 }
 
-export function installPaths(root: string): InstallPaths {
+export function installPaths(root: string, modelFile: string = MODEL_FILE_NAME): InstallPaths {
   const dir = join(root, RUNTIME_DIR_NAME)
   // 宿主平台决定可执行文件名：Windows 上 llama.cpp 的启动器带 .exe。
   const exeName = process.platform === 'win32' ? 'llama-server.exe' : 'llama-server'
@@ -164,22 +181,22 @@ export function installPaths(root: string): InstallPaths {
     dir,
     exe: join(dir, exeName),
     cwd: dir,
-    model: join(root, MODELS_DIR_NAME, MODEL_FILE_NAME),
+    model: join(root, MODELS_DIR_NAME, modelFile),
     logFile: join(root, LOG_FILE_NAME),
   }
 }
 
 /**
- * 已安装则返回布局，否则 null（判据：exe 与 model 两个文件都在）。
+ * 已安装则返回布局，否则 null（判据：exe 与**所选模型的**文件都在）。
  *
  * 只看「存在」就够：安装器永远先写 .part 再 rename，所以这两个路径上不可能
  * 出现半成品；反过来，用户手工放好的文件也会被如实采纳（这正是
  * `<root>/llamacpp` + `<root>/models` 这套既有布局的意义）。
  * 绝不抛异常：它在 resolveConfig 里被同步调用。
  */
-export function detectInstalled(root: string): InstallPaths | null {
+export function detectInstalled(root: string, modelFile: string = MODEL_FILE_NAME): InstallPaths | null {
   try {
-    const paths = installPaths(root)
+    const paths = installPaths(root, modelFile)
     if (!isFile(paths.exe) || !isFile(paths.model)) return null
     return paths
   } catch {
@@ -188,30 +205,79 @@ export function detectInstalled(root: string): InstallPaths | null {
 }
 
 /**
- * 平台 → 发行资产名正则。按平台挑包，绝不硬编码构建号：
- *   win32-x64    → llama-b<号>-bin-win-cpu-x64.zip
- *   win32-arm64  → llama-b<号>-bin-win-cpu-arm64.zip
- *   linux-x64    → llama-b<号>-bin-ubuntu-x64.tar.gz（历史版本曾是 .zip，故两者都收）
- *   linux-arm64  → llama-b<号>-bin-ubuntu-arm64.tar.gz
- *   darwin-arm64 → llama-b<号>-bin-macos-arm64.tar.gz
- *   darwin-x64   → llama-b<号>-bin-macos-x64.tar.gz
+ * 平台 + 风味 → 发行资产名正则。按平台挑包，绝不硬编码构建号。
  *
- * 正则收尾用 `$` 锚定：同一批资产里还有 cuda/vulkan/sycl/openvino/rocm 变体，
+ * 资产名逐个核实过（llama.cpp b11678，2026-10-16 查的 API）：
+ *   cpu     win/linux/macos 的通用包（win-cpu-x64 / ubuntu-x64 / macos-*）
+ *   vulkan  `-bin-win-vulkan-x64.zip` / `-bin-ubuntu-vulkan-x64.tar.gz` —— 自包含，驱动自带 Vulkan 即可
+ *   cuda    `-bin-win-cuda-12.4-x64.zip` / `-bin-ubuntu-cuda-12.8-x64.tar.gz` —— **还需要 cudart 伴随包**
+ *   metal   macOS 构建自带 Metal，资产与 cpu 相同
+ *
+ * 正则一律用 `$` 锚定：同一批资产里还有 cuda/vulkan/sycl/openvino/rocm/adreno 变体，
  * 不锚定就会把 `-ubuntu-vulkan-x64.tar.gz` 之类当成 CPU 包下下来（几百 MB 白下）。
+ * CUDA 的次版本号写进正则是有意的：不同 CUDA 版本需要不同的 cudart 与之配对，
+ * 让它们一起被选中才能保证两个包属于同一套工具链。
  */
-export function runtimeAssetPattern(platform: NodeJS.Platform, arch: string): RegExp {
+export function runtimeAssetPattern(
+  platform: NodeJS.Platform,
+  arch: string,
+  flavor: RuntimeFlavor = 'cpu',
+): RegExp {
   const key = `${platform}-${arch}`
+  const cpu = (): RegExp => {
+    switch (key) {
+      case 'win32-x64': return /-bin-win-cpu-x64\.zip$/
+      case 'win32-arm64': return /-bin-win-cpu-arm64\.zip$/
+      case 'linux-x64': return /-bin-ubuntu-x64\.(?:zip|tar\.gz)$/
+      case 'linux-arm64': return /-bin-ubuntu-arm64\.(?:zip|tar\.gz)$/
+      case 'darwin-arm64': return /-bin-macos-arm64\.(?:zip|tar\.gz)$/
+      case 'darwin-x64': return /-bin-macos-x64\.(?:zip|tar\.gz)$/
+      default:
+        throw new Error(
+          `资产匹配失败：${key}（暂不支持该平台；已支持 win32-x64 / win32-arm64 / linux-x64 / linux-arm64 / darwin-arm64 / darwin-x64）`,
+        )
+    }
+  }
+  if (flavor === 'cpu' || flavor === 'metal') return cpu()
+  if (flavor === 'vulkan') {
+    switch (key) {
+      case 'win32-x64': return /-bin-win-vulkan-x64\.zip$/
+      case 'win32-arm64': return /-bin-win-vulkan-arm64\.zip$/
+      case 'linux-x64': return /-bin-ubuntu-vulkan-x64\.tar\.gz$/
+      case 'linux-arm64': return /-bin-ubuntu-vulkan-arm64\.tar\.gz$/
+      // macOS 没有独立的 Vulkan 包(Metal 就是它的 GPU 路径),退回 CPU 构建。
+      default: return cpu()
+    }
+  }
+  // cuda
   switch (key) {
-    case 'win32-x64': return /-bin-win-cpu-x64\.zip$/
-    case 'win32-arm64': return /-bin-win-cpu-arm64\.zip$/
-    case 'linux-x64': return /-bin-ubuntu-x64\.(?:zip|tar\.gz)$/
-    case 'linux-arm64': return /-bin-ubuntu-arm64\.(?:zip|tar\.gz)$/
-    case 'darwin-arm64': return /-bin-macos-arm64\.(?:zip|tar\.gz)$/
-    case 'darwin-x64': return /-bin-macos-x64\.(?:zip|tar\.gz)$/
-    default:
-      throw new Error(
-        `资产匹配失败：${key}（暂不支持该平台；已支持 win32-x64 / win32-arm64 / linux-x64 / linux-arm64 / darwin-arm64 / darwin-x64）`,
-      )
+    case 'win32-x64': return /-bin-win-cuda-12\.4-x64\.zip$/
+    case 'win32-arm64': return /-bin-win-cuda-13\.4-arm64\.zip$/
+    case 'linux-x64': return /-bin-ubuntu-cuda-12\.8-x64\.tar\.gz$/
+    case 'linux-arm64': return /-bin-ubuntu-cuda-13\.4-arm64\.tar\.gz$/
+    default: return cpu()
+  }
+}
+
+/**
+ * CUDA 风味需要的伴随资产(cudart:运行时 + cuBLAS 等),没有它 llama-server 起不来。
+ *
+ * 注意它的命名和主包**不一致**:有的带构建号、有的不带
+ * (`cudart-llama-bin-win-cuda-12.4-x64.zip` vs `cudart-llama-b11678-bin-win-cuda-13.4-x64.zip`),
+ * 所以正则不能要求 `b<号>`,只能靠 cuda 次版本号把两者配对。
+ */
+export function runtimeCompanionPattern(
+  platform: NodeJS.Platform,
+  arch: string,
+  flavor: RuntimeFlavor,
+): RegExp | null {
+  if (flavor !== 'cuda') return null
+  switch (`${platform}-${arch}`) {
+    case 'win32-x64': return /^cudart-.*bin-win-cuda-12\.4-x64\.zip$/
+    case 'win32-arm64': return /^cudart-.*bin-win-cuda-13\.4-arm64\.zip$/
+    case 'linux-x64': return /^cudart-.*bin-ubuntu-cuda-12\.8-x64\.tar\.gz$/
+    case 'linux-arm64': return /^cudart-.*bin-ubuntu-cuda-13\.4-arm64\.tar\.gz$/
+    default: return null
   }
 }
 
@@ -224,13 +290,25 @@ export interface RuntimeAsset {
   apiUrl: string
 }
 
-/** 在一批 GitHub 资产里按平台挑第一个匹配的包。 */
+/** 在一批 GitHub 资产里按平台 + 风味挑第一个匹配的包。 */
 export function pickRuntimeAsset(
   assets: readonly unknown[],
   platform: NodeJS.Platform,
   arch: string,
+  flavor: RuntimeFlavor = 'cpu',
 ): RuntimeAsset | null {
-  return matchAsset(assets, runtimeAssetPattern(platform, arch))
+  return matchAsset(assets, runtimeAssetPattern(platform, arch, flavor))
+}
+
+/** 挑 CUDA 的 cudart 伴随包(非 cuda 风味或无匹配时为 null)。 */
+export function pickRuntimeCompanion(
+  assets: readonly unknown[],
+  platform: NodeJS.Platform,
+  arch: string,
+  flavor: RuntimeFlavor,
+): RuntimeAsset | null {
+  const pattern = runtimeCompanionPattern(platform, arch, flavor)
+  return pattern === null ? null : matchAsset(assets, pattern)
 }
 
 function matchAsset(assets: readonly unknown[], pattern: RegExp): RuntimeAsset | null {
@@ -241,6 +319,18 @@ function matchAsset(assets: readonly unknown[], pattern: RegExp): RuntimeAsset |
     const apiUrl = (asset as { url?: unknown }).url
     if (typeof name !== 'string' || typeof url !== 'string') continue
     if (pattern.test(name)) return { name, url, apiUrl: typeof apiUrl === 'string' ? apiUrl : '' }
+  }
+  return null
+}
+
+/** 在倒序的发行版列表里找第一个含匹配资产的 release（latest 不可用，见 resolveRuntimeAsset）。 */
+function findAssetInReleases(releases: readonly unknown[], pattern: RegExp): RuntimeAsset | null {
+  for (const release of releases) {
+    if (typeof release !== 'object' || release === null) continue
+    const assets = (release as { assets?: unknown }).assets
+    if (!Array.isArray(assets)) continue
+    const hit = matchAsset(assets, pattern)
+    if (hit !== null) return hit
   }
   return null
 }
@@ -722,14 +812,21 @@ export class VectorInstaller {
     const root = this.opts.root
     const platform = this.opts.platform ?? process.platform
     const arch = this.opts.arch ?? process.arch
-    const paths = installPaths(root)
+    // 所选模型:不给就是内置的 bge-m3 Q4_K_M(与合并前行为一致)。
+    const model: InstallModel = this.opts.model ?? {
+      file: MODEL_FILE_NAME,
+      bytes: MODEL_SIZE_BYTES,
+      ...(this.opts.modelSources ? { sources: this.opts.modelSources } : {}),
+    }
+    const flavor: RuntimeFlavor = this.opts.flavor ?? 'cpu'
+    const paths = installPaths(root, model.file)
     try {
       this.setPhase(gen, 'preparing', `准备安装目录 ${root}`)
       ensureDir(root, '创建安装根目录')
       ensureDir(paths.dir, '创建运行时目录')
       ensureDir(dirname(paths.model), '创建模型目录')
 
-      const asset = await this.resolveRuntimeAsset(gen, platform, arch)
+      const asset = await this.resolveRuntimeAsset(gen, platform, arch, flavor)
       const archivePath = join(paths.dir, asset.name)
       if (fileSize(archivePath) > 0) {
         // 上轮下完但解压/下模型失败：压缩包还在，别白下第二遍。
@@ -757,6 +854,23 @@ export class VectorInstaller {
         try { rmSync(archivePath, { force: true }) } catch { /* 尽力而为 */ }
         throw error
       }
+      // CUDA 风味:主包只有 llama-server 本体,cuBLAS/cudart 在**另一个**资产里,
+      // 两个包必须来自同一套工具链(靠 cuda 次版本号配对),所以一起下一起解压。
+      const companion = await this.resolveRuntimeCompanion(gen, platform, arch, flavor)
+      if (companion !== null) {
+        const companionPath = join(paths.dir, companion.name)
+        if (fileSize(companionPath) === 0) {
+          this.setPhase(gen, 'downloading-runtime', `正在下载 CUDA 运行库 ${companion.name}`)
+          const got = await this.downloadFrom(gen, runtimeDownloadSources(companion), companionPath, 'CUDA 运行库', 'downloading-runtime', '通道')
+          this.report(gen, { message: `CUDA 运行库下载完成（${formatBytes(got.bytes)}，通道：${got.source.label}）` })
+        }
+        try {
+          written += extractArchive(readFileSync(companionPath), paths.dir)
+        } catch (error) {
+          try { rmSync(companionPath, { force: true }) } catch { /* 尽力而为 */ }
+          throw error
+        }
+      }
       if (!existsSync(paths.exe)) {
         throw new Error(`解压完成但没找到 ${basename(paths.exe)}：${asset.name} 的目录结构可能变了`)
       }
@@ -767,15 +881,15 @@ export class VectorInstaller {
       this.setPhase(gen, 'extracting', `已解压 ${written} 个文件`)
 
       if (fileSize(paths.model) > 0) {
-        // 模型 417MB，重下一次代价太大：已经在就直接用。
+        // 模型几百 MB 起步，重下一次代价太大：已经在就直接用。
         this.setPhase(gen, 'downloading-model', '模型已存在，跳过下载', { receivedBytes: 0, totalBytes: null })
       } else {
-        this.setPhase(gen, 'downloading-model', `正在下载 bge-m3 模型（约 ${formatBytes(MODEL_SIZE_BYTES)}）`)
-        const got = await this.downloadModel(gen, paths.model)
+        this.setPhase(gen, 'downloading-model', `正在下载 ${model.file}${model.bytes !== undefined ? `（约 ${formatBytes(model.bytes)}）` : ''}`)
+        const got = await this.downloadModel(gen, paths.model, model)
         this.report(gen, { message: `模型下载完成（已下载 ${formatBytes(got.bytes)}，来源：${got.source.label}）` })
       }
 
-      const installed = detectInstalled(root)
+      const installed = detectInstalled(root, model.file)
       if (installed === null) throw new Error('安装校验失败：llama-server 或模型文件缺失')
       this.report(gen, {
         phase: 'done',
@@ -796,14 +910,19 @@ export class VectorInstaller {
     }
   }
 
-  /** 查发行版列表 → 按平台挑包。latest 不可用（见下），按时间倒序取第一个命中的。 */
+  /**
+   * 查发行版列表 → 按平台 + 风味挑包。latest 不可用（见下），按时间倒序取第一个命中的。
+   *
+   * 风味包找不到时**退回 CPU 包**并说明原因：装得上但慢,好过装不上。
+   */
   private async resolveRuntimeAsset(
     gen: number,
     platform: NodeJS.Platform,
     arch: string,
+    flavor: RuntimeFlavor,
   ): Promise<RuntimeAsset> {
-    const pattern = runtimeAssetPattern(platform, arch)
-    const label = `${platform}-${arch}`
+    const pattern = runtimeAssetPattern(platform, arch, flavor)
+    const label = `${platform}-${arch} ${flavor}`
     this.report(gen, { message: `正在查询 llama.cpp 最新构建（${label}）` })
     // 注意：不要用 /releases/latest。llama.cpp 的 b#### 构建线全部带
     // prerelease:true，而 latest 只认正式版，现在返回的是一个与本项目无关的
@@ -811,21 +930,44 @@ export class VectorInstaller {
     // 列表，取第一个含匹配资产的 release（prerelease 与否无关）。
     const releases = await this.fetchJson(RELEASES_API, '查询 llama.cpp 发行版')
     if (!Array.isArray(releases)) throw new Error('llama.cpp 发行版接口返回的数据格式异常')
-    for (const release of releases) {
-      if (typeof release !== 'object' || release === null) continue
-      const assets = (release as { assets?: unknown }).assets
-      if (!Array.isArray(assets)) continue
-      const hit = matchAsset(assets, pattern)
-      if (hit !== null) return hit
+    const wanted = flavor === 'metal' ? 'cpu' : flavor
+    const hit = findAssetInReleases(releases, pattern)
+    if (hit !== null) return hit
+    if (wanted !== 'cpu') {
+      const fallback = findAssetInReleases(releases, runtimeAssetPattern(platform, arch, 'cpu'))
+      if (fallback !== null) {
+        this.report(gen, {
+          message: `最近 20 个发行版里没有 ${wanted} 运行时（匹配 ${String(pattern)}），已改用 CPU 运行时；想在 GPU 上跑可以自己装好再把 spawn.exe 指过去`,
+        })
+        return fallback
+      }
     }
     throw new Error(`资产匹配失败：${label}（最近 20 个发行版里没有匹配 ${String(pattern)} 的包）`)
   }
 
+  /** CUDA 风味的 cudart 伴随包;非 cuda 或无匹配返回 null(不阻塞安装)。 */
+  private async resolveRuntimeCompanion(
+    gen: number,
+    platform: NodeJS.Platform,
+    arch: string,
+    flavor: RuntimeFlavor,
+  ): Promise<RuntimeAsset | null> {
+    const pattern = runtimeCompanionPattern(platform, arch, flavor)
+    if (pattern === null) return null
+    const releases = await this.fetchJson(RELEASES_API, '查询 llama.cpp 发行版')
+    if (!Array.isArray(releases)) return null
+    const hit = findAssetInReleases(releases, pattern)
+    if (hit === null) {
+      this.report(gen, { message: `没有找到 CUDA 运行库（匹配 ${String(pattern)}）：llama-server 可能起不来，可改用 Vulkan 或 CPU 运行时` })
+    }
+    return hit
+  }
+
   /** 模型下载：多源顺序回退（noun 只影响报错文案）。 */
-  private async downloadModel(gen: number, dest: string): Promise<{ bytes: number; source: DownloadSource }> {
-    const urls: readonly string[] = this.opts.modelSources ?? MODEL_SOURCES
+  private async downloadModel(gen: number, dest: string, model: InstallModel): Promise<{ bytes: number; source: DownloadSource }> {
+    const urls: readonly string[] = model.sources ?? this.opts.modelSources ?? MODEL_SOURCES
     const sources = urls.map((url): DownloadSource => ({ url, accept: '*/*', label: urlHost(url) }))
-    return this.downloadFrom(gen, sources, dest, 'bge-m3 模型', 'downloading-model', '源')
+    return this.downloadFrom(gen, sources, dest, model.file, 'downloading-model', '源')
   }
 
   /**

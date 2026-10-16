@@ -1,0 +1,308 @@
+﻿/**
+ * 把四个源半边打成一个 npm 包:`@scope/dsh-memory`(单包单入口)。
+ *
+ *   node tools/build-single-package.mjs --scope @restregular [--version 0.2.0]
+ *        [--out .build/single] [--repo https://github.com/...] [--no-place]
+ *        [--host-modules <dir>]     # 做真实加载验证用的宿主包目录(可选)
+ *
+ * 为什么是「一个包一条 entry」,而不是"一个包含四条 entry":
+ *   宿主的 dsh-client-modules 只在「某条活 Loader entry 能解析到包名」时才为该包
+ *   提供 client bundle,并且要求一个包名只有一个解析源(reconcilePackage:
+ *   "resolves from multiple active Loader sources")。一个包里同时挂 3~4 条 entry
+ *   (裸名 + 子路径)今天能跑,但它依赖"子路径行对 client 扫描不可见"这一实现细节;
+ *   一旦宿主收紧,同包名立刻变成多个来源 → 客户端图组合失败 → 桌面端起不来。
+ *   一条 entry 则在任何解读下都成立(与 dshmarket 同形)。
+ *
+ * 产出布局(与旧的两个包逐文件对应,只是合并到一处):
+ *   lib/index.js          单入口:组合 provider / 工具 / 注入 / 面板
+ *   lib/provider/*.js     存储 + 检索 + 向量后端 + 一键安装
+ *   lib/tools/*.js        四个模型工具
+ *   lib/inject/*.js       agent/pre-step 召回注入
+ *   lib/panel.js          面板服务端路由(含同源/登录围栏)
+ *   lib/client.js         面板客户端 bundle(注册 id == 包名,由 preflight 检查)
+ *   cordis.patch.yml      一行纯 insert(可热挂载)
+ *
+ * 构建方式沿用旧脚本:node 内置的类型剥离(无工具链),相对 .ts 说明符改写为 .js,
+ * 跨半边相对 import 重映射,每个文件 node --check,最后用**普通 node** import 入口
+ * 证明产物在真实安装环境能跑(需要宿主包,缺失时跳过并说明)。
+ */
+import { stripTypeScriptTypes } from 'node:module'
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { dirname, join, relative, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const ROOT = resolve(HERE, '..')
+const PKGS = existsSync(join(ROOT, 'source')) ? join(ROOT, 'source') : join(ROOT, 'packages')
+
+function arg(name, fallback) {
+  const i = process.argv.indexOf(`--${name}`)
+  return i >= 0 && process.argv[i + 1] && !process.argv[i + 1].startsWith('--') ? process.argv[i + 1] : fallback
+}
+const has = (name) => process.argv.includes(`--${name}`)
+
+const SCOPE = (arg('scope', '') || '').replace(/^@?/, '@')
+if (!arg('scope', '')) {
+  console.error('usage: node tools/build-single-package.mjs --scope <npm-scope> [--version x.y.z] [--out dir] [--repo url]')
+  process.exit(2)
+}
+const VERSION = arg('version', '0.2.0')
+const OUT = resolve(ROOT, arg('out', '.build/single'))
+const REPO_URL = arg('repo', '')
+const HOST_MODULES = arg('host-modules', process.env.DSH_HOST_MODULES ?? '')
+const PLACE = !has('no-place')
+const PLACE_DIR = join(ROOT, 'packages', 'dsh-memory')
+const LEGACY_DIR = join(ROOT, 'packages', 'dsh-memory-panel')
+const NAME = `${SCOPE}/dsh-memory`
+
+const emitted = []
+
+/** 源半边 → 包内目录。lib/{provider,tools,inject} 与旧核心包一致,便于对照。 */
+const GROUPS = [
+  { src: join(PKGS, 'memory-local', 'src'), dest: 'lib/provider' },
+  { src: join(PKGS, 'tool-memory', 'src'), dest: 'lib/tools' },
+  { src: join(PKGS, 'memory-inject', 'src'), dest: 'lib/inject' },
+  { src: join(PKGS, 'memory-plugin', 'src'), dest: 'lib' },
+]
+
+/**
+ * 跨半边相对 import 的落位重映射。注意顺序:通用规则先把 .ts 改成 .js,
+ * 这里的规则匹配的是 .js 形态。
+ *   单入口(lib/index.js)      → ../provider|tools|inject|panel.js
+ *   注入半边(lib/inject/*.js) → ../provider/*.js
+ */
+const REWRITES = [
+  { from: /from '\.\.\/memory-local\/src\/([^']+)\.js'/g, to: "from './provider/$1.js'" },
+  { from: /from '\.\.\/tool-memory\/src\/([^']+)\.js'/g, to: "from './tools/$1.js'" },
+  { from: /from '\.\.\/memory-inject\/src\/([^']+)\.js'/g, to: "from './inject/$1.js'" },
+  { from: /from '\.\.\/memory-panel\/lib\/index\.js'/g, to: "from './panel.js'" },
+  { from: /from '\.\.\/\.\.\/memory-local\/src\/([^']+)\.js'/g, to: "from '../provider/$1.js'" },
+  { from: /import\('\.\.\/\.\.\/memory-local\/src\/([^']+)\.js'\)/g, to: "import('../provider/$1.js')" },
+]
+
+function transpileFile(srcFile, destFile) {
+  let code = readFileSync(srcFile, 'utf8')
+  // sourceUrl 必须是**仓库相对 posix 路径**:传绝对路径会把构建者的 checkout
+  // 位置(例如 D:\.deepseek\memory-plugin\… 或 C:\Users\…\dsh-memory\…)写进每个
+  // 产出文件。那既泄露本机路径,又让同一份源码在不同机器上产出不同字节 ——
+  // 于是"提交的产物必须等于源码重建"这条护栏会对所有人假报错(dsh-market
+  // #472/#563/#570 是同一类问题的三个不同表现)。
+  const sourceUrl = relative(ROOT, srcFile).split('\\').join('/')
+  code = stripTypeScriptTypes(code, { mode: 'strip', sourceUrl })
+  code = code.replace(/(from\s*')(\.[^']*?)\.ts(')/g, '$1$2.js$3')
+  code = code.replace(/(import\(')(\.[^']*?)\.ts('\))/g, '$1$2.js$3')
+  for (const r of REWRITES) code = code.replace(r.from, r.to)
+  mkdirSync(dirname(destFile), { recursive: true })
+  writeFileSync(destFile, code, 'utf8')
+  emitted.push(destFile)
+}
+
+function copyTree(srcDir, destDir) {
+  mkdirSync(destDir, { recursive: true })
+  for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
+    const src = join(srcDir, entry.name)
+    if (entry.isDirectory()) { copyTree(src, join(destDir, entry.name)); continue }
+    if (!entry.name.endsWith('.ts') || entry.name.endsWith('.test.ts') || entry.name.endsWith('.d.ts')) continue
+    transpileFile(src, join(destDir, entry.name.replace(/\.ts$/, '.js')))
+  }
+}
+
+function writeJson(file, value) {
+  mkdirSync(dirname(file), { recursive: true })
+  writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+}
+
+const OWNER = SCOPE.replace(/^@/, '')
+
+const PATCH = `# ${NAME} bundle patch: 单包单入口 —— provider + 模型工具 + 召回注入 + 面板(服务端与客户端同包)。
+#
+# 只有一行,而且必须是包名:宿主的 client-modules 只为「能解析到包名的活 entry」
+# 提供 client bundle(见 dsh-client-modules reconcilePackage)。纯 insert、不带
+# config,是为了让这一行可被宿主热挂载(带 config 只能重启生效)。
+- insert:
+    - id: dsh-memory
+      name: '${NAME}'
+`
+
+const MIT_LICENSE = `MIT License
+
+Copyright (c) 2026 ${OWNER}
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+`
+
+// 包的 README 直接用仓库根目录那份:单一来源,免得 npm 页面上讲的还是旧按钮/旧按钮名。
+const README = readFileSync(join(ROOT, 'README.md'), 'utf8')
+
+
+// ------------------------------------------------------------------ build
+
+rmSync(OUT, { recursive: true, force: true })
+for (const group of GROUPS) copyTree(group.src, join(OUT, group.dest))
+
+// 面板:服务端半边 → lib/panel.js(纯 JS,无需剥离类型);客户端 bundle 原样复制
+const panelDir = join(PKGS, 'memory-panel')
+mkdirSync(join(OUT, 'lib'), { recursive: true })
+cpSync(join(panelDir, 'lib', 'index.js'), join(OUT, 'lib', 'panel.js'))
+cpSync(join(panelDir, 'lib', 'client.js'), join(OUT, 'lib', 'client.js'))
+cpSync(join(panelDir, 'icon.svg'), join(OUT, 'icon.svg'))
+
+writeJson(join(OUT, 'package.json'), {
+  name: NAME,
+  version: VERSION,
+  description: 'DeepSeek Harness 本地长期记忆(单包单入口):JSONL 存储 + 本地向量检索(BGE-M3)+ 四个模型工具 + 自动召回注入 + 管理面板。',
+  icon: './icon.svg',
+  type: 'module',
+  exports: {
+    '.': './lib/index.js',
+    './client': './lib/client.js',
+    './package.json': './package.json',
+  },
+  files: ['lib/', 'cordis.patch.yml', 'icon.svg', 'README.md', 'LICENSE'],
+  dsh: {
+    bundle: { patch: './cordis.patch.yml' },
+    client: { inject: ['@deepseek-ai/dsh-client-ui-slots'], platform: 'web' },
+  },
+  peerDependencies: {
+    '@deepseek-ai/cordis': '*',
+    '@deepseek-ai/dsh-tools': '*',
+    '@deepseek-ai/dsh-llm': '*',
+  },
+  peerDependenciesMeta: {
+    '@deepseek-ai/cordis': { optional: true },
+    '@deepseek-ai/dsh-tools': { optional: true },
+    '@deepseek-ai/dsh-llm': { optional: true },
+  },
+  ...(REPO_URL
+    ? { repository: { type: 'git', url: REPO_URL.startsWith('git+') ? REPO_URL : `git+${REPO_URL}`, directory: 'packages/dsh-memory' } }
+    : {}),
+  // 作用域包默认是私有可见性,发 npm 必须显式 public —— 写进包里,`npm publish` 不加参数也不会错。
+  publishConfig: { access: 'public' },
+  keywords: ['dsh-plugin', 'deepseek-harness', 'memory', 'bge-m3', 'embeddings', 'recall', 'panel'],
+  engines: { node: '>=22.13.0' },
+  license: 'MIT',
+})
+writeFileSync(join(OUT, 'cordis.patch.yml'), PATCH, 'utf8')
+writeFileSync(join(OUT, 'README.md'), README, 'utf8')
+writeFileSync(join(OUT, 'LICENSE'), MIT_LICENSE, 'utf8')
+
+// ------------------------------------------------------------------ checks
+
+let bad = 0
+for (const file of emitted) {
+  const res = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' })
+  if (res.status !== 0) { console.error(`SYNTAX FAIL ${relative(ROOT, file)}\n${res.stderr}`); bad++ }
+  const leftovers = [...readFileSync(file, 'utf8').matchAll(/from\s*'(\.[^']*\.ts)'/g)].map((m) => m[1])
+  if (leftovers.length > 0) { console.error(`TS SPECIFIER LEFT ${relative(ROOT, file)}: ${leftovers.join(', ')}`); bad++ }
+}
+// 入口的跨半边改写必须真的生效(少了它,产物装到用户机器上才会 Cannot find module)
+const entry = readFileSync(join(OUT, 'lib', 'index.js'), 'utf8')
+for (const spec of ['./provider/apply.js', './tools/apply.js', './inject/apply.js', './panel.js']) {
+  if (!entry.includes(`'${spec}'`)) { console.error(`ENTRY IMPORT MISSING ${spec} (rewrite did not apply)`); bad++ }
+}
+
+// patch:必须只有一行 insert,且 name 就是包名(这条在 dsh-market 那边叫 preflight:
+// dsh-market → dshmarket 改名后,1.0.0 与 1.0.1 都因为这类裸字符串发过坏包)
+const patchText = readFileSync(join(OUT, 'cordis.patch.yml'), 'utf8')
+const patchNames = [...patchText.matchAll(/^\s*name:\s*'([^']+)'/gm)].map((m) => m[1])
+if (patchNames.length !== 1 || patchNames[0] !== NAME) {
+  console.error(`PATCH NAME FAIL: expected exactly one name '${NAME}', got ${JSON.stringify(patchNames)}`)
+  bad++
+}
+// package.json:单包必须同时带 dsh.bundle 与 dsh.client,并且导出 ./client
+const meta = JSON.parse(readFileSync(join(OUT, 'package.json'), 'utf8'))
+if (meta.name !== NAME) { console.error(`PACKAGE NAME FAIL: ${meta.name} != ${NAME}`); bad++ }
+if (meta.dsh?.bundle?.patch === undefined) { console.error('PACKAGE FAIL: missing dsh.bundle.patch'); bad++ }
+if (meta.dsh?.client?.platform !== 'web') { console.error('PACKAGE FAIL: missing dsh.client.platform=web'); bad++ }
+if (meta.exports?.['./client'] !== './lib/client.js') { console.error('PACKAGE FAIL: missing exports["./client"]'); bad++ }
+// 客户端 bundle:注册 id 必须 == 包名(client-modules 按包名建图行)
+const client = readFileSync(join(OUT, 'lib', 'client.js'), 'utf8')
+const declared = client.match(/__ModuleLoader__\.load\(\{\s*id:\s*'([^']+)'/)
+if (!declared) { console.error('CLIENT FAIL: no window.__ModuleLoader__.load({ id: … }) registration'); bad++ }
+else if (declared[1] !== NAME) { console.error(`CLIENT ID FAIL: bundle registers "${declared[1]}" but the package is "${NAME}"`); bad++ }
+else console.log(`client id check: "${declared[1]}" == package name ✓`)
+
+// 加载验证:用**普通 node**(没有 --experimental-strip-types)import 入口,
+// 证明产物在真实安装环境里能解析、能被加载。
+//
+// HOST_MODULES 要指向一个 **@deepseek-ai 目录**(即里面直接是 cordis / dsh-tools /
+// dsh-llm … 这些包目录)。整棵树用一个 junction 挂到 <out>/node_modules/@deepseek-ai:
+// 这样每个宿主包要的兄弟包都会命中同一层 parent/node_modules/@deepseek-ai/<name>,
+// 与真实 profile 的解析路径一致。
+function verifyLoads() {
+  if (!HOST_MODULES) {
+    console.log('skip load proof: pass --host-modules <dir-of-@deepseek-ai> (or set DSH_HOST_MODULES) to enable it')
+    return
+  }
+  if (!existsSync(join(HOST_MODULES, 'cordis'))) {
+    console.error(`LOAD FAIL: ${HOST_MODULES} 不像 @deepseek-ai 目录(里面应有 cordis/、dsh-tools/ 等)`)
+    bad++
+    return
+  }
+  const nm = join(OUT, 'node_modules')
+  rmSync(nm, { recursive: true, force: true })
+  mkdirSync(nm, { recursive: true })
+  try { symlinkSync(resolve(HOST_MODULES), join(nm, '@deepseek-ai'), 'junction') } catch (error) {
+    console.error(`junction failed: ${error.message}`); bad++; return
+  }
+  const targets = [join(OUT, 'lib', 'index.js'), join(OUT, 'lib', 'panel.js')]
+  const script = `
+const targets = ${JSON.stringify(targets.map((t) => t.replace(/\\/g, '/')))}
+for (const t of targets) {
+  const mod = await import('file:///' + t)
+  console.log('loaded', t.split('/').slice(-2).join('/'), '-> apply=' + typeof mod.apply, 'name=' + (mod.name ?? '(none)'))
+}
+`
+  const res = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' })
+  rmSync(nm, { recursive: true, force: true })
+  process.stdout.write(res.stdout ?? '')
+  if (res.status !== 0) { console.error(`LOAD FAIL\n${res.stderr ?? ''}`); bad++ }
+}
+verifyLoads()
+
+const count = (dir) => {
+  let n = 0, bytes = 0
+  const walk = (d) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = join(d, e.name)
+      if (e.isDirectory()) walk(p)
+      else { n++; bytes += statSync(p).size }
+    }
+  }
+  walk(dir)
+  return { n, bytes }
+}
+const { n, bytes } = count(OUT)
+console.log(`\nbuilt ${NAME}@${VERSION}: ${n} files, ${(bytes / 1024).toFixed(1)} KiB -> ${relative(ROOT, OUT)}`)
+
+// ------------------------------------------------------------------ place
+
+if (PLACE) {
+  rmSync(PLACE_DIR, { recursive: true, force: true })
+  mkdirSync(dirname(PLACE_DIR), { recursive: true })
+  cpSync(OUT, PLACE_DIR, { recursive: true, filter: (src) => !src.includes(`${'node_modules'}`) })
+  console.log(`placed ${relative(ROOT, PLACE_DIR)}`)
+  if (existsSync(LEGACY_DIR)) {
+    console.log(`note: ${relative(ROOT, LEGACY_DIR)} 是旧的独立面板包,合并后已无构建来源 —— 验证通过后可删除`)
+  }
+}
+
+console.log(bad === 0 ? '\nBUILD OK' : `\nBUILD FAILED (${bad} problem(s))`)
+process.exit(bad === 0 ? 0 : 1)

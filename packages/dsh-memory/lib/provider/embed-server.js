@@ -19,6 +19,7 @@
 import { spawn as nodeSpawn,                   } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+                                              
 
                                     
                                                                                    
@@ -41,6 +42,14 @@ import { dirname, join } from 'node:path'
                
                                           
                       
+     
+                                                         
+                                               
+                                   
+     
+                       
+                                         
+                    
                                                                          
                            
  
@@ -209,13 +218,18 @@ export class EmbedServerManager {
           spawnServer()                   {
     const host = this.cfg.host ?? DEFAULTS.host
     const port = this.cfg.port ?? DEFAULTS.port
+    const pooling              = this.cfg.pooling ?? 'cls'
+    const gpuLayers = this.cfg.gpuLayers ?? 0
     const args = [
       '-m', this.cfg.model          ,
       '--embeddings',
-      '--pooling', 'cls',
+      // 池化跟着模型走;'auto' 不传,让 llama.cpp 用元数据里的值。
+      ...(pooling === 'auto' ? [] : ['--pooling', pooling]),
       '--host', host,
       '--port', String(port),
       '-t', String(this.cfg.threads ?? DEFAULTS.threads),
+      // 有显卡时把层卸载到显存;CPU 风味不传(等价于 0)。
+      ...(gpuLayers > 0 ? ['-ngl', String(gpuLayers)] : []),
       ...(this.cfg.extraArgs ?? []),
     ]
     const logFile = this.cfg.logFile
@@ -293,4 +307,4 @@ export function appendLogLine(file        , line        )       {
 }
 
 
-//# sourceURL=D:\.deepseek\memory-plugin\packages\memory-local\src\embed-server.ts
+//# sourceURL=source/memory-local/src/embed-server.ts

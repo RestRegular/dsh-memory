@@ -83,8 +83,13 @@ export class CordisMemoryService extends Service {
   }
 
   /** Panel: download llama.cpp + the GGML model, then adopt and start them. */
-  installVectorBackend(): void {
-    this.impl.installVectorBackend()
+  installVectorBackend(override?: Parameters<LocalMemoryService['installVectorBackend']>[0]): void {
+    this.impl.installVectorBackend(override ?? {})
+  }
+
+  /** Panel: 模型清单 + 硬件探测 + 按硬件推荐(探测有缓存,只在面板问的时候跑)。 */
+  modelsReport(force = false): ReturnType<LocalMemoryService['modelsReport']> {
+    return this.impl.modelsReport(force)
   }
 
   /** Panel: abort an in-flight download. */

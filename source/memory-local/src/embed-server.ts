@@ -19,6 +19,7 @@
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process'
 import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import type { PoolingKind } from './models.ts'
 
 export interface EmbedServerConfig {
   /** Opt-in; false means the plugin only consumes an externally started server. */
@@ -41,6 +42,14 @@ export interface EmbedServerConfig {
   port?: number
   /** Extra CLI args appended verbatim. */
   extraArgs?: string[]
+  /**
+   * 池化方式。**必须与模型匹配**(BGE 系 = cls、Qwen3-Embedding = last、
+   * nomic = mean);'auto' 表示不传该参数、由 GGUF 元数据决定。
+   * 传错不会报错,只会让相似度整体偏移 —— 检索质量静默变差。
+   */
+  pooling?: PoolingKind
+  /** 卸载到显卡的层数(传给 -ngl);0 或省略 = 纯 CPU。 */
+  gpuLayers?: number
   /** How long readiness polling may take before giving up (log only). */
   startupTimeoutMs?: number
 }
@@ -209,13 +218,18 @@ export class EmbedServerManager {
   private spawnServer(): EmbedServerState {
     const host = this.cfg.host ?? DEFAULTS.host
     const port = this.cfg.port ?? DEFAULTS.port
+    const pooling: PoolingKind = this.cfg.pooling ?? 'cls'
+    const gpuLayers = this.cfg.gpuLayers ?? 0
     const args = [
       '-m', this.cfg.model as string,
       '--embeddings',
-      '--pooling', 'cls',
+      // 池化跟着模型走;'auto' 不传,让 llama.cpp 用元数据里的值。
+      ...(pooling === 'auto' ? [] : ['--pooling', pooling]),
       '--host', host,
       '--port', String(port),
       '-t', String(this.cfg.threads ?? DEFAULTS.threads),
+      // 有显卡时把层卸载到显存;CPU 风味不传(等价于 0)。
+      ...(gpuLayers > 0 ? ['-ngl', String(gpuLayers)] : []),
       ...(this.cfg.extraArgs ?? []),
     ]
     const logFile = this.cfg.logFile

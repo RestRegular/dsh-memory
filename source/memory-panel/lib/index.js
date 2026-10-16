@@ -14,6 +14,13 @@
  *   POST /delete    {id}
  * scope 惰性加载是同步的(store.scope()),无需 ready 门。内容编辑会作废旧向量
  * 并加入 embedPending,由 provider 的回填队列重新嵌入。
+ *
+ * 安全(每个路由都过 refuseRequest,见下):
+ *   注册在裸 webServer 上的路由**既不在宿主的 /api 围栏之后,也不在浏览器登录
+ *   之后** —— 宿主的围栏是一个给别的路由主动调用的服务方法(connection.requestRejection),
+ *   不是自动套上的中间件(dsh-market #603 的结论:裸 webServer 路由在登录开启时
+ *   可被无 session 调用 = 任意代码执行)。这里的读接口能读出全部记忆,写接口能改写、
+ *   删除、清空,还能拉起/卸载向量服务,所以必须自己问一次。
  */
 
 function writeJson(res, body, status = 200) {
@@ -34,6 +41,81 @@ class ApiError extends Error {
     this.status = status
     this.code = code
   }
+}
+
+/** 只认本机权威(loopback),没有宿主围栏时的兜底。 */
+const LOOPBACK_AUTHORITY = /^(?:127(?:\.\d{1,3}){3}|\[::1\]|::1|localhost)(?::\d+)?$/i
+
+/** 请求头里的 Host,小写归一;缺失返回空串。 */
+function hostHeader(req) {
+  const value = req?.headers?.host
+  return typeof value === 'string' ? value.trim().toLowerCase() : ''
+}
+
+/** 部署自己声明的权威(宿主 connection 的 trustedHosts);拿不到就空数组。 */
+function trustedAuthorities(ctx) {
+  try {
+    const connection = ctx?.get?.('connection')
+    return Array.isArray(connection?.trustedHosts)
+      ? connection.trustedHosts.filter((entry) => typeof entry === 'string').map((entry) => entry.toLowerCase())
+      : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 该不该拒绝这个请求。
+ *
+ * 两层,顺序有讲究:
+ *  1. 宿主发布了 connection.requestRejection 时**以它为准** —— 它同时含 Host/Origin
+ *     围栏(防 DNS rebinding 与跨站调用)与浏览器登录(login-token cookie)。
+ *     围栏自己抛错时返回 403:抛错意味着"什么都没放行",此处失败关闭,不能放行。
+ *  2. 旧宿主没有这个服务时自己来:Host 必须是 loopback 或宿主声明的权威,
+ *     sec-fetch-site 不得是 cross-site,带 Origin 就必须与 Host 相等。
+ *     (注意 content-type: text/plain 也能携带合法 JSON 体且不触发预检,
+ *      所以"要求 JSON 体"挡不住跨站 —— 承重的是 Host/Origin 这一层。)
+ *
+ * @returns 需要拒绝时返回状态码(401 未登录 / 403 不受信任),否则 undefined。
+ */
+export function refuseRequest(ctx, req) {
+  let connection
+  try { connection = ctx?.get?.('connection') } catch { connection = undefined }
+  const gate = connection?.requestRejection
+  if (typeof gate === 'function') {
+    try {
+      const status = gate.call(connection, req)
+      return typeof status === 'number' ? status : undefined
+    } catch {
+      return 403
+    }
+  }
+  const host = hostHeader(req)
+  if (host === '') return 403
+  if (!LOOPBACK_AUTHORITY.test(host) && !trustedAuthorities(ctx).includes(host)) return 403
+  if (String(req?.headers?.['sec-fetch-site'] ?? '').toLowerCase() === 'cross-site') return 403
+  const origin = req?.headers?.origin
+  if (origin !== undefined) {
+    try {
+      if (new URL(String(origin)).host.toLowerCase() !== host) return 403
+    } catch {
+      return 403
+    }
+  }
+  return undefined
+}
+
+/** 拒绝时的响应体:给人话,不说内部概念。 */
+function writeRefusal(res, status) {
+  writeJson(res, {
+    ok: false,
+    error: {
+      code: status === 401 ? 'LOGIN_REQUIRED' : 'UNTRUSTED_REQUEST',
+      message: status === 401
+        ? '需要先登录 DSH:请重新打开启动时打印的那个网址。'
+        : '这个请求来自不受信任的来源,已拒绝。',
+    },
+  }, status)
 }
 
 async function readJsonBody(req) {
@@ -70,6 +152,12 @@ async function handle(ctx, routePath, req, res) {
   const url = new URL(req.url ?? '/', 'http://dsh.local')
   const path = url.pathname.slice(routePath.length) || '/'
   const method = req.method ?? 'GET'
+  // 围栏在最前面:任何路由(读也一样)都先过宿主,再谈记忆。
+  const refused = refuseRequest(ctx, req)
+  if (refused !== undefined) {
+    writeRefusal(res, refused)
+    return
+  }
   try {
     const memory = ctx.get('memory')
     if (!memory?.store) throw new ApiError(503, 'MEMORY_UNAVAILABLE', 'memory provider 未加载')
@@ -110,10 +198,38 @@ async function handle(ctx, routePath, req, res) {
       writeJson(res, { ok: true, value: { ...out, ...(await memory.embedServerStatus()) } })
       return
     }
+    if (method === 'GET' && path === '/embed/model') {
+      if (typeof memory.modelsReport !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供模型清单接口（请升级 @restregular/dsh-memory）')
+      writeJson(res, { ok: true, value: await memory.modelsReport(false) })
+      return
+    }
+    if (method === 'POST' && path === '/embed/model/refresh') {
+      if (typeof memory.modelsReport !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供模型清单接口（请升级 @restregular/dsh-memory）')
+      // 强制重探硬件:用户点了「重新检测」,缓存必须让路。
+      writeJson(res, { ok: true, value: await memory.modelsReport(true) })
+      return
+    }
     if (method === 'POST' && path === '/embed/install') {
       if (typeof memory.installVectorBackend !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供自动安装接口（请升级 @restregular/dsh-memory）')
-      memory.installVectorBackend()
-      console.log('[dsh-memory-panel] 开始下载本地向量服务')
+      // 面板可以带选择:预设 / 档位 / 风味,或者一个完全自定义的 GGUF。
+      const body = await readJsonBody(req)
+      const override = {}
+      if (typeof body.preset === 'string' && body.preset !== '') override.preset = body.preset
+      if (typeof body.variant === 'string' && body.variant !== '') override.variant = body.variant
+      if (typeof body.flavor === 'string' && body.flavor !== '') override.flavor = body.flavor
+      if (body.custom !== undefined && typeof body.custom === 'object' && body.custom !== null) {
+        const url = String(body.custom.url ?? '')
+        const dims = Number(body.custom.dims)
+        if (url === '' || !Number.isFinite(dims) || dims <= 0) throw new ApiError(400, 'CUSTOM_MODEL_INVALID', '自定义模型需要 url 与 dims')
+        override.custom = {
+          url,
+          dims,
+          ...(body.custom.file ? { file: String(body.custom.file) } : {}),
+          ...(body.custom.pooling ? { pooling: String(body.custom.pooling) } : {}),
+        }
+      }
+      memory.installVectorBackend(override)
+      console.log(`[dsh-memory-panel] 开始下载向量服务 ${JSON.stringify(override)}`)
       writeJson(res, { ok: true, value: { ...(await memory.embedServerStatus()) } })
       return
     }

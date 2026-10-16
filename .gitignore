@@ -3,3 +3,5 @@ dist-npm/
 *.log
 *.pid
 .DS_Store
+.build/
+.verify/

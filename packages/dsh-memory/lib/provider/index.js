@@ -22,9 +22,18 @@ import { RerankCache } from './rerank-cache.js'
 import { scanSecrets, redactSecrets } from './secrets.js'
 import { EmbedServerManager,                                               } from './embed-server.js'
 import { VectorInstaller, detectInstalled, installPaths,                      } from './embed-install.js'
-import { existsSync, readdirSync, rmSync, statSync } from 'node:fs'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { homedir } from 'node:os'
+import {
+  DEFAULT_MODEL_ID,
+  EMBEDDING_MODELS,
+  findModel,
+  findVariant,
+                   
+} from './models.js'
+import { probeHardware,                                       } from './hardware.js'
+import { pickFlavor, recommendModel } from './recommend.js'
 
 /** Recursive byte count; 0 for anything unreadable. */
 function pathSize(path        )         {
@@ -60,8 +69,33 @@ function isInside(parent        , child        )          {
               
                        
                        
+                                                      
                     
                    
+         
+                                                           
+                                 
+         
+                     
+                                                       
+                      
+                                               
+                     
+                   
+                                  
+                     
+                    
+                             
+                      
+                                    
+                          
+       
+                                                                    
+                           
+                                                          
+                                     
+                                                             
+                        
                                                             
                         
                                                                
@@ -117,6 +151,21 @@ function isInside(parent        , child        )          {
                        
                                                                                     
                                   
+                                                              
+                                                                      
+                                              
+                    
+                     
+                      
+                                                     
+                        
+                                            
+                                  
+                               
+                     
+                                           
+                        
+                           
                     
                  
                 
@@ -134,6 +183,151 @@ function isInside(parent        , child        )          {
                                                           
  
 
+/** vector 配置节的类型别名,给下面的模型解析helpers 用。 */
+                                                                                           
+
+/** 面板可以在安装时临时指定的模型选择。 */
+                                
+                 
+                  
+                                                                                                                  
+                                 
+ 
+
+/**
+ * 「面板选过什么」的记忆,落在安装目录里(<installRoot>/selected-model.json)。
+ *
+ * 为什么需要它:面板没法改写 profile 配置,而"选了模型 → 重启后配置又指回老模型"
+ * 会让装好的模型认不出来。这里是**低于配置**的一层记忆:配置里写了 preset/customModel
+ * 就听配置的,没写才用这份。
+ */
+export const MODEL_STATE_FILE = 'selected-model.json'
+
+                      
+                   
+                    
+                                       
+                                 
+ 
+
+function readModelState(root        )                    {
+  try {
+    const text = readFileSync(join(root, MODEL_STATE_FILE), 'utf8')
+    const parsed = JSON.parse(text)              
+    return parsed !== null && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function writeModelState(root        , state            )       {
+  try {
+    mkdirSync(root, { recursive: true })
+    writeFileSync(join(root, MODEL_STATE_FILE), `${JSON.stringify(state, null, 2)}\n`, 'utf8')
+  } catch {
+    // 记不住不影响本次安装;下次面板仍会显示配置文件里的选择。
+  }
+}
+
+/** 系统语言(用来判断"中文优先");拿不到就当英文环境。 */
+function safeLocale()         {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().locale || 'en'
+  } catch {
+    return 'en'
+  }
+}
+
+/** 该模型某个档位的体积(不指定档位时用默认档),用于清单展示与磁盘校验。 */
+function variantBytes(model                                                                         , variantId         )         {
+  const variant = variantId !== undefined ? model.variants.find((v) => v.id === variantId) : undefined
+  return (variant ?? model.variants.find((v) => v.isDefault) ?? model.variants[0] ).bytes
+}
+
+                          
+                  
+                   
+               
+              
+                
+                   
+              
+                      
+                                           
+                   
+                      
+                         
+                                 
+ 
+
+/**
+ * 把配置里的模型选择解析成安装器要的形态(文件名 / 体积 / 源 / 维度 / pooling / 前缀)。
+ *
+ * 优先级:customModel(完全自定义) → preset(清单 id) → 用 `model` 字符串去清单里找
+ * → 内置默认(bge-m3 Q4_K_M,与老行为逐字一致)。
+ * 认不出的 `model` 字符串**不改身份**(请求与边车仍用它),只是安装器退回默认模型 ——
+ * 用户指向云端/自建服务时本来就该只写 endpoint + model + dims。
+ */
+function resolveModelSelection(v                   , root         )                 {
+  const state = root !== undefined ? readModelState(root) : null
+  const custom = v.customModel ?? state?.customModel
+  if (custom !== undefined) {
+    let file = custom.file
+    if (file === undefined || file === '') {
+      try {
+        file = basename(new URL(custom.url).pathname) || 'custom-model.gguf'
+      } catch {
+        file = 'custom-model.gguf'
+      }
+    }
+    return {
+      presetId: 'custom',
+      variantId: 'custom',
+      label: file,
+      file,
+      ...(custom.bytes !== undefined ? { bytes: custom.bytes } : {}),
+      sources: custom.sources ?? [custom.url],
+      dims: custom.dims,
+      pooling: custom.pooling ?? 'auto',
+      modelName: v.model ?? file.replace(/\.gguf$/i, ''),
+      ...(v.flavor ?? state?.flavor ? { flavor: v.flavor ?? state?.flavor } : {}),
+    }
+  }
+  // 配置 > 面板的记忆 > 用 model 字符串去清单里找 > 内置默认。
+  const presetId = v.preset
+    ?? state?.presetId
+    ?? (findModel(v.model) !== undefined ? v.model           : DEFAULT_MODEL_ID)
+  const model = findModel(presetId) ?? findModel(DEFAULT_MODEL_ID) 
+  const variant = findVariant(model, v.variant ?? state?.variantId)
+  return {
+    presetId: model.id,
+    variantId: variant.id,
+    label: `${model.label} · ${variant.label}`,
+    file: variant.file,
+    bytes: variant.bytes,
+    sources: [...variant.sources],
+    dims: model.dims,
+    pooling: model.pooling,
+    modelName: v.model ?? model.id,
+    ...(model.queryPrefix !== undefined ? { queryPrefix: model.queryPrefix } : {}),
+    ...(model.documentPrefix !== undefined ? { documentPrefix: model.documentPrefix } : {}),
+    ...(v.flavor ?? state?.flavor ? { flavor: v.flavor ?? state?.flavor } : {}),
+  }
+}
+
+/**
+ * 接管已装好的后端时,spawn 该用哪个模型文件。
+ *
+ * 坑:换模型时 `spawn.model` 可能还留着**上一个**模型的路径(显式配置或上次 adopt
+ * 写进去的),而 dims/pooling 已经跟着新模型变了 —— 那会启动一个"模型与参数不匹配"
+ * 的服务,而且不报错,只是检索质量悄悄变差。所以只有"配置的模型就是当前选中的那个"
+ * 才沿用它,否则一律用刚落盘的那份。
+ */
+export function pickSpawnModel(currentFile        , configuredModel                    , installedModel        )         {
+  if (configuredModel !== undefined && basename(configuredModel) === currentFile) return configuredModel
+  return installedModel
+}
+
 export function resolveConfig(config                    = {})                 {
   const v = config.retrieval?.vector ?? {}
   // Do not touch an embedding backend the user never asked for: pointing at the
@@ -149,7 +343,10 @@ export function resolveConfig(config                    = {})                 {
   // recognised as-is); otherwise a stable per-user directory under ~/.dsh.
   const installRoot = v.autoInstall?.dir
     ?? (config.storeDir !== undefined ? dirname(resolve(storeDir)) : join(homedir(), '.dsh', 'memory-vector'))
-  const installed = detectInstalled(installRoot)
+  // 模型选择:自定义 → 显式 preset → 用 model 字符串去清单里找 → 内置默认。
+  // 这一步必须在 detectInstalled 之前:安装判据是「exe + **所选模型的**文件」。
+  const selection = resolveModelSelection(v, installRoot)
+  const installed = detectInstalled(installRoot, selection.file)
   const endpointConfigured = v.endpoint !== undefined
   // A configured spawn path that no longer exists (plugin uninstalled the
   // backend, or the user moved it) must not count as configured: that would
@@ -160,6 +357,7 @@ export function resolveConfig(config                    = {})                 {
   const spawnConfigured = ((v.spawn?.enabled === true || (spawnExe ?? '') !== '') && spawnExeUsable) || installed !== null
   const configured = endpointConfigured || spawnConfigured
   const vectorEnabled = v.enabled ?? configured
+  const flavor = selection.flavor ?? 'cpu'
   return {
     storeDir,
     globalEnabled: config.scopes?.global ?? true,
@@ -176,9 +374,22 @@ export function resolveConfig(config                    = {})                 {
       spawnConfigured,
       installRoot,
       ...(v.autoInstall?.modelSources ? { installModelSources: v.autoInstall.modelSources } : {}),
+      installModel: {
+        file: selection.file,
+        ...(selection.bytes !== undefined ? { bytes: selection.bytes } : {}),
+        ...(selection.sources.length > 0 ? { sources: selection.sources } : {}),
+      },
+      presetId: selection.presetId,
+      variantId: selection.variantId,
+      modelLabel: selection.label,
+      pooling: v.pooling ?? selection.pooling,
+      flavor,
+      gpuLayers: v.gpuLayers ?? (flavor === 'cpu' || flavor === 'auto' ? 0 : 99),
+      ...(selection.queryPrefix !== undefined ? { queryPrefix: selection.queryPrefix } : {}),
+      ...(selection.documentPrefix !== undefined ? { documentPrefix: selection.documentPrefix } : {}),
       endpoint: v.endpoint ?? 'http://127.0.0.1:8078/v1/embeddings',
-      model: v.model ?? 'bge-m3',
-      dims: v.dims ?? 1024,
+      model: v.model ?? selection.modelName,
+      dims: v.dims ?? selection.dims,
       timeoutMs: v.timeoutMs ?? 300,
       // Full contents are orders of magnitude slower than a short query on CPU
       // (measured 3143ms for three ~600-char records), so write/backfill paths
@@ -204,6 +415,10 @@ export function resolveConfig(config                    = {})                 {
               logFile: v.spawn?.logFile ?? installed.logFile,
             }
           : {}),
+        // 模型自带 pooling 与 GPU 层数:llama-server 拿不到就是错的检索结果,
+        // 所以跟着所选模型一起传下去(extraArgs 仍在最后,可覆盖)。
+        pooling: v.pooling ?? selection.pooling,
+        gpuLayers: v.gpuLayers ?? (flavor === 'cpu' || flavor === 'auto' ? 0 : 99),
         port: v.spawn?.port ?? portOf(v.endpoint ?? 'http://127.0.0.1:8078/v1/embeddings') ?? 8078,
       },
     },
@@ -322,6 +537,15 @@ export class LocalMemoryService                             {
                                         
                     
                  
+                                     
+                      
+                    
+                     
+                                      
+                     
+                
+                        
+                                  
                             
                   
                       
@@ -343,6 +567,13 @@ export class LocalMemoryService                             {
       mode,
       endpoint: cfg.endpoint,
       model: cfg.model,
+      modelLabel: cfg.modelLabel,
+      presetId: cfg.presetId,
+      variantId: cfg.variantId,
+      modelFile: cfg.installModel.file,
+      dims: cfg.dims,
+      pooling: cfg.pooling,
+      flavor: cfg.flavor,
       spawnConfigured: cfg.spawnConfigured,
       pendingEmbeds,
       install: this.installSnapshot(),
@@ -363,37 +594,163 @@ export class LocalMemoryService                             {
   /** Installer state for the panel (idle when nothing was ever requested). */
           installSnapshot()                                                         {
     const root = this.cfg.vector.installRoot
-    const installed = detectInstalled(root) !== null
+    const modelFile = this.cfg.vector.installModel.file
+    const installed = detectInstalled(root, modelFile) !== null
     const progress = this.installer?.progress ?? {
       phase: 'idle'         ,
       message: '',
       receivedBytes: 0,
       totalBytes: null,
       error: null,
-      paths: installed ? installPaths(root) : null,
+      paths: installed ? installPaths(root, modelFile) : null,
     }
     return { ...progress, installed, root }
+  }
+
+  /**
+   * 面板的"模型与硬件"报告:清单 + 当前选择 + 硬件 + 推荐。
+   *
+   * 硬件探测会 spawn 外部命令(Windows 上还有 PowerShell),所以**只在面板问的时候**跑,
+   * 并且结果缓存 10 分钟 —— 绝不在插件激活路径上。
+   */
+  async modelsReport(force = false)           
+                    
+                                                                                 
+                                                                                     
+                                                                                                     
+      
+                                                                                                                                                                         
+                                 
+                                                            
+                  
+                   
+     {
+    const root = this.cfg.vector.installRoot
+    const catalog = EMBEDDING_MODELS.map((model) => ({
+      id: model.id,
+      label: model.label,
+      note: model.note,
+      dims: model.dims,
+      pooling: model.pooling,
+      languages: model.languages,
+      contextTokens: model.contextTokens,
+      sizeBytes: variantBytes(model, this.cfg.vector.presetId === model.id ? this.cfg.vector.variantId : undefined),
+      installed: model.variants.some((variant) => detectInstalled(root, variant.file) !== null),
+      // 逐档判断"装没装":bge-m3 装了 Q4_K_M 不等于 Q8_0 也装了。
+      // 判据与 detectInstalled 一致 —— 运行时 exe + 该档模型文件都在。
+      variants: model.variants.map((variant) => ({
+        id: variant.id, label: variant.label, bytes: variant.bytes, file: variant.file,
+        installed: detectInstalled(root, variant.file) !== null,
+      })),
+    }))
+    const records = this.store.allScopes().reduce((n, s) => n + s.records.size, 0)
+    const locale = safeLocale()
+    let hardware                      = null
+    try {
+      hardware = await this.hardwareSnapshot(force)
+    } catch {
+      hardware = null // 探测失败就只显示清单,不给推荐 —— 不猜
+    }
+    const recommendation = hardware === null
+      ? null
+      : recommendModel({ hardware, locale, recordCount: records, currentModelId: this.cfg.vector.presetId })
+    return {
+      catalog,
+      current: {
+        presetId: this.cfg.vector.presetId,
+        variantId: this.cfg.vector.variantId,
+        modelLabel: this.cfg.vector.modelLabel,
+        file: this.cfg.vector.installModel.file,
+        dims: this.cfg.vector.dims,
+        pooling: this.cfg.vector.pooling,
+        flavor: this.cfg.vector.flavor,
+        model: this.cfg.vector.model,
+      },
+      hardware,
+      recommendation,
+      locale,
+      records,
+    }
+  }
+
+  /** 硬件探测结果缓存(默认 10 分钟),'auto' 风味与推荐共用它。 */
+          async hardwareSnapshot(force = false)                        {
+    const now = Date.now()
+    if (!force && this.hardwareCache !== null && now - this.hardwareAt < 600_000) return this.hardwareCache
+    const hw = await probeHardware({ dir: this.cfg.vector.installRoot })
+    this.hardwareCache = hw
+    this.hardwareAt = now
+    return hw
+  }
+
+  /** 把 'auto' 风味解析成具体风味(需要探测;失败则退回 CPU)。 */
+          async resolveFlavor()                         {
+    const configured = this.cfg.vector.flavor
+    if (configured !== 'auto') return configured
+    try {
+      return pickFlavor(await this.hardwareSnapshot())
+    } catch {
+      return 'cpu'
+    }
+  }
+
+  /** 面板选了模型/风味之后,把选择写进安装目录的 state 文件并更新运行中的配置。 */
+          applyModelSelection(override               )                         {
+    const synthetic                    = override.custom !== undefined
+      ? { customModel: override.custom }
+      : { ...(override.preset !== undefined ? { preset: override.preset } : {}), ...(override.variant !== undefined ? { variant: override.variant } : {}) }
+    const sel = resolveModelSelection(synthetic)
+    const cfg = this.cfg.vector
+    cfg.installModel = {
+      file: sel.file,
+      ...(sel.bytes !== undefined ? { bytes: sel.bytes } : {}),
+      ...(sel.sources.length > 0 ? { sources: sel.sources } : {}),
+    }
+    cfg.presetId = sel.presetId
+    cfg.variantId = sel.variantId
+    cfg.modelLabel = sel.label
+    cfg.pooling = sel.pooling
+    cfg.dims = sel.dims
+    cfg.model = sel.modelName
+    cfg.spawn.pooling = sel.pooling
+    if (override.flavor !== undefined) cfg.flavor = override.flavor
+    cfg.spawn.gpuLayers = cfg.flavor === 'cpu' || cfg.flavor === 'auto' ? 0 : (cfg.spawn.gpuLayers || 99)
+    writeModelState(cfg.installRoot, {
+      presetId: sel.presetId === 'custom' ? undefined : sel.presetId,
+      variantId: sel.variantId === 'custom' ? undefined : sel.variantId,
+      ...(override.custom !== undefined ? { customModel: override.custom } : {}),
+      ...(override.flavor !== undefined ? { flavor: override.flavor } : {}),
+    })
+    return cfg.flavor
   }
 
   /**
    * Panel action: download llama.cpp + the GGML model into installRoot, then
    * adopt them (start the managed server). Never runs on its own — a fresh
    * install downloads nothing until the user asks.
+   *
+   * `override` 是面板的选择(预设/档位/自定义 URL/风味):它会先落进安装目录的
+   * state 文件(下次启动仍然生效),再按新选择下载。配置里写了 preset/customModel
+   * 的话,配置永远优先 —— state 只是"面板选过什么"的记忆。
    */
-  installVectorBackend()       {
-    if (detectInstalled(this.cfg.vector.installRoot)) {
+  installVectorBackend(override                = {})       {
+    const flavor = this.applyModelSelection(override)
+    const model = this.cfg.vector.installModel
+    if (detectInstalled(this.cfg.vector.installRoot, model.file)) {
       this.adoptInstalledBackend()
       return
     }
-    if (!this.installer) {
-      this.installer = new VectorInstaller({
-        root: this.cfg.vector.installRoot,
-        ...(this.cfg.vector.installModelSources ? { modelSources: this.cfg.vector.installModelSources } : {}),
-        onProgress: (progress) => {
-          if (progress.phase === 'done') this.adoptInstalledBackend()
-        },
-      })
-    }
+    // 换模型时把上一个安装器的进度丢掉:它描述的是另一个文件。
+    this.installer?.cancel()
+    this.installer = new VectorInstaller({
+      root: this.cfg.vector.installRoot,
+      model: { file: model.file, ...(model.bytes !== undefined ? { bytes: model.bytes } : {}), ...(model.sources !== undefined ? { sources: model.sources } : {}) },
+      ...(flavor === 'auto' ? {} : { flavor }),
+      ...(this.cfg.vector.installModelSources && model.sources === undefined ? { modelSources: this.cfg.vector.installModelSources } : {}),
+      onProgress: (progress) => {
+        if (progress.phase === 'done') this.adoptInstalledBackend()
+      },
+    })
     this.installer.start()
   }
 
@@ -408,7 +765,7 @@ export class LocalMemoryService                             {
    * log + pid), never the memory store.
    */
   vectorInstallUsage()                                     {
-    const paths = installPaths(this.cfg.vector.installRoot)
+    const paths = installPaths(this.cfg.vector.installRoot, this.cfg.vector.installModel.file)
     const roots = [paths.dir, join(this.cfg.vector.installRoot, 'models')]
     const files = [paths.logFile, `${paths.logFile}.pid`, `${paths.logFile}.err`]
     let bytes = 0
@@ -491,7 +848,7 @@ export class LocalMemoryService                             {
    * config from the installed layout and start it. Idempotent.
    */
           adoptInstalledBackend()       {
-    const paths = detectInstalled(this.cfg.vector.installRoot)
+    const paths = detectInstalled(this.cfg.vector.installRoot, this.cfg.vector.installModel.file)
     if (!paths) return
     this.cfg.vector.configured = true
     this.cfg.vector.spawnConfigured = true
@@ -500,9 +857,12 @@ export class LocalMemoryService                             {
       ...this.cfg.vector.spawn,
       enabled: true,
       exe: this.cfg.vector.spawn.exe ?? paths.exe,
-      model: this.cfg.vector.spawn.model ?? paths.model,
+      // 模型路径必须跟着**当前选择的模型**:换了模型就不能继续用上一个的文件(见 pickSpawnModel)。
+      model: pickSpawnModel(this.cfg.vector.installModel.file, this.cfg.vector.spawn.model, paths.model),
       cwd: this.cfg.vector.spawn.cwd ?? paths.cwd,
       logFile: this.cfg.vector.spawn.logFile ?? paths.logFile,
+      pooling: this.cfg.vector.pooling,
+      gpuLayers: this.cfg.vector.flavor === 'cpu' || this.cfg.vector.flavor === 'auto' ? 0 : (this.cfg.vector.spawn.gpuLayers || 99),
       port: this.cfg.vector.spawn.port,
     }
     if (!this.embedServer) {
@@ -549,6 +909,9 @@ export class LocalMemoryService                             {
           embedServer                            = null
   /** Lazily created by the panel's "download and configure" action. */
           installer                         = null
+  /** 硬件探测缓存(面板问了才探测,10 分钟内复用)。 */
+          hardwareCache                      = null
+          hardwareAt = 0
           exitHook                      = null
 
   /**
@@ -634,7 +997,8 @@ export class LocalMemoryService                             {
     if (!this.cfg.vector.enabled || !this.cfg.vector.configured) return
     const s = this.store.scope(record.scope)
     // save-time budget: one full record, much slower than a search query
-    const vec = await this.embed.embed([record.content], undefined, { timeoutMs: this.cfg.vector.writeTimeoutMs }).catch(() => null)
+    // 记录按"文档"嵌入:有些模型(nomic/e5)要求文档与查询带不同前缀,不带质量会掉。
+    const vec = await this.embed.embed([`${this.cfg.vector.documentPrefix ?? ''}${record.content}`], undefined, { timeoutMs: this.cfg.vector.writeTimeoutMs }).catch(() => null)
     if (vec?.[0]) s.appendVector(record.id, normalizeInPlace(vec[0]))
     else s.embedPending.add(record.id) // backfill queue; the retry timer drains it
   }
@@ -659,7 +1023,7 @@ export class LocalMemoryService                             {
         const t = s.records.get(id)?.content
         if (!t) continue
         if (valid.length > 0 && chars + t.length > this.cfg.vector.backfillMaxChars) break
-        texts.push(t)
+        texts.push(`${this.cfg.vector.documentPrefix ?? ''}${t}`)
         valid.push(id)
         chars += t.length
       }
@@ -734,7 +1098,7 @@ export class LocalMemoryService                             {
     // Skipped entirely when no backend is configured (lexical recall above
     // already produced the candidates; a request here would just fail).
     const qvec = this.cfg.vector.enabled && this.cfg.vector.configured
-      ? await this.embed.embed([query.text], query.signal).catch(() => null)
+      ? await this.embed.embed([`${this.cfg.vector.queryPrefix ?? ''}${query.text}`], query.signal).catch(() => null)
       : null
     if (qvec?.[0]) {
       const vectorScores = new Map                ()
@@ -906,4 +1270,4 @@ export function createMemoryService(config                    = {})             
 }
 
 
-//# sourceURL=D:\.deepseek\memory-plugin\packages\memory-local\src\index.ts
+//# sourceURL=source/memory-local/src/index.ts

@@ -83,8 +83,13 @@ export class CordisMemoryService extends Service {
   }
 
   /** Panel: download llama.cpp + the GGML model, then adopt and start them. */
-  installVectorBackend()       {
-    this.impl.installVectorBackend()
+  installVectorBackend(override                                                            )       {
+    this.impl.installVectorBackend(override ?? {})
+  }
+
+  /** Panel: 模型清单 + 硬件探测 + 按硬件推荐(探测有缓存,只在面板问的时候跑)。 */
+  modelsReport(force = false)                                                 {
+    return this.impl.modelsReport(force)
   }
 
   /** Panel: abort an in-flight download. */
@@ -125,4 +130,4 @@ export function apply(ctx         , config                    = {}) {
 }
 
 
-//# sourceURL=D:\.deepseek\memory-plugin\packages\memory-local\src\apply.ts
+//# sourceURL=source/memory-local/src/apply.ts

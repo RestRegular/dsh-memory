@@ -1,17 +1,23 @@
 /**
- * dsh-memory-panel — 客户端(设置页「记忆」区块)。
+ * dsh-memory — 客户端半边(设置页「记忆」区块)。
  *
- * 与 dsh-meme 客户端完全同款形态:
+ * 合并后本 bundle 与 provider / 工具 / 注入同属一个 npm 包
+ * `@restregular/dsh-memory`:一个包名、一条 Loader entry、两侧都在。
+ * 拆成两个包时这里曾是 '@restregular/dsh-memory-panel'。
+ *
+ * 与 dsh-meme / dshmarket 客户端同款形态:
  *   - window.__ModuleLoader__.load({id, factory(require)}):**id 必须等于包名**
  *     (client-modules 按包名建图行;声明成别的名字会让宿主找不到该行、回退重拉
  *      同一个 bundle → 二次注册 → "duplicate factory registration" 启动失败);
+ *     而且 client bundle 只为「有活 Loader entry 且该 entry 解析到包名」的包服务,
+ *     所以这个 id 与 patch 里那一行的 name 必须同时是本包名。
  *   - exports.inject = ['slots'](dsh-client-ui-slots 在 desktop 宿主 asar 里存在);
  *   - ctx.get('slots') 判空防御,缺 slots 就静默退出,绝不让 client boot 失败;
  *   - 数据走 /memory/api HTTP(服务端半边注册的 prefix 路由);
  *   - 颜色全走宿主 --dsw-alias-* 主题 token,深浅色自适应,零硬编码色值。
  */
 window.__ModuleLoader__.load({
-  id: '@restregular/dsh-memory-panel',
+  id: '@restregular/dsh-memory',
   factory: (require) => {
     var module = { exports: {} }
     var exports = module.exports
@@ -23,57 +29,112 @@ window.__ModuleLoader__.load({
     const API = '/memory/api'
 
     const CSS = [
-      '.memp{display:flex;flex-direction:column;gap:12px;padding:4px 0;font-size:13px;color:var(--dsw-alias-label-primary)}',
+      '.memp{display:flex;flex-direction:column;gap:14px;padding:2px 0;font-size:13px;color:var(--dsw-alias-label-primary)}',
       '.memp .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}',
+      '.memp .toolbar input[type=text]{flex:1;min-width:170px;max-width:320px}',
+      '.memp .linkbtn{background:none;border:none;padding:2px 4px;color:var(--dsw-alias-label-secondary);font-size:12px}',
+      '.memp .linkbtn:hover{color:var(--dsw-alias-brand-primary);border:none}',
+      // 概览
       '.memp .stats{display:flex;gap:10px;flex-wrap:wrap}',
-      '.memp .stat{border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:8px 14px;background:var(--dsw-alias-bg-layer-1);min-width:110px}',
-      '.memp .stat b{display:block;font-size:18px;font-weight:600}',
+      '.memp .stat{min-width:104px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:8px 14px;background:var(--dsw-alias-bg-layer-1)}',
+      '.memp .stat b{display:block;font-size:17px;font-weight:600;line-height:1.35}',
       '.memp .stat span{font-size:11px;color:var(--dsw-alias-label-secondary)}',
-      '.memp .muted{font-size:11px;color:var(--dsw-alias-label-secondary)}',
-      '.memp .server{border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:10px 12px;background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;gap:8px}',
+      '.memp .muted{font-size:11.5px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .mono{font-family:var(--ds-font-family-code, ui-monospace, monospace);font-size:11px;color:var(--dsw-alias-label-secondary)}',
+      // 向量服务
+      '.memp .server{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:10px 12px;background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;gap:8px}',
       '.memp .server-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}',
+      '.memp .server-spacer{flex:1}',
       '.memp .dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--dsw-alias-border-l1)}',
-      '.memp .dot.on{background:#2ecc71}',
-      '.memp .dot.off{background:#e05555}',
-      '.memp input[type=text],.memp select{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 10px;font-size:13px;outline:none}',
-      '.memp input[type=text]:focus,.memp select:focus{border-color:var(--dsw-alias-brand-primary)}',
+      '.memp .dot.on{background:var(--dsw-alias-brand-primary)}',
+      '.memp .dot.off{background:var(--dsw-alias-label-danger, #e05555)}',
+      '.memp .pill{font-size:11px;line-height:1.7;padding:0 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);flex:none}',
+      '.memp .hint{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.6}',
+      '.memp .hint code,.memp .mono code{background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);border-radius:5px;padding:0 4px}',
+      // 控件
+      '.memp input[type=text],.memp select,.memp input[type=number]{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 10px;font-size:13px;outline:none}',
+      '.memp input[type=text]:focus,.memp select:focus,.memp textarea:focus{border-color:var(--dsw-alias-brand-primary)}',
       '.memp textarea{width:100%;box-sizing:border-box;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 10px;font-size:13px;outline:none;resize:vertical;font-family:inherit}',
-      '.memp textarea:focus{border-color:var(--dsw-alias-brand-primary)}',
-      '.memp button{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:5px 12px;font-size:13px;cursor:pointer}',
-      '.memp button:hover{border-color:var(--dsw-alias-brand-primary)}',
-      '.memp button:disabled{opacity:.5;cursor:default}',
-      '.memp .rec{border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:10px 12px;background:var(--dsw-alias-bg-layer-1)}',
-      '.memp .rec-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:11px;color:var(--dsw-alias-label-secondary);cursor:pointer;user-select:none}',
-      '.memp .rec-head:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px;border-radius:6px}',
-      '.memp .chev{font-size:10px;opacity:.7;width:10px;flex:none;transition:transform .12s ease}',
-      '.memp .chev.open{transform:rotate(90deg)}',
-      '.memp .rec-body{margin-top:8px}',
-      '.memp .badge{border:1px solid var(--dsw-alias-border-l1);border-radius:4px;padding:0 6px;color:var(--dsw-alias-brand-primary)}',
-      '.memp .preview{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dsw-alias-label-secondary);line-height:1.5}',
-      '.memp .content{white-space:pre-wrap;word-break:break-word;line-height:1.55}',
-      '.memp .acts{display:flex;gap:6px;margin-top:8px}',
-      '.memp .acts button{padding:3px 10px;font-size:12px}',
-      '.memp .err{color:var(--dsw-alias-label-danger, #e05555);font-size:12px}',
-      '.memp .empty{color:var(--dsw-alias-label-secondary);padding:20px;text-align:center}',
-      '.memp .editrow{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px}',
-      '.memp .editrow input[type=text]{padding:4px 8px}',
-      '.memp .editrow input[type=number]{width:64px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:4px 8px;font-size:13px;outline:none}',
+      '.memp button{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:5px 12px;font-size:13px;cursor:pointer;transition:border-color .12s ease,color .12s ease}',
+      // hover 只改边框与文字颜色。**不要**再叠 box-shadow:那会在边框外多出一圈线
+      // (看起来就是"双层边框"),鼠标移开时又容易被看成残留。
+      '.memp button:hover{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary)}',
+      // 点击后浏览器给的 focus 环同理:鼠标操作不留痕,键盘操作仍可见。
+      '.memp button:focus{outline:none}',
+      '.memp button:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
+      '.memp button:disabled{opacity:.5;cursor:default;border-color:var(--dsw-alias-border-l1);color:var(--dsw-alias-label-primary)}',
       // 服务器开关(switch 造型)
       '.memp .toggle{display:inline-flex;align-items:center;gap:8px;padding:4px 12px 4px 5px}',
       '.memp .toggle-track{width:34px;height:18px;border-radius:999px;background:var(--dsw-alias-border-l1);position:relative;transition:background .15s ease;flex:none;display:inline-block}',
       '.memp .toggle.on .toggle-track{background:var(--dsw-alias-brand-primary)}',
       '.memp .toggle-knob{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .15s ease}',
       '.memp .toggle.on .toggle-knob{transform:translateX(16px)}',
-      '.memp .server-spacer{flex:1}',
-      // 状态徽标（外部服务 / 由本应用托管）
-      '.memp .pill{font-size:11px;line-height:1.6;padding:0 7px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);flex:none}',
-      '.memp .hint{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.6}',
-      '.memp .hint code{background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:5px;padding:0 4px}',
+      // 记忆列表:一条一行时信息密度优先
+      '.memp .list{display:flex;flex-direction:column;gap:8px}',
+      '.memp .rec{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:9px 12px;background:var(--dsw-alias-bg-layer-1)}',
+      '.memp .rec:hover{border-color:var(--dsw-alias-brand-primary)}',
+      '.memp .rec-head{display:flex;gap:7px;align-items:center;font-size:11.5px;color:var(--dsw-alias-label-secondary);cursor:pointer;user-select:none}',
+      '.memp .rec-head:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px;border-radius:6px}',
+      '.memp .chev{font-size:9px;opacity:.6;width:9px;flex:none;transition:transform .12s ease}',
+      '.memp .chev.open{transform:rotate(90deg)}',
+      '.memp .badge{border:1px solid var(--dsw-alias-border-l1);border-radius:5px;padding:0 6px;line-height:1.7;color:var(--dsw-alias-label-secondary);flex:none}',
+      '.memp .badge.scope{color:var(--dsw-alias-brand-primary);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.memp .pending{flex:none}',
+      '.memp .time{margin-left:auto;flex:none}',
+      '.memp .preview{margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dsw-alias-label-secondary);line-height:1.5}',
+      '.memp .content{margin-top:7px;white-space:pre-wrap;word-break:break-word;line-height:1.55}',
+      '.memp .rec-body{margin-top:6px}',
+      '.memp .acts{display:flex;gap:6px;margin-top:8px}',
+      '.memp .acts button{padding:3px 10px;font-size:12px}',
+      '.memp .editrow{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px}',
+      '.memp .editrow input[type=text]{padding:4px 8px}',
+      '.memp .editrow input[type=number]{width:64px;padding:4px 8px}',
+      '.memp .err{color:var(--dsw-alias-label-danger, #e05555);font-size:12px}',
+      '.memp .empty{color:var(--dsw-alias-label-secondary);font-size:12.5px;padding:16px 2px;text-align:center}',
       // 维护区（卸载向量服务 / 清空记忆数据）
       '.memp .maint{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}',
-      '.memp .maint-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px}',
-      '.memp .maint-row .grow{flex:1;min-width:200px}',
+      '.memp .maint-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12.5px}',
+      '.memp .maint-row .grow{flex:1;min-width:160px}',
+      '.memp .path{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.memp .danger{color:var(--dsw-alias-label-danger, #e05555);border-color:var(--dsw-alias-label-danger, #e05555)}',
+      // 模型与硬件(折叠在向量服务卡片里:默认视图保持干净)
+      '.memp .adv{border-top:1px solid var(--dsw-alias-border-l1);padding-top:8px}',
+      // 原生三角标记藏掉:展开/收起由左边的 .advcaret 自己画
+      '.memp .adv summary{cursor:pointer;font-size:12px;color:var(--dsw-alias-label-secondary);outline:none;list-style:none}',
+      '.memp .adv summary::-webkit-details-marker{display:none}',
+      '.memp .adv summary:hover{color:var(--dsw-alias-brand-primary)}',
+      '.memp .advsum{display:flex;gap:6px;align-items:center;flex-wrap:wrap}',
+      '.memp .advcaret{font-size:9px;opacity:.7;flex:none}',
+      '.memp .advsum .spacer{flex:1}',
+      '.memp .spacer{flex:1}',
+      '.memp .advbody{display:flex;flex-direction:column;gap:8px;padding-top:8px}',
+      // 标签气泡(本机配置 / 当前模型 / 选项里的体积与推荐)
+      // 两行都一样:一条线排开,超出就横向滚动(不换行、不挤压)
+      // 但**不显示滚动条**(宽度太显眼):仍可用滚轮 / 触控板 / 拖拽滚动。
+      '.memp .vec{display:flex;flex-direction:column;gap:8px}',
+      '.memp .chipline{display:flex;gap:8px;align-items:center;min-width:0}',
+      '.memp .chiptitle{flex:none;font-size:11.5px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .chips{display:flex;gap:6px;align-items:center;flex:1;min-width:0;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;-ms-overflow-style:none}',
+      '.memp .chips .chip{flex:none}',
+      '.memp .chips::-webkit-scrollbar{display:none;width:0;height:0}',
+      '.memp .chip{font-size:11px;line-height:1.75;padding:0 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);white-space:nowrap}',
+      '.memp .chip.rec{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary)}',
+      '.memp .chip.on{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary)}',
+      // 自定义下拉(原生 select 画不出气泡)
+      '.memp .drop{position:relative;display:inline-flex;flex-direction:column;align-items:flex-start}',
+      '.memp .dropbtn{display:inline-flex;align-items:center;gap:6px;max-width:100%}',
+      '.memp .dropname{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      // 模型名可能很长:按钮与列表都给个上限,超出的省略
+      '.memp .drop.modeldrop .dropbtn{max-width:360px}',
+      '.memp .caret{margin-left:6px;opacity:.6;font-size:10px}',
+      '.memp .droplist{position:absolute;z-index:10;top:100%;left:0;margin-top:4px;max-height:264px;overflow:auto;max-width:min(90vw,460px);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 8px 24px rgba(0,0,0,.20);padding:4px}',
+      '.memp .dropitem{display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:6px;cursor:pointer;white-space:nowrap;border:1px solid transparent;transition:border-color .12s ease,color .12s ease,background .12s ease}',
+      // hover 的边框只出现在指针下;移开即恢复透明边框,不留痕
+      '.memp .dropitem:hover{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-layer-2)}',
+      // 当前项不用边框做标记(容易被看成残留),改用品牌色 + 加粗的名字
+      '.memp .dropitem.on{background:var(--dsw-alias-bg-layer-2)}',
+      '.memp .dropitem.on .dropname{font-weight:600;color:var(--dsw-alias-brand-primary)}',
+      '.memp .warn{font-size:11.5px;color:var(--dsw-alias-label-secondary)}',
     ].join('')
 
     async function api(method, body) {
@@ -154,26 +215,27 @@ window.__ModuleLoader__.load({
           },
         },
           h('span', { className: open ? 'chev open' : 'chev' }, '▶'),
-          h('span', { className: 'badge', title: rec.scope }, scopeLabel(rec.scope)),
+          h('span', { className: 'badge scope', title: rec.scope }, scopeLabel(rec.scope)),
           h('span', { className: 'badge' }, rec.kind),
-          rec.embedded
-            ? h('span', { title: '已生成向量' }, '◆')
-            : vectorOn === false
-              ? h('span', { title: '未启用向量检索（仍可用词法匹配）' }, '◇')
-              : h('span', { title: '待嵌入(向量服务未就绪或排队中)' }, '◇'),
-          h('span', null, `更新 ${fmtTime(rec.updatedAt)}`),
-          rec.supersedes ? h('span', null, `修正 #${String(rec.supersedes).slice(0, 6)}`) : null,
-          h('span', { className: 'muted' }, `${rec.content.length} 字`),
+          rec.supersedes ? h('span', { className: 'badge', title: `修正 #${rec.supersedes}` }, '修正') : null,
+          // 只在"待嵌入"时提示:已嵌入是常态,向量没启用时这条也没有行动价值。
+          !rec.embedded && vectorOn ? h('span', { className: 'pending', title: '待嵌入:向量服务就绪后会自动补上' }, '待嵌入') : null,
+          h('span', { className: 'time', title: `更新于 ${fmtTime(rec.updatedAt)}` }, fmtTime(rec.updatedAt)),
         ),
-        !open ? h('div', { className: 'preview', style: { marginTop: 6 } }, rec.content) : null,
+        !open ? h('div', { className: 'preview' }, rec.content) : null,
         open
           ? h('div', { className: 'rec-body' },
               editing
                 ? h('div', null,
                     h('textarea', { rows: 4, value: content, onChange: (e) => setContent(e.target.value) }),
                     h('div', { className: 'editrow' },
-                      h('select', { value: kind, onChange: (e) => setKind(e.target.value) },
-                        ['fact', 'decision', 'preference', 'procedure', 'note'].map((k) => h('option', { key: k, value: k }, k))),
+                      // 类型也用同一个自绘下拉(全站不再有原生 select)
+                      h(Dropdown, {
+                        items: ['fact', 'decision', 'preference', 'procedure', 'note'].map((k) => ({ value: k, label: k })),
+                        value: kind,
+                        disabled: busy,
+                        onChange: (next) => setKind(next),
+                      }),
                       h('input', { type: 'text', style: { width: 170 }, value: tags, placeholder: '标签, 逗号分隔', onChange: (e) => setTags(e.target.value) }),
                       h('label', null, '重要度 ',
                         h('input', { type: 'number', min: 0, max: 1, step: 0.1, value: importance, onChange: (e) => setImportance(e.target.value) })),
@@ -193,6 +255,282 @@ window.__ModuleLoader__.load({
               h('button', { disabled: busy, onClick: del }, busy ? '…' : '删除'),
             )
           : null,
+      )
+    }
+
+    /** 磁盘文案:MB 就是 MB,不足 1GB 时别显示成 "0GB"(曾经多除了一次 1024)。 */
+    function diskText(freeDiskMb) {
+      return freeDiskMb >= 1024 ? `${(freeDiskMb / 1024).toFixed(0)}GB` : `${freeDiskMb.toFixed(0)}MB`
+    }
+
+    /** 体积文案:小于 1GB 用 MB,否则 GB。 */
+    function sizeText(bytes) {
+      const mb = bytes / 1048576
+      return mb >= 1024 ? `${(mb / 1024).toFixed(1)}GB` : `${Math.round(mb)}MB`
+    }
+
+    /** 标签气泡。 */
+    function Chip({ children, tone, title }) {
+      return h('span', { className: `chip${tone ? ` ${tone}` : ''}`, ...(title ? { title } : {}) }, children)
+    }
+
+    /** 运行时风味的中文名。 */
+    function flavorLabel(flavor) {
+      if (flavor === 'cuda') return 'CUDA（显卡）'
+      if (flavor === 'vulkan') return 'Vulkan（显卡）'
+      if (flavor === 'metal') return 'Metal（显卡）'
+      return 'CPU'
+    }
+
+    /**
+     * 统一的**自绘下拉**:模型 / 运行时 / 作用域都用它。
+     *
+     * 为什么不用原生 `<select>`:它画不出气泡(体积、推荐标记),也没法在按钮里放多段内容。
+     * 行为对齐原生:点按钮开合、点选项选中并关闭、点外面关、Esc 关。
+     * `items`: [{ value, label, chips?, recommended? }]
+     */
+    function Dropdown({ items, value, disabled, title, onChange, className }) {
+      const [open, setOpen] = React.useState(false)
+      const current = items.find((item) => item.value === value) || items[0] || null
+
+      // 点列表外面(或按 Esc)关掉 —— 原生 select 自带的行为,自绘的得自己补。
+      // document 不可用(单元测试的脚手架)时安静跳过。
+      React.useEffect(() => {
+        if (!open) return undefined
+        const doc = typeof document !== 'undefined' ? document : undefined
+        if (doc === undefined || typeof doc.addEventListener !== 'function') return undefined
+        const inside = (target) => Boolean(target && typeof target.closest === 'function' && target.closest('.drop'))
+        const onDown = (event) => { if (!inside(event && event.target)) setOpen(false) }
+        const onKey = (event) => { if (event && event.key === 'Escape') setOpen(false) }
+        doc.addEventListener('click', onDown)
+        doc.addEventListener('keydown', onKey)
+        return () => {
+          doc.removeEventListener('click', onDown)
+          doc.removeEventListener('keydown', onKey)
+        }
+      }, [open])
+
+      return h('div', { className: `drop${className ? ` ${className}` : ''}` },
+        h('button', {
+          className: 'dropbtn',
+          disabled,
+          ...(title ? { title } : {}),
+          'aria-haspopup': 'listbox',
+          'aria-expanded': open,
+          onClick: () => setOpen(!open),
+        },
+          h('span', { className: 'dropname' }, current === null ? '—' : current.label),
+          ...(current === null ? [] : (current.chips ?? []).map((text, i) => h(Chip, { key: `c${i}` }, text))),
+          current !== null && current.recommended ? h(Chip, { tone: 'rec' }, '推荐') : null,
+          h('span', { className: 'caret' }, '▾'),
+        ),
+        open
+          ? h('div', { className: 'droplist', role: 'listbox' },
+              items.map((item) => h('div', {
+                key: item.value,
+                role: 'option',
+                'aria-selected': item.value === value,
+                className: `dropitem${item.value === value ? ' on' : ''}`,
+                onClick: () => { setOpen(false); onChange(item.value) },
+              },
+                h('span', { className: 'dropname' }, item.label),
+                ...(item.chips ?? []).map((text, i) => h(Chip, { key: `c${i}` }, text)),
+                item.recommended ? h(Chip, { tone: 'rec' }, '推荐') : null,
+              )),
+            )
+          : null,
+      )
+    }
+
+    /**
+     * 向量服务这一整块:本机配置行 + 当前模型行 + 折叠的「模型与硬件」。
+     *
+     * 三行放在一起,是因为它们必须**始终可见**(不展开也要看到本机配置、当前模型和安装按钮),
+     * 而展开体里只放"改选择"的东西。硬件探测在面板一出现时取一次(服务端有 10 分钟缓存),
+     * 所以这两行不用等展开。下拉是自绘的 —— 原生 select 画不出气泡。
+     */
+    function ModelPicker({ busy, installing, installedBackend, current, onInstall }) {
+      const [open, setOpen] = React.useState(false)
+      const [report, setReport] = React.useState(null)
+      const [err, setErr] = React.useState('')
+      const [preset, setPreset] = React.useState('')
+      const [variant, setVariant] = React.useState('')
+      const [flavor, setFlavor] = React.useState('')
+      const [customOpen, setCustomOpen] = React.useState(false)
+      const [url, setUrl] = React.useState('')
+      const [dims, setDims] = React.useState('')
+
+      const load = async (force) => {
+        setErr('')
+        try {
+          setReport(await api(force ? 'embed/model/refresh' : 'embed/model', force ? {} : undefined))
+        } catch (e) {
+          setErr(String(e.message || e))
+        }
+      }
+      // 面板一出现就取一次(不等到展开):未配置时要在「向量服务」下面**直接**显示
+      // 默认选中(推荐)的模型与配置,而不是点开「模型与硬件」才出现。
+      // 服务端对硬件探测有 10 分钟缓存,所以这次请求通常只是一次读缓存。
+      React.useEffect(() => { if (report === null && err === '') load(false) }, [])
+
+      const catalog = (report && report.catalog) || []
+      const rec = report && report.recommendation
+      const hw = report && report.hardware
+      const options = []
+      for (const m of catalog) {
+        for (const v of m.variants) {
+          options.push({
+            key: `${m.id}/${v.id}`,
+            name: m.label,
+            variantLabel: v.label,
+            modelId: m.id,
+            variantId: v.id,
+            bytes: v.bytes,
+            dims: m.dims,
+            pooling: m.pooling,
+            // 逐档的"装没装"(服务端按 exe + 该档模型文件是否存在判断)
+            installed: Boolean(v.installed),
+            recommended: Boolean(rec && rec.modelId === m.id && rec.variantId === v.id),
+          })
+        }
+      }
+      const configured = Boolean(current && current.presetId && current.presetId !== 'custom')
+      const fallbackKey = configured
+        ? `${current.presetId}/${current.variantId}`
+        : (rec ? `${rec.modelId}/${rec.variantId}` : (options[0] ? options[0].key : ''))
+      const selectedKey = preset !== '' && variant !== '' ? `${preset}/${variant}` : fallbackKey
+      const selected = options.find((o) => o.key === selectedKey) || options[0] || null
+      const flavors = (hw && hw.flavors) || ['cpu']
+      const flavorValue = flavor !== '' ? flavor : (configured ? (current.flavor || 'cpu') : (rec ? rec.flavor : 'cpu'))
+
+      // 本机配置的四个事实(气泡行)
+      const machine = hw === null || hw === undefined
+        ? []
+        : [
+            `${hw.cpuCount} 核`,
+            `${Math.round(hw.totalRamMb / 1024)}GB 内存`,
+            hw.gpu ? `显卡 ${hw.gpu.name}${hw.gpu.vramMb ? `(${Math.round(hw.gpu.vramMb / 1024)}GB)` : ''}` : '无独立显卡',
+            hw.freeDiskMb !== null ? `磁盘剩余 ${diskText(hw.freeDiskMb)}` : '磁盘剩余未知',
+          ]
+      // 「当前模型」:已配置就显示实际配置,未配置就跟着上面的选择实时变
+      const currentChips = []
+      if (configured) {
+        const [name, variantLabel] = String(current.modelLabel || current.model || '').split(' · ')
+        currentChips.push(name, variantLabel, current.dims ? `${current.dims} 维` : null, current.pooling, current.flavor)
+      } else if (selected !== null) {
+        currentChips.push(selected.name, selected.variantLabel, `${selected.dims} 维`, selected.pooling, flavorValue)
+      }
+      const chipList = currentChips.filter(Boolean)
+
+      // 选中的这一档装没装。两个来源:catalog 的逐档标记(准,但要等清单刷新),
+      // 以及后端快照 install.installed(= exe + **当前配置那份**模型文件都在)。
+      // 后者让"刚下完"的那一刻按钮就能立刻变「已安装」,不用等重新拉清单。
+      const alreadyInstalled = selected !== null && (selected.installed
+        || (Boolean(installedBackend) && configured && selectedKey === `${current.presetId}/${current.variantId}`))
+      // 已经装过东西(运行时 + 某个模型)就不许再装第二个:要换模型,先去「维护」里卸载。
+      // 允许并行安装会让 <root>/llamacpp 与 models 里堆着多份文件,而配置只能指向一份,
+      // 之后"当前到底在跑哪个"就说不清了。
+      const hasInstalled = Boolean(installedBackend) || options.some((o) => o.installed)
+      const needUninstall = selected !== null && !alreadyInstalled && hasInstalled
+
+      // 安装/卸载状态一变就重拉清单:否则清单里"装没装"的标记会一直是旧的,
+      // 卸载完按钮还卡在「需先卸载」。
+      const [seenState, setSeenState] = React.useState(null)
+      React.useEffect(() => {
+        const now = `${installing ? 'running' : 'idle'}:${installedBackend ? 'in' : 'out'}`
+        if (seenState === null) { setSeenState(now); return }
+        if (seenState === now) return
+        setSeenState(now)
+        load(false)
+      }, [installing, installedBackend, seenState])
+
+      const pickFlavor = (next) => setFlavor(next)
+      const doInstall = () => {
+        if (selected === null) return
+        onInstall({ preset: selected.modelId, variant: selected.variantId, flavor: flavorValue })
+      }
+      const doCustom = () => {
+        if (url.trim() === '' || !(Number(dims) > 0)) { setErr('自定义模型需要填 URL 与维度'); return }
+        onInstall({ custom: { url: url.trim(), dims: Number(dims) } })
+      }
+
+      return h('div', { className: 'vec' },
+        // 两行状态气泡都带标题、都横向滚动不换行;动作按钮各自挂在这一行的最右边。
+        h('div', { className: 'chipline' },
+          h('span', { className: 'chiptitle' }, '本机配置：'),
+          h('div', { className: 'chips' },
+            (machine.length > 0 ? machine : ['读取中…']).map((label, i) => h(Chip, { key: i }, label))),
+          h('button', { disabled: busy, onClick: () => load(true) }, '重新检测硬件'),
+        ),
+        h('div', { className: 'chipline' },
+          h('span', { className: 'chiptitle' }, '当前模型：'),
+          h('div', { className: 'chips' }, chipList.map((label, i) => h(Chip, { key: i }, label))),
+          h('button', {
+            className: 'install',
+            // 四态:请求中 / 下载中 / 已装好 / 已装过别的(要先卸载)。后三种都不可点。
+            disabled: busy || installing || selected === null || alreadyInstalled || needUninstall,
+            ...(installing ? { title: '正在下载,进度见上方向量服务那一行' }
+              : alreadyInstalled ? { title: '这一档已经装好了' }
+                : needUninstall ? { title: '已经装过一个模型了。要换模型,请先在下面的「维护」里卸载向量服务' } : {}),
+            onClick: doInstall,
+          }, busy ? '处理中…'
+            : installing ? '下载中…'
+              : alreadyInstalled ? '已安装'
+                : needUninstall ? '需先卸载'
+                  : '下载并安装'),
+        ),
+        h('details', { className: 'adv', onToggle: (e) => setOpen(Boolean(e.target.open)) },
+          h('summary', { className: 'advsum' },
+            h('span', { className: 'advcaret' }, open ? '▾' : '▸'),
+            h('span', null, '模型与硬件'),
+          ),
+          h('div', { className: 'advbody' },
+            report === null && err === '' ? h('div', { className: 'muted' }, '正在读取…') : null,
+            err ? h('div', { className: 'err' }, err) : null,
+            h('div', { className: 'row' },
+              h('span', { className: 'hint' }, '向量检索为可选功能，可以自定义配置任意 OpenAI 兼容的服务'),
+            ),
+          selected !== null
+            ? h('div', { className: 'row' },
+                h(Dropdown, {
+                  items: options.map((o) => ({
+                    value: o.key,
+                    label: o.name,
+                    chips: [o.variantLabel, sizeText(o.bytes)],
+                    recommended: o.recommended,
+                  })),
+                  value: selectedKey,
+                  disabled: busy,
+                  className: 'modeldrop',
+                  onChange: (key) => {
+                    const [pid, vid] = key.split('/')
+                    setPreset(pid); setVariant(vid)
+                  },
+                }),
+                h(Dropdown, {
+                  items: flavors.map((f) => ({ value: f, label: flavorLabel(f) })),
+                  value: flavorValue,
+                  disabled: busy,
+                  title: '运行时:CPU 最稳,GPU 更快',
+                  onChange: (next) => pickFlavor(next),
+                }),
+              )
+            : null,
+          h('div', { className: 'row' },
+            h('button', { onClick: () => setCustomOpen(!customOpen) }, customOpen ? '收起自定义模型' : '自定义 GGUF…'),
+          ),
+          customOpen
+            ? h('div', { className: 'row' },
+                h('input', { type: 'text', placeholder: 'https://…/model.gguf', value: url, onChange: (e) => setUrl(e.target.value) }),
+                h('input', { type: 'number', placeholder: '维度', value: dims, style: { width: 80 }, onChange: (e) => setDims(e.target.value) }),
+                h('button', { disabled: busy, onClick: doCustom }, '安装'),
+              )
+            : null,
+          report && report.records > 0
+            ? h('div', { className: 'muted' }, `换模型会让这 ${report.records} 条记忆重新嵌入;期间检索暂时用词法匹配。`)
+            : null,
+          ),
+        ),
       )
     }
 
@@ -229,15 +567,15 @@ window.__ModuleLoader__.load({
       }
       React.useEffect(() => { load('', '') }, [])
 
-      const embedAction = async (action) => {
+      const embedAction = async (action, body = {}) => {
         setEmbedBusy(true); setEmbedNotice('')
         try {
-          const value = await api(`embed/${action}`, {})
+          const value = await api(`embed/${action}`, body)
           // 安装接口返回的是 { install, ...status }：先落状态，进度由轮询刷新
           setEmbedServer(value.embedServer ? { ...value.embedServer } : value)
           if (action === 'install') {
+            // 不弹任何"下载开始"提示:进度本身就是反馈,装好会自动变成运行中。
             setInstallRequested(true)
-            setEmbedNotice('开始下载运行时与模型（可以继续用记忆功能，不影响）')
           } else if (action === 'install/cancel') {
             setInstallRequested(false)
             setEmbedNotice('已请求取消下载')
@@ -312,7 +650,7 @@ window.__ModuleLoader__.load({
       const pending = scopes.reduce((n, s) => n + s.pendingEmbeds, 0)
 
       // 向量卡片的状态判定。provider 给的 mode 决定"该不该有启停开关"：
-      //   off      没配置任何后端 → 不给开关，给「下载并配置」按钮
+      //   off      没配置任何后端 → 不给开关,模型与安装入口都在「模型与硬件」里
       //   external 只知道 endpoint（云端/用户自建）→ 开关无意义，我们不该假装拥有它
       //   managed  配置了 spawn（或刚自动装好）→ 我们托管子进程，给开关
       // 另外 enabled=false（配置里显式关掉）时也不能给一个"开了也没用"的开关。
@@ -336,16 +674,26 @@ window.__ModuleLoader__.load({
       const installPercent = install && install.totalBytes ? Math.min(100, Math.round((install.receivedBytes / install.totalBytes) * 100)) : null
 
       const dotClass = serverOn ? 'dot on' : 'dot off'
+      // 状态只说状态,归属由 pill 说 —— 之前两处各说一遍("运行中 · 由本应用管理" + "由本应用托管")。
       let stateText
-      if (!embedServer) stateText = '不可用（provider 未提供管理接口）'
-      else if (mode === 'off') stateText = installBusy ? '未配置 · 正在安装' : installed ? '未配置 · 检测到本地文件' : '未配置（可选）'
+      if (!embedServer) stateText = '不可用'
+      else if (mode === 'off') stateText = installBusy ? '正在安装' : installed ? '检测到本地文件' : '未配置'
       else if (!vectorEnabled) stateText = '已在配置里关闭'
-      else if (serverOn) stateText = embedServer.owned ? '运行中 · 由本应用管理' : '运行中 · 外部服务'
+      else if (serverOn) stateText = '运行中'
       else stateText = managed ? '已停止' : '未连接'
 
-      // 右侧动作区：安装进度 > 下载按钮 > 启停开关。
-      // 原则：只在"开关真能改变什么"时才渲染它——未配置、外部服务、配置里显式
-      // 关闭，这三种情况给别的动作或干脆不给，避免一个永远灰着的开关。
+      // 端点/pid/模型是排障信息,折成一行 mono;完整信息放 title,不占版面。
+      const endpoint = embedServer ? String(embedServer.baseUrl || embedServer.endpoint || '') : ''
+      const endpointLabel = (() => {
+        if (!endpoint) return ''
+        try { return new URL(endpoint).host } catch { return endpoint.replace(/^https?:\/\//, '').split('/')[0] }
+      })()
+      const endpointTitle = [endpoint, embedServer && embedServer.pid ? `pid ${embedServer.pid}` : '', embedServer && embedServer.model ? `模型 ${embedServer.model}` : ''].filter(Boolean).join(' · ')
+
+      // 右侧动作区:安装进度 > 重试 > 启停开关。
+      // 原则:只在"开关真能改变什么"时才渲染它——未配置、外部服务、配置里显式
+      // 关闭,这三种情况给别的动作或干脆不给,避免一个永远灰着的开关。
+      // 安装入口不放这里:模型在下面的「模型与硬件」里选,安装按钮跟着选择走。
       const actions = []
       if (installBusy) {
         actions.push(h('span', { className: 'muted', key: 'prog' },
@@ -354,13 +702,6 @@ window.__ModuleLoader__.load({
         actions.push(h('button', { key: 'cancel', disabled: embedBusy, onClick: () => embedAction('install/cancel') }, '取消'))
       } else if (install && install.phase === 'error') {
         actions.push(h('button', { key: 'retry', disabled: embedBusy, onClick: () => embedAction('install') }, '重试下载'))
-      } else if (mode === 'off' && !installed) {
-        actions.push(h('button', {
-          key: 'install',
-          disabled: embedBusy,
-          title: '下载 llama.cpp 运行时（CPU 版）与 bge-m3 量化模型到本地，并托管启动',
-          onClick: () => embedAction('install'),
-        }, embedBusy ? '处理中…' : '下载并配置'))
       } else if (canToggle) {
         actions.push(h('button', {
           key: 'toggle',
@@ -375,27 +716,16 @@ window.__ModuleLoader__.load({
           h('span', null, embedBusy ? '处理中…' : serverOn ? '已开启' : '已关闭'),
         ))
       }
-      actions.push(h('button', { key: 'refresh', disabled: embedBusy || loading, onClick: () => load(), title: '刷新状态' }, '↻'))
 
-      let hint = null
-      if (mode === 'off') {
-        hint = install && install.phase === 'error'
-          ? h('div', { className: 'hint err' }, `安装失败：${install.error || install.message}`)
-          : installed
-            ? h('div', { className: 'hint' }, '已检测到本地向量服务文件，正在启用…若长时间不变，点右上角 ↻ 刷新。')
-            : h('div', { className: 'hint' },
-              '向量检索是可选的：不配也能用（检索自动降级为词法匹配）。点「下载并配置」会拉取 llama.cpp CPU 版 + bge-m3 模型（约 440MB，装在 ',
-              h('code', null, (install && install.root) || '插件数据目录'),
-              '），装好即由本应用托管启动；也可以自己在配置里写 ',
-              h('code', null, 'retrieval.vector.endpoint'),
-              ' 指向任意 OpenAI 兼容的 embeddings 服务（云端或自建）。')
-      } else if (!vectorEnabled) {
-        hint = h('div', { className: 'hint' }, '配置里把向量检索关掉了（', h('code', null, 'retrieval.vector.enabled: false'), '）；改成 true 并重启应用即可启用。')
-      } else if (mode === 'external') {
-        hint = h('div', { className: 'hint' }, '外部服务：本应用只负责调用，不启动也不停止它。')
-      } else if (managed) {
-        hint = h('div', { className: 'hint' }, '应用启动时自动拉起、退出时自动关闭；开关可手动干预。')
+      // 错误说明只在这里出现一次(重试按钮在右上方);配置里关掉了向量检索时解释一句。
+      let notice = null
+      if (mode !== 'off' && !vectorEnabled) {
+        notice = h('div', { className: 'hint' }, '配置里关掉了向量检索（', h('code', null, 'retrieval.vector.enabled'), ' 改回 true 并重启即可）。')
+      } else if (install && install.phase === 'error') {
+        notice = h('div', { className: 'hint err' }, `安装失败：${install.error || install.message}`)
       }
+
+      const filtering = q.trim() !== '' || scopeFilter !== ''
 
       return h('div', { className: 'memp' },
         h('div', { className: 'stats' },
@@ -410,14 +740,25 @@ window.__ModuleLoader__.load({
             h('span', { className: dotClass }),
             h('b', null, '向量服务'),
             h('span', { className: 'muted' }, stateText),
-            embedServer && embedServer.pid ? h('span', { className: 'muted' }, `pid ${embedServer.pid}`) : null,
-            embedServer && embedServer.baseUrl && mode !== 'off' ? h('span', { className: 'muted' }, embedServer.baseUrl) : null,
+            // 地址紧跟在状态右边(排障要看的就是它),完整信息(pid/模型)进 title。
+            endpointLabel ? h('span', { className: 'mono', title: endpointTitle }, endpointLabel) : null,
             configured && vectorEnabled ? h('span', { className: 'pill' }, managed ? '由本应用托管' : '外部服务') : null,
             h('span', { className: 'server-spacer' }),
             actions,
           ),
-          hint,
+          notice,
           embedNotice ? h('div', { className: 'muted' }, embedNotice) : null,
+          h(ModelPicker, {
+            busy: embedBusy,
+            // 下载是后台跑的,`busy`(一次请求)早就结束了;要单独把"正在下载"传给按钮,
+            // 否则下载中还能反复点「下载并安装」。
+            installing: installBusy || installRequested,
+            installedBackend: installed,
+            current: embedServer
+              ? { presetId: embedServer.presetId, variantId: embedServer.variantId, model: embedServer.model, modelLabel: embedServer.modelLabel, dims: embedServer.dims, pooling: embedServer.pooling, flavor: embedServer.flavor }
+              : null,
+            onInstall: (override) => embedAction('install', override),
+          }),
         ),
         // 维护区：DSH 卸载插件时不会给插件任何提问机会（就是 pnpm remove + 去掉
         // bundles），所以"要不要留向量服务 / 要不要留记忆数据"只能在这里、卸载之前问。
@@ -425,50 +766,53 @@ window.__ModuleLoader__.load({
           ? h('div', { className: 'maint' },
             h('div', { className: 'maint-row' },
               h('b', null, '维护'),
-              h('span', { className: 'muted' }, '不可撤销，卸载插件前请先在这里处理'),
+              h('span', { className: 'muted' }, '卸载插件不会移除已配置的向量服务与记忆文件'),
             ),
             h('div', { className: 'maint-row' },
-              h('span', { className: 'grow' }, `向量服务文件占用 ${usageMb} MB`),
+              h('span', { className: 'grow' }, `向量服务：${usageMb} MB`),
               maintenance.usageBytes > 0
                 ? (dangerAsk === 'uninstall'
                   ? [h('button', { key: 'ok', className: 'danger', disabled: embedBusy, onClick: () => maintenanceAction('uninstall') }, `确认卸载（释放 ${usageMb} MB）`),
                      h('button', { key: 'no', disabled: embedBusy, onClick: () => setDangerAsk('') }, '取消')]
                   : h('button', { key: 'ask', disabled: embedBusy, onClick: () => maintenanceAction('uninstall') }, '卸载向量服务'))
-                : h('span', { className: 'muted' }, '没有本插件安装的向量服务文件'),
+                : h('span', { className: 'muted' }, '未安装'),
             ),
             h('div', { className: 'maint-row' },
-              h('span', { className: 'grow' }, `记忆数据 ${maintenance.records} 条 · ${maintenance.storeDir}`),
+              h('span', { className: 'grow' }, `记忆数据：${maintenance.records} 条`),
+              maintenance.storeDir ? h('span', { className: 'muted path', title: maintenance.storeDir }, maintenance.storeDir) : null,
               maintenance.records > 0
                 ? (dangerAsk === 'wipe'
                   ? [h('button', { key: 'ok', className: 'danger', disabled: embedBusy, onClick: () => maintenanceAction('wipe') }, `确认清空 ${maintenance.records} 条（不可恢复）`),
                      h('button', { key: 'no', disabled: embedBusy, onClick: () => setDangerAsk('') }, '取消')]
                   : h('button', { key: 'ask', disabled: embedBusy, onClick: () => maintenanceAction('wipe') }, '清空记忆数据'))
-                : h('span', { className: 'muted' }, '没有记忆数据'),
+                : h('span', { className: 'muted' }, '无'),
             ),
-            h('div', { className: 'hint' },
-              '卸载插件本身：在「插件 / 插件市场」里移除 ',
-              h('code', null, '@restregular/dsh-memory'),
-              ' 与 ',
-              h('code', null, '@restregular/dsh-memory-panel'),
-              '。向量服务文件与记忆数据都不会被自动删除 —— 要清就在上面清。'),
           )
           : null,
-        h('div', { className: 'row' },
+        h('div', { className: 'row toolbar' },
           h('input', {
-            type: 'text', style: { width: 200 }, placeholder: '搜索内容/类型/标签…', value: q,
+            type: 'text', placeholder: '搜索内容、类型或标签', value: q,
             onChange: (e) => setQ(e.target.value),
             onKeyDown: (e) => { if (e.key === 'Enter') load(q, scopeFilter) },
           }),
-          h('select', { value: scopeFilter, onChange: (e) => { setScopeFilter(e.target.value); load(q, e.target.value) } },
-            h('option', { value: '' }, '全部作用域'),
-            scopes.map((s) => h('option', { key: s.scope, value: s.scope }, scopeLabel(s.scope)))),
+          // 作用域也用同一个自绘下拉(与模型/运行时统一)
+          h(Dropdown, {
+            items: [
+              { value: '', label: '全部作用域' },
+              ...scopes.map((s) => ({ value: s.scope, label: scopeLabel(s.scope) })),
+            ],
+            value: scopeFilter,
+            disabled: loading,
+            onChange: (next) => { setScopeFilter(next); load(q, next) },
+          }),
           h('button', { onClick: () => load(q, scopeFilter), disabled: loading }, loading ? '刷新中…' : '刷新'),
-          h('button', { onClick: () => { setQ(''); setScopeFilter(''); load('', '') } }, '重置'),
+          filtering ? h('button', { className: 'linkbtn', onClick: () => { setQ(''); setScopeFilter(''); load('', '') } }, '清空筛选') : null,
         ),
         error ? h('div', { className: 'err' }, error) : null,
         !loading && !error && records.length === 0
-          ? h('div', { className: 'empty' }, '没有匹配的记忆。让模型用 memory_save 保存,或检查 provider 是否启用。')
-          : records.map((rec) => h(RecordCard, { key: rec.id, rec, vectorOn: configured && vectorEnabled, onSaved: () => load(), onDeleted: () => load() })),
+          ? h('div', { className: 'empty' }, filtering ? '没有匹配的记忆' : '还没有记忆')
+          : h('div', { className: 'list' },
+              records.map((rec) => h(RecordCard, { key: rec.id, rec, vectorOn: configured && vectorEnabled, onSaved: () => load(), onDeleted: () => load() }))),
       )
     }
 
@@ -479,7 +823,7 @@ window.__ModuleLoader__.load({
         const styleEl = document.createElement('style')
         styleEl.textContent = CSS
         document.head.appendChild(styleEl)
-        ctx.effect(() => () => { styleEl.remove() }, 'dsh-memory-panel: styles')
+        ctx.effect(() => () => { styleEl.remove() }, 'dsh-memory: styles')
 
         const slots = ctx.get('slots')
         if (slots === undefined) return
@@ -488,7 +832,7 @@ window.__ModuleLoader__.load({
           () => React.createElement(MemoryPanel),
         ))
       } catch (error) {
-        console.error('[dsh-memory-panel] client apply 失败(已吞掉):', error?.message)
+        console.error('[dsh-memory] client apply 失败(已吞掉):', error?.message)
       }
     }
 

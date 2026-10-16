@@ -221,4 +221,4 @@ export function memoryTools(opts                    ) {
 }
 
 
-//# sourceURL=D:\.deepseek\memory-plugin\packages\tool-memory\src\index.ts
+//# sourceURL=source/tool-memory/src/index.ts

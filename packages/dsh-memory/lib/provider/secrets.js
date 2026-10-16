@@ -54,4 +54,4 @@ export function redactSecrets(text        )         {
 }
 
 
-//# sourceURL=D:\.deepseek\memory-plugin\packages\memory-local\src\secrets.ts
+//# sourceURL=source/memory-local/src/secrets.ts

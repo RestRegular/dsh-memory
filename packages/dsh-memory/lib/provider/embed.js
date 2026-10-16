@@ -102,4 +102,4 @@ export class EmbedClient {
 }
 
 
-//# sourceURL=D:\.deepseek\memory-plugin\packages\memory-local\src\embed.ts
+//# sourceURL=source/memory-local/src/embed.ts
