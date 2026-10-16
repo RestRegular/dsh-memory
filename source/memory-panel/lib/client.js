@@ -833,9 +833,9 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       try {
         const styleEl = document.createElement('style')
-        // 面板样式 + 侧栏导航图标覆盖(见 NAV_ICON_CSS 的注释)
-        styleEl.textContent = `${CSS}\n${NAV_ICON_CSS}`
+        styleEl.textContent = CSS
         document.head.appendChild(styleEl)
+        // 侧栏那一行的图标:宿主写死了齿轮,我们只改它 SVG 的孩子(见 wrapSettingsNav)
         const stopNavWatch = wrapSettingsNav()
         ctx.effect(() => () => { styleEl.remove(); stopNavWatch() }, 'dsh-memory: styles + nav icon')
 
@@ -868,8 +868,7 @@ window.__ModuleLoader__.load({
      * "官方指定图标"的入口。
      *
      * 因此只有一条路:用宿主自己的类名做一次**定向覆盖** —— 把那颗齿轮**就地**换成我们的
-     * 记号(与 icon.svg 同一套美术:蓝色渐变圆角瓦片 + 深墨蓝芯片)。
-     * 三条护栏让它不会把界面弄坏:
+     * 记号(内存芯片)。三条护栏让它不会把界面弄坏:
      *   1. 选择器只认 className 的**后缀**:宿主的类名是 CSS Modules 生成的
      *      `<hash>_navCell` / `<hash>_navIcon`(hash 随构建变),所以用
      *      `[class*="_navIcon"]` 匹配,hash 变了也照样命中;
@@ -877,47 +876,65 @@ window.__ModuleLoader__.load({
      *      `dsh-memory-nav` 标记类,规则全部限定在它下面 —— 其它区块(账号/模型/插件市场)
      *      的图标一个都不碰。标记打在**按钮自己**身上而不是它所在的列表上:整列共用一个
      *      列表容器,标在容器上会波及所有区块。
-     *   3. **不改布局、不插 DOM**:只给那颗 svg 加背景与去描边,它原本占的格子原样保留。
+     *   3. **不改布局、不插 DOM**:那颗 svg 还是宿主自己渲染的,我们只把它内部换成芯片,
+     *      盒子尺寸/行高/对齐全由宿主保证。
      *
-     * 为什么不是"藏掉 svg + 用 ::before 补一个"—— 0.5.3 就是这么写的,结果在真机上
-     * **齿轮没了、芯片也没画出来**,留了个空位(伪元素的盒子在宿主那种 flex/内联样式的
-     * 组合里没成形)。改成给 svg 本身画背景后,盒子是宿主自己保证的,只要 svg 还在,
-     * 画出来的东西就一定会出现;而 svg 不在时(宿主改结构)什么都不匹配,图标保持原样 ——
-     * 两边都不会出现"空一格"。
-     * 尺寸沿用宿主写死的 16(它给图标的 size 就是 16)。
+     * 风格必须跟着**侧栏这一列**走:这一列全是 16px 单色细线图标(宿主内置的
+     * Icon*OutlineMedium:16 网格、fill:none、stroke:currentColor、strokeWidth 1.3),
+     * 所以记号画成线稿芯片;**不是**插件管理器卡片/行那套"蓝色瓦片 + 白色记号"的插件美术
+     * (那个尺寸是 36/30px,另一套 surface —— icon.svg 仍服务那边)。0.5.3/0.5.4 早期版本
+     * 把蓝瓦片塞进这一列,结果就是一个实心蓝块混在细线图标里,格格不入。
+     *
+     * 实现:把宿主那颗 svg 的**子节点**换成芯片的线稿。三条被否掉的路,留给后来人:
+     *   - `::before` 补一个(0.5.3):真机上盒子没成形 —— 齿轮没了、记号也没出现,空一格;
+     *   - 给 svg 上背景图(0.5.4):能画出来,但只能画色块,画不出"1.3 描边的线稿",与这列不搭;
+     *   - `content: url(...)` 替换 svg 内容:SVG 元素不支持 content 替换,实测无效。
+     * 换子节点这条路的失败模式是良性的:svg 由宿主渲染,我们只动它的孩子,尺寸/对齐/行高
+     * 一定由宿主保证;万一类名约定变了,选中不到就没有任何改动,图标保持原样。
+     * React 若重渲染把图形覆盖回去,observer 会在下一轮按子节点重新补上。
      */
-    const NAV_ICON_CSS = [
-      // 去描边并画上我们的记号 —— 就地覆盖,不动布局
-      '.dsh-memory-nav [class*="_navIcon"] {',
-      '  stroke: none !important;',
-      '  color: transparent !important;',
-      '  border-radius: 26%;',
-      '  background:',
-      // 芯片:深墨蓝边框(上下两条横带 + 左右两条竖带)+ 中心点
-      '    radial-gradient(circle at 50% 50%, #0E1C58 0 9%, rgba(0,0,0,0) 9.5%),',
-      '    linear-gradient(180deg, rgba(0,0,0,0) 0 30%, #0E1C58 30% 70%, rgba(0,0,0,0) 70%),',
-      '    linear-gradient(90deg, rgba(0,0,0,0) 0 14%, #0E1C58 14% 86%, rgba(0,0,0,0) 86%),',
-      '    linear-gradient(180deg, #69B9FF 0%, #324DE2 100%);',
-      '}',
-    ].join('\n')
+    const NAV_ICON_NS = 'http://www.w3.org/2000/svg'
+    /** 芯片线稿:16 网格、1.3 描边、跟随 currentColor(与宿主内置图标同一规范)。 */
+    const CHIP_SHAPES = [
+      { tag: 'rect', attrs: { x: '5', y: '5', width: '6', height: '6', rx: '1.4', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.3' } },
+      { tag: 'rect', attrs: { x: '6.9', y: '6.9', width: '2.2', height: '2.2', rx: '0.6', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.3' } },
+      { tag: 'path', attrs: { d: 'M8 5V3.2M8 11v1.8M5 8H3.2M11 8h1.8', fill: 'none', stroke: 'currentColor', 'stroke-width': '1.3', 'stroke-linecap': 'round' } },
+    ]
+
+    /** 把一颗 nav 图标的图形换成芯片;已经是芯片就跳过(observer 会反复调到这里)。 */
+    function paintChip(svg) {
+      const shapes = svg.querySelectorAll('rect,path,circle,line,polyline,polygon')
+      const first = shapes[0]
+      const isChip = shapes.length === CHIP_SHAPES.length
+        && first?.tagName?.toLowerCase() === 'rect'
+        && first.getAttribute('rx') === '1.4'
+      if (isChip) return
+      svg.replaceChildren(...CHIP_SHAPES.map(({ tag, attrs }) => {
+        const node = document.createElementNS(NAV_ICON_NS, tag)
+        for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v)
+        return node
+      }))
+    }
 
     /**
-     * 在"含「记忆」那一行"的按钮上打标记类,让上面的 CSS 只作用于这一行。
+     * 在"含「记忆」那一行"上做记号并换图。
      *
-     * 关键:标记打在**按钮自己**身上,绝不打在父级 navList 上 —— 整列是同一个容器,
+     * 关键:记号打在**按钮自己**身上,绝不打在父级 navList 上 —— 整列是同一个容器,
      * 打到父级等于给所有区块都加图标。面板随时可能卸载/重挂(它是 body 上的 portal),
      * 所以用 MutationObserver 跟着 DOM 走;识别依据是**这一行的文案**(trim 后比对),
-     * 不依赖任何类名 —— 类名约定变了只是标记不上、图标退回宿主原来的齿轮。
+     * 不依赖任何类名 —— 类名约定变了只是什么都不做,图标保持宿主原样。
      */
     function wrapSettingsNav() {
       const mark = () => {
         try {
           for (const cell of document.querySelectorAll('[class*="_navCell"]')) {
             const label = (cell.textContent ?? '').trim()
-            if (label === NAV_LABEL) cell.classList?.add('dsh-memory-nav')
-            else cell.classList?.remove('dsh-memory-nav')
+            if (label !== NAV_LABEL) continue
+            cell.classList?.add('dsh-memory-nav')
+            const icon = cell.querySelector('[class*="_navIcon"]')
+            if (icon) paintChip(icon)
           }
-        } catch { /* 标记失败:图标保持宿主原样 */ }
+        } catch { /* 换图失败:图标保持宿主原样 */ }
       }
       mark()
       const observer = new MutationObserver(mark)
