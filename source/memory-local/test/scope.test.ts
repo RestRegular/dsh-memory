@@ -145,14 +145,38 @@ test('resolveCurrentScopes: header.id / header.cwd / 子代理共享父会话', 
   assert.deepEqual(resolveCurrentScopes(agent), { session: 'session:sess-1', project: 'project:/work/repo' })
   // 只有 session.id(header 缺 id)时也能用
   assert.deepEqual(resolveCurrentScopes({ session: { id: 'sess-2' } }).session, 'session:sess-2')
-  // projectScope 配置优先于 cwd
-  assert.equal(resolveCurrentScopes(agent, { projectScope: 'project:fixed' }).project, 'project:fixed')
+  // **会话 cwd 优先于配置**:0.5.5 及以前是反的,后果是"当前项目"被钉成 process.cwd()
+  // (= DSH 服务进程的 profile 目录),该 profile 下所有项目挤进同一个项目桶。
+  assert.equal(
+    resolveCurrentScopes(agent, { projectScope: 'project:fixed' }).project,
+    'project:/work/repo',
+    '有会话 cwd 时,项目键必须跟工作区走,不能被 projectScope 顶掉',
+  )
   // 子代理 → 父会话 key
   const sub = { session: { header: { id: 'sub-1', cwd: '/w', origin: 'subagent', parentSession: 'parent-7' } } }
   assert.equal(resolveCurrentScopes(sub).session, 'session:parent-7')
   // fork(有 parentSession 但不是子代理)→ 仍用自己的会话 key
   const fork = { session: { header: { id: 'fork-1', parentSession: 'parent-7' } } }
   assert.equal(resolveCurrentScopes(fork).session, 'session:fork-1')
+})
+
+test('resolveCurrentScopes: 没有会话 cwd 时才用配置,再退回 process.cwd()', () => {
+  // 显式配置(团队共享库那种用法)—— 拿不到会话 cwd 时必须生效
+  assert.equal(
+    resolveCurrentScopes({ session: { header: { id: 's' } } }, { projectScope: 'project:fixed' }).project,
+    'project:fixed',
+  )
+  assert.equal(resolveCurrentScopes(undefined, { projectScope: 'project:fixed' }).project, 'project:fixed')
+  // 配了但 cwd 也在 → cwd 赢(与上面同一条规则的另一面)
+  assert.equal(
+    resolveCurrentScopes({ session: { header: { id: 's', cwd: '/work/repo' } } }, { projectScope: 'project:fixed' }).project,
+    'project:/work/repo',
+  )
+  // cwd 不是字符串(宿主形态意外)→ 当作没有 cwd,继续降级到配置
+  assert.equal(
+    resolveCurrentScopes({ session: { header: { id: 's', cwd: 42 } } }, { projectScope: 'project:fixed' }).project,
+    'project:fixed',
+  )
 })
 
 test('resolveCurrentScopes: 拿不到会话信息只降级,绝不抛错', () => {

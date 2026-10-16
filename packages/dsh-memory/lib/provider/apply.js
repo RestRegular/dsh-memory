@@ -133,6 +133,11 @@ export class CordisMemoryService extends Service {
     return this.impl.resolveWriteScope(agent, requested)
   }
 
+  /** 当前项目 key(会话 cwd 优先)。工具层解析 `scope:'project'` 时用它,口径与读写一致。 */
+  projectKeyFor(agent         )              {
+    return this.impl.projectKeyFor(agent)
+  }
+
   /** 作用域清单(名字 + 条数),面板 /status 与 memory_list 共用。 */
   scopeStats()                                               {
     return this.impl.scopeStats()
@@ -158,10 +163,12 @@ export function apply(ctx         , config                    = {}) {
   class ScopedMemoryService extends CordisMemoryService {
     constructor(ctx2         ) {
       super(ctx2, config)
-      // 写路径默认口径来自 tools 小节(defaultScope 缺省 = 会话);项目键缺省
-      // project:<cwd>,即 DSH 进程的启动目录 = 这个 profile 目录。
+      // 写路径默认口径来自 tools 小节(defaultScope 缺省 = 会话)。项目键**只在显式配置**
+      // 时才固定下来;缺省由每次调用的 `session.header.cwd` 解析(那才是工作区)。
+      // 以前这里写成 `?? project:${process.cwd()}`,而 DSH 服务进程的 cwd 是 profile 目录,
+      // 等于把"当前项目"钉成了 profile —— 项目级记忆于是跨项目混在一起。
       const tools = (config                                                                                          ).tools
-      this.impl.setProjectScope((tools?.projectScope ?? `project:${process.cwd()}`)               )
+      if (tools?.projectScope !== undefined) this.impl.setProjectScope(tools.projectScope               )
       if (tools?.defaultScope !== undefined) this.impl.setDefaultScope(tools.defaultScope)
     }
   }

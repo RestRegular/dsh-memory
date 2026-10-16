@@ -82,6 +82,33 @@ test('scopes.session=false 时写回退项目 scope', async () => {
   }
 })
 
+test('scope:project 按会话 cwd 落点,而不是 process.cwd()/配置(0.5.6 回归)', async () => {
+  const dir = tempDir()
+  // 服务端固定了 project:/w,但调用方带着会话 cwd 来 → 必须跟工作区走。
+  // 0.5.5 及以前两层各自算了一份 project:<process.cwd()>,于是"当前项目"被钉成 DSH 服务
+  // 进程的 cwd(= profile 目录),该 profile 下所有项目挤进同一个桶。
+  const svc = newService(dir, { scopes: { global: true, project: true, custom: { enabled: true } } })
+  try {
+    const tools = toolsFor(svc)
+    const withCwd = agent('sess-cwd', { cwd: '/work/repo' })
+    const saved = await tools.memory_save.execute({ content: '关于这个仓库的一条', scope: 'project' }, { agent: withCwd })
+    assert.equal(saved.scope, 'project:/work/repo', 'scope:project 必须解析成会话 cwd')
+
+    // 工具层解析出来的键 == 服务端自己的解析(两层口径必须同一处)
+    assert.equal(svc.projectKeyFor(withCwd), 'project:/work/repo')
+    // 落盘也在那个 key 下(只写到一个文件,不落到固定的 project:/w)
+    svc.store.flush()
+    assert.ok(existsSync(join(dir, 'projects', `${createHash('sha1').update('project:/work/repo').digest('hex')}.jsonl`)))
+    assert.equal(svc.store.peek('project:/work/repo')?.records.size, 1)
+    // 没有 cwd 时仍然回退到配置的 project:/w(不把显式配置废掉)
+    const noCwd = await tools.memory_save.execute({ content: '没有 cwd 的一条', scope: 'project' }, { agent: agent('sess-2') })
+    assert.equal(noCwd.scope, PROJECT)
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('子代理会话映射到父会话 key(共享父会话的记忆)', async () => {
   const dir = tempDir()
   const svc = newService(dir)

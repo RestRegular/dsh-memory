@@ -35,6 +35,11 @@ import { normalizeScopeInput, resolveScopeRef } from '../provider/scope.js'
                                                    
                                     
                                                                      
+     
+                                                           
+                                         
+     
+                                             
  
 
                                      
@@ -77,8 +82,16 @@ function agentOf(exec         )          {
   return (exec                                   )?.agent
 }
 
-/** 当前项目 key:配置优先,其次 process.cwd()(与 provider 的缺省一致)。 */
-function projectKey(opts                    )              {
+/**
+ * 当前项目 key。优先级:**服务端解析的会话 cwd** → 显式配置 → process.cwd()。
+ *
+ * 服务端那一步不能省:DSH 服务进程的 process.cwd() 是 profile 目录,只有
+ * `session.header.cwd` 才是工作区;而 mock / 旧 provider 没有 `projectKeyFor` 时,
+ * 只能退回配置与 process.cwd()(与旧行为一致,不把测试和旧宿主打断)。
+ */
+function projectKey(opts                    , service                    , agent          )              {
+  const resolved = service?.projectKeyFor?.(agent)
+  if (typeof resolved === 'string' && resolved.length > 0) return resolved               
   return (opts.projectScope ?? `project:${process.cwd()}`)               
 }
 
@@ -87,7 +100,7 @@ function readScopes(opts                    , service                   , agent 
   const provided = service.resolveReadScopes?.(agent)
   if (Array.isArray(provided) && provided.length > 0) return [...new Set(provided)]
   // 服务没提供(测试 mock / 旧 provider):退回 defaultScope 口径
-  const fallback = opts.defaultScope === 'global' ? 'global' : projectKey(opts)
+  const fallback = opts.defaultScope === 'global' ? 'global' : projectKey(opts, service, agent)
   return [...new Set([fallback, 'global'])]
 }
 
@@ -108,7 +121,7 @@ function resolveScope(
   if (!normalized.ok) throw new MemoryToolError('SCOPE_INVALID', normalized.message)
   if (normalized.kind === 'global') return { scope: 'global' }
   const agent = agentOf(exec)
-  const project = projectKey(opts)
+  const project = projectKey(opts, service, agent)
   // 当前会话 key 由 provider 解析(只有它知道 scopes.session 开关与子代理共享父会话的规则);
   // provider 不在(测试 mock / 旧版本)时不给 session —— 写路径会回退 project,读路径回到合并集合。
   const session = service.resolveReadScopes?.(agent)?.find((s) => s.startsWith('session:'))

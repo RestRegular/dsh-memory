@@ -483,8 +483,8 @@ export class LocalMemoryService implements MemoryServiceApi {
   private llmInvoke: LlmInvoke | null = null
   /** 写路径的默认口径(tools.defaultScope);'session' 拿不到会话时回退 project。 */
   private defaultWriteScope: 'session' | 'project' | 'global' = 'session'
-  /** 当前项目 scope 键;缺省 project:<启动 cwd>。 */
-  private projectScope: MemoryScope = `project:${process.cwd()}`
+  /** 显式配置的项目 scope 键(未配置 = undefined,由 resolveCurrentScopes 按会话 cwd 决定)。 */
+  private projectScope: MemoryScope | undefined
   /** 上次发现磁盘 scope 的时间(限流用;0 = 还没发现过)。 */
   private discoveredAt = 0
 
@@ -501,8 +501,10 @@ export class LocalMemoryService implements MemoryServiceApi {
     // 会话 scope 是按会话动态生成的,**不能**在这里 eager 加载(加载谁?);只预载
     // project 与 global 这两个稳定作用域。其余按需 peek/loadDiscovered。
     // eager 只加载"已存在"的 scope(peek),不会为不存在的 scope 建空文件。
+    // 项目键此刻还看不到会话(没传 agent),所以这里只能预载"没有显式配置时的兜底键"
+    // (= project:<process.cwd()>);真正的项目键在每次调用时按会话 cwd 解析。
     const eager: MemoryScope[] = []
-    if (this.cfg.projectEnabled) eager.push(this.projectScope)
+    if (this.cfg.projectEnabled) eager.push(this.defaultProjectScope)
     if (this.cfg.globalEnabled) eager.push('global')
     for (const scope of eager) this.store.peek(scope)
     this.embed = new EmbedClient({
@@ -992,9 +994,17 @@ export class LocalMemoryService implements MemoryServiceApi {
     this.projectScope = scope as MemoryScope
   }
 
-  /** 固定项目 scope(默认 project:<启动 cwd>);宿主装配用它对齐 session.header.cwd。 */
+  /** 固定项目 scope(只有**显式配置**才调);缺省由会话 cwd 决定。 */
   setProjectScope(scope: MemoryScope): void {
     this.projectScope = scope
+  }
+
+  /**
+   * 拿不到会话时的项目键:显式配置优先,否则 `project:<process.cwd()>`
+   * (用于构造期预载、以及任何没有 agent 上下文的兜底读写)。
+   */
+  private get defaultProjectScope(): MemoryScope {
+    return (this.projectScope ?? `project:${process.cwd()}`) as MemoryScope
   }
 
   /**
@@ -1012,8 +1022,12 @@ export class LocalMemoryService implements MemoryServiceApi {
     return this.defaultWriteScope
   }
 
+  /**
+   * 当前项目键(诊断/测试用)。没有会话时就是兜底键 —— 真实调用请用 `scopeRefs(agent)`,
+   * 那里的优先级是 会话 cwd > 显式配置 > process.cwd()。
+   */
   get activeProjectScope(): MemoryScope {
-    return this.projectScope
+    return this.defaultProjectScope
   }
 
   private assertScopeAllowed(scope: MemoryScope): void {
@@ -1079,6 +1093,15 @@ export class LocalMemoryService implements MemoryServiceApi {
   /** agent 上下文 → { session?, project }(会话能否用由调用方按 scopes.session 决定)。 */
   scopeRefs(agent: unknown): { session?: MemoryScope; project: MemoryScope } {
     return resolveCurrentScopes(agent, { projectScope: this.projectScope })
+  }
+
+  /**
+   * 当前项目 key(= `scopeRefs(agent).project`)。工具层用它解析 `scope:'project'`,保证与服务端
+   * 读/写口径**同一处** —— 0.5.5 及以前工具层自己算了一份 `project:<process.cwd()>`,于是同一个
+   * 概念在两个层各有各的答案。
+   */
+  projectKeyFor(agent: unknown): MemoryScope {
+    return this.scopeRefs(agent).project
   }
 
   /**
@@ -1213,7 +1236,7 @@ export class LocalMemoryService implements MemoryServiceApi {
       ? [query.scope]
       : (queryScopes ?? []).length > 0
         ? queryScopes!
-        : [this.projectScope, 'global']
+        : [this.defaultProjectScope, 'global']
     const stores: { store: ScopeStore; scope: MemoryScope; isGlobal: boolean }[] = []
     const seen = new Set<MemoryScope>()
     for (const scope of wanted) {
@@ -1350,7 +1373,7 @@ export class LocalMemoryService implements MemoryServiceApi {
         ? [input.scope]
         : (input.scopes ?? []).length > 0
           ? input.scopes!
-          : [this.projectScope]
+          : [this.defaultProjectScope]
       const seen = new Set<MemoryScope>()
       for (const scope of targets) {
         if (seen.has(scope)) continue
@@ -1377,7 +1400,7 @@ export class LocalMemoryService implements MemoryServiceApi {
       ? [input.scope]
       : (input.scopes ?? []).length > 0
         ? input.scopes!
-        : [this.projectScope]
+        : [this.defaultProjectScope]
     const seen = new Set<MemoryScope>()
     let records: MemoryRecord[] = []
     for (const scope of wanted) {

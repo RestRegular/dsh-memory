@@ -225,8 +225,25 @@ export function resolveCurrentScopes(agent         , opts                       
     sessionId = undefined
   }
   const cwd = asString(header?.cwd)
-  const project = opts.projectScope ?? `project:${cwd ?? process.cwd()}`
+  // 项目 key 的优先级:**会话 cwd** > 显式配置的 projectScope > process.cwd()。
+  // cwd 必须排第一:`session.header.cwd` 是宿主给的"canonical primary workspace",
+  // 而 DSH 服务进程的 process.cwd() 是**profile 目录**(~/.dsh/profiles/<name>),
+  // 与工作区无关 —— 0.5.5 及以前把 `project:${process.cwd()}` 当成"配置"先传进来,
+  // 结果所有项目的项目级记忆都挤进同一个桶,`project:` 这个作用域等于失效。
+  const project = `project:${cwd ?? stripProjectPrefix(opts.projectScope) ?? process.cwd()}`
   return sessionId !== undefined ? { session: `session:${sessionId}`, project } : { project }
+}
+
+/**
+ * `project:/x` → `/x`;不是字符串或空串 → undefined(交给下一级回退)。
+ *
+ * 显式配置按文档写成 `project:/abs/path`(见 tool-memory/cordis.patch.yml),所以拼接前缀前
+ * 必须先脱掉已经带上的那一层,否则会得到 `project:project:/x` —— 与配置、与真实落点都对不上。
+ */
+function stripProjectPrefix(value         )                     {
+  const s = asString(value)
+  if (s === undefined) return undefined
+  return (s.startsWith('project:') ? s.slice('project:'.length) : s) || undefined
 }
 
 // ------------------------------------------------------------------ kind → 具体 key
