@@ -1,38 +1,44 @@
 /**
- * Publish the DSH memory plugin packages to npm.
+ * Publish @restregular/dsh-memory to npm.
  *
- *   node tools/publish-npm-packages.mjs --scope <npm-scope> [--version 0.1.0]
- *        [--credential npm-myself-use] [--token-file <npmrc-or-token-file>] [--dry-run]
+ *   node tools/publish-npm-packages.mjs --scope @restregular [--version 0.5.0] [--dry-run]
+ *        [--credential npm-agent-use]     # devcred 凭据名(默认 npm-agent-use)
+ *        [--token-file <npmrc-or-token-file>]
+ *        [--skip-checks]
  *
- * Token handling (never through argv or the transcript):
- *   default      pull the token from the DevCred vault into a temp file via
- *                `devcred inject -- dc-run.exe --out …`, build a private .npmrc
- *                from it, publish, then delete both
- *   --token-file use an existing npmrc/token file (must contain _authToken=…)
+ * 发布的是**单包**产物 `packages/dsh-memory`(0.4.0 起一个包一条 entry —— 0.3.x 那套
+ * core+panel 双包已被 build-npm-packages.mjs 淘汰,见 README「为什么是一个包」)。
  *
- * Pre-flight runs `npm whoami`; a failure aborts before anything is published.
+ * Token handling(绝不经过 argv 或对话):
+ *   default      `devcred inject` 把 NPM_TOKEN 交给一个只写文件、不回显的 node 子进程,
+ *                由它写成私有 .npmrc;发布后连临时目录一起删掉
+ *   --token-file 用一个已有的 npmrc / 裸 token 文件
+ *
+ * 发布前默认先跑 `npm test` 与 `npm run verify`(--skip-checks 可跳过),再 `npm whoami`
+ * 做一次鉴权预检 —— 任何一步失败都在"什么都没发出去"的状态下中止。
  */
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(HERE, '..')
+const PUBLISH_DIR = join(ROOT, 'packages', 'dsh-memory')
 
 function arg(name, fallback) {
   const i = process.argv.indexOf(`--${name}`)
   return i >= 0 ? (process.argv[i + 1] && !process.argv[i + 1].startsWith('--') ? process.argv[i + 1] : true) : fallback
 }
 const SCOPE_ARG = typeof arg('scope', '') === 'string' ? arg('scope', '') : ''
-const VERSION = typeof arg('version', '0.1.0') === 'string' ? arg('version', '0.1.0') : '0.1.0'
-const CREDENTIAL = typeof arg('credential', 'npm-myself-use') === 'string' ? arg('credential', 'npm-myself-use') : 'npm-myself-use'
-const REPO = typeof arg('repo', '') === 'string' ? arg('repo', '') : ''
+const VERSION = typeof arg('version', '') === 'string' ? arg('version', '') : ''
+const CREDENTIAL = typeof arg('credential', 'npm-agent-use') === 'string' ? arg('credential', 'npm-agent-use') : 'npm-agent-use'
 const TOKEN_FILE = typeof arg('token-file', '') === 'string' ? arg('token-file', '') : ''
 const DRY_RUN = arg('dry-run', false) === true
+const SKIP_CHECKS = arg('skip-checks', false) === true
 if (!SCOPE_ARG) {
-  console.error('usage: node tools/publish-npm-packages.mjs --scope <npm-scope> [--version x.y.z] [--dry-run]')
+  console.error('usage: node tools/publish-npm-packages.mjs --scope <npm-scope> [--version x.y.z] [--dry-run] [--token-file <file>]')
   process.exit(2)
 }
 const SCOPE = SCOPE_ARG.startsWith('@') ? SCOPE_ARG : `@${SCOPE_ARG}`
@@ -43,11 +49,8 @@ if (!existsSync(NPM_CLI)) {
   process.exit(2)
 }
 
-const work = join(tmpdir(), 'dsh-memory-publish')
-rmSync(work, { recursive: true, force: true })
-mkdirSync(work, { recursive: true })
+const work = mkdtempSync(join(tmpdir(), 'dsh-memory-publish-'))
 const npmrc = join(work, '.npmrc')
-const tokenFile = join(work, 'token.txt')
 let cleaned = false
 function cleanup() {
   if (cleaned) return
@@ -56,7 +59,19 @@ function cleanup() {
 }
 process.on('exit', cleanup)
 
-/** Materialise the token into a private .npmrc without printing it. */
+/** 找到 devcred 可执行文件(Windows 上是 .exe;避免用 shell 拼接参数触发 DEP0190)。 */
+function devcredPath() {
+  if (process.platform !== 'win32') return 'devcred'
+  const found = spawnSync('where.exe', ['devcred'], { encoding: 'utf8' })
+  const first = (found.stdout ?? '').split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0)
+  return first ?? 'devcred'
+}
+
+/**
+ * 把 token 变成一份私有 .npmrc。**只写文件、不回显**:devcred 把 NPM_TOKEN 交给下面这个
+ * node 包装脚本,它把值写进 <work>/token.txt;本进程再读该文件拼 .npmrc(整个过程没有任何
+ * 一步把 token 写进 argv 或 stdout)。
+ */
 function prepareNpmrc() {
   if (TOKEN_FILE) {
     const text = readFileSync(TOKEN_FILE, 'utf8')
@@ -66,22 +81,19 @@ function prepareNpmrc() {
     console.log(`token source: file (${m[1].length} chars)`)
     return
   }
-  const skill = join(process.env.USERPROFILE ?? '', '.dsh', 'skills', 'use-devcred')
-  const conf = join(skill, 'devcred-agent.conf')
-  const dcRun = join(skill, 'dc-run.exe')
-  if (!existsSync(conf) || !existsSync(dcRun)) throw new Error('devcred skill files not found; pass --token-file instead')
-  const token = readFileSync(conf, 'utf8').match(/^token=(\S+)\s*$/m)?.[1]
-  if (!token) throw new Error('no token= line in devcred-agent.conf')
-  const dc = process.env.DEVCRED_BIN ?? 'devcred'
-  const res = spawnSync(dc, ['inject', '--only', CREDENTIAL, '--', dcRun, '--env', 'NPM_TOKEN', '--out', tokenFile, '--out-env', 'NPM_TOKEN'], {
+  const wrapper = join(work, 'token-writer.cjs')
+  const target = join(work, 'token.txt')
+  writeFileSync(wrapper, 'require("node:fs").writeFileSync(process.argv[2], process.env.NPM_TOKEN ?? "")\n', 'ascii')
+  const injected = spawnSync(devcredPath(), ['inject', '--only', CREDENTIAL, '--', NODE, wrapper, target], {
     encoding: 'utf8',
-    env: { ...process.env, DEVCRED_PASSWORD: token },
+    stdio: ['ignore', 'pipe', 'pipe'],
   })
-  if (res.status !== 0 || !existsSync(tokenFile)) {
-    throw new Error(`devcred inject failed (exit ${res.status}): ${(res.stderr || res.stdout || '').trim().slice(0, 300)}`)
+  if (injected.status !== 0 || !existsSync(target)) {
+    throw new Error(`devcred inject failed (exit ${injected.status}): ${(injected.stderr ?? injected.stdout ?? '').trim().slice(0, 300)}`)
   }
-  const value = readFileSync(tokenFile, 'utf8').trim()
-  rmSync(tokenFile, { force: true })
+  const value = readFileSync(target, 'utf8').trim()
+  rmSync(target, { force: true })
+  if (value.length < 20) throw new Error(`devcred credential "${CREDENTIAL}" produced no usable token`)
   writeFileSync(npmrc, `//registry.npmjs.org/:_authToken=${value}\n`, 'ascii')
   console.log(`token source: devcred vault (${CREDENTIAL}, ${value.length} chars)`)
 }
@@ -90,8 +102,18 @@ function npm(args, opts = {}) {
   return spawnSync(NODE, [NPM_CLI, ...args, '--userconfig', npmrc, '--registry', 'https://registry.npmjs.org'], {
     encoding: 'utf8',
     cwd: opts.cwd ?? ROOT,
-    env: { ...process.env, npm_config_loglevel: 'warn' },
+    env: { ...process.env, npm_config_loglevel: opts.loglevel ?? 'warn' },
   })
+}
+
+function run(label, args, cwd = ROOT) {
+  console.log(`\n$ ${label}`)
+  const res = spawnSync(NODE, [NPM_CLI, ...args], { encoding: 'utf8', cwd, env: { ...process.env, npm_config_loglevel: 'warn' } })
+  process.stdout.write(res.stdout ?? '')
+  if (res.status !== 0) {
+    console.error(res.stderr ?? '')
+    throw new Error(`${label} failed (exit ${res.status})`)
+  }
 }
 
 try {
@@ -105,44 +127,46 @@ try {
   }
   console.log(`authenticated as: ${user}`)
 
-  console.log(`\nbuilding packages for scope ${SCOPE} version ${VERSION} …`)
-  const buildArgs = [join(HERE, 'build-npm-packages.mjs'), '--scope', SCOPE, '--version', VERSION]
-  if (REPO) buildArgs.push('--repo', REPO)
-  const build = spawnSync(NODE, buildArgs, { encoding: 'utf8', cwd: ROOT })
-  process.stdout.write(build.stdout ?? '')
-  if (build.status !== 0) {
-    console.error(build.stderr ?? '')
-    process.exit(1)
+  if (!existsSync(join(PUBLISH_DIR, 'package.json'))) {
+    throw new Error(`${PUBLISH_DIR} is missing — run \`npm run build\` first`)
+  }
+  const meta = JSON.parse(readFileSync(join(PUBLISH_DIR, 'package.json'), 'utf8'))
+  const expected = `${SCOPE}/dsh-memory`
+  if (meta.name !== expected) throw new Error(`built package name mismatch: ${meta.name} != ${expected}`)
+  if (VERSION && meta.version !== VERSION) {
+    throw new Error(`built package version ${meta.version} != --version ${VERSION}; rebuild with \`npm run build\``)
+  }
+  console.log(`package: ${meta.name}@${meta.version}`)
+
+  if (!SKIP_CHECKS) {
+    run('npm test', ['test'])
+    run('npm run verify', ['run', 'verify'])
   }
 
-  const packages = [
-    { dir: join(ROOT, 'dist-npm', 'core'), name: `${SCOPE}/dsh-memory` },
-    { dir: join(ROOT, 'dist-npm', 'panel'), name: `${SCOPE}/dsh-memory-panel` },
-  ]
+  const packArgs = ['pack', '--json', '--dry-run', '--pack-destination', work]
+  const packed = spawnSync(NODE, [NPM_CLI, ...packArgs], { encoding: 'utf8', cwd: PUBLISH_DIR })
+  if (packed.status !== 0) throw new Error(`npm pack --dry-run failed: ${(packed.stderr ?? '').trim()}`)
+  const info = JSON.parse((packed.stdout ?? '[]').trim() || '[]')[0]
+  console.log(`\n${meta.name}@${meta.version}: ${info?.entryCount ?? '?'} files, ${((info?.size ?? 0) / 1024).toFixed(1)} KiB packed`)
+  const files = (info?.files ?? []).map((f) => f.path)
+  for (const required of ['package.json', 'cordis.patch.yml', 'lib/index.js', 'lib/client.js', 'lib/provider/scope.js']) {
+    if (!files.includes(required)) throw new Error(`package is missing ${required}`)
+  }
+  const stray = files.filter((f) => /node_modules|\.ts$|\.test\./.test(f))
+  if (stray.length > 0) throw new Error(`package carries stray files: ${stray.join(', ')}`)
 
-  for (const pkg of packages) {
-    const meta = JSON.parse(readFileSync(join(pkg.dir, 'package.json'), 'utf8'))
-    if (meta.name !== pkg.name) throw new Error(`built package name mismatch: ${meta.name} != ${pkg.name}`)
-
-    const packArgs = ['pack', '--json', '--pack-destination', work]
-    const packed = spawnSync(NODE, [NPM_CLI, ...packArgs], { encoding: 'utf8', cwd: pkg.dir })
-    if (packed.status !== 0) throw new Error(`npm pack failed for ${pkg.name}: ${(packed.stderr ?? '').trim()}`)
-    const info = JSON.parse((packed.stdout ?? '[]').trim() || '[]')[0]
-    console.log(`\n${pkg.name}@${meta.version}: ${info?.entryCount ?? '?'} files, ${((info?.size ?? 0) / 1024).toFixed(1)} KiB packed`)
-
-    if (DRY_RUN) {
-      console.log('  (dry run: not publishing)')
-      continue
-    }
-    const pub = npm(['publish', '--access', 'public'], { cwd: pkg.dir })
+  if (DRY_RUN) {
+    console.log('\nDRY RUN OK (nothing published)')
+  } else {
+    const pub = npm(['publish', '--access', 'public'], { cwd: PUBLISH_DIR })
     process.stdout.write(pub.stdout ?? '')
     if (pub.status !== 0) {
-      console.error(pub.stderr ?? '')
-      throw new Error(`npm publish failed for ${pkg.name} (exit ${pub.status})`)
+      // npm 的失败原因几乎都在 stderr(例如 409 staged version / EOTP 2FA / E401)
+      process.stderr.write(pub.stderr ?? '')
+      throw new Error(`npm publish failed (exit ${pub.status})`)
     }
-    console.log(`  published ${pkg.name}@${meta.version}`)
+    console.log(`\nPUBLISH OK: ${meta.name}@${meta.version}`)
   }
-  console.log(DRY_RUN ? '\nDRY RUN OK' : '\nPUBLISH OK')
 } catch (error) {
   console.error(`\nFAILED: ${error.message}`)
   process.exit(1)

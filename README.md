@@ -221,9 +221,29 @@ npm run verify  # 构建到 .verify/,不落 packages/(CI 或改动后自检)
 可选的真实加载验证(证明产物在没有 TS 支持的普通 node 里能跑):
 
 ```bash
-node tools/build-single-package.mjs --scope @restregular --version 0.4.0 \
+node tools/build-single-package.mjs --scope @restregular --version 0.5.0 \
   --host-modules <一个 @deepseek-ai 目录>       # 或设 DSH_HOST_MODULES
 ```
+
+### 发布 / Publish
+
+```bash
+npm run build                                        # 产物落到 packages/dsh-memory(版本号在 package.json 的 build/verify 里)
+node tools/publish-npm-packages.mjs --scope @restregular --version 0.5.0
+```
+
+`publish-npm-packages.mjs` 发的是**单包** `packages/dsh-memory`,顺序是
+`npm test` → `npm run verify` → `npm whoami` 预检 → `npm pack --dry-run` 校验产物清单(缺
+`lib/client.js`/`cordis.patch.yml` 等必填项、或混进 `.ts`/测试文件都会中止)→ `npm publish`。
+任何一步失败都停在"什么都没发出去"的状态;`--dry-run` 只走到校验,`--skip-checks` 跳过前两步。
+
+npm token **不经过命令行**:默认从 DevCred 读取(凭据名默认 `npm-agent-use`,`--credential` 可换),
+由 `devcred inject` 把 `NPM_TOKEN` 交给一个只写文件、不回显的子进程,写进临时目录里的私有
+`.npmrc`,发布后连临时目录一起删除;也可以 `--token-file <npmrc>` 指一份自己的凭据文件。
+
+> npm 的**暂存发布(staged publishing)** 会让重复版本号撞上 `E409 Cannot publish over previously
+> staged version`:说明这个版本已经在 npm 侧暂存、等待在 npmjs.com 的包页面批准,批准前
+> `latest` 不会指向它。这时不需要再发一次,去网页上确认即可。
 
 ## 仓库结构 / Layout
 
