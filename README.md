@@ -97,9 +97,9 @@ memory_save({
 | `<installRoot>/models/` | 下载的 GGUF 模型 |
 | `<installRoot>/selected-model.json` | 面板里选过哪一档(比配置优先级低) |
 
-`storeDir` 默认 `.dsh-memory`(相对启动目录),**建议显式配一个绝对路径**。文件是**首次写入才创建**(读一个不存在的 scope 只会得到空结果,不会造出空文件);`projects/` 目录在插件启动时就建好。
+`storeDir` 默认 `.dsh-memory`(相对启动目录),**建议显式配一个绝对路径**。文件是**首次写入才创建**(读一个不存在的 scope 只会得到空结果,不会造出空文件);`projects/` 目录在插件启动时就建好。**作用域被删空后,它的 `.jsonl` 与 `.vec` 会在下一次落盘时一起移除**(0.5.1 起),不会再留下 0 字节文件;下次写同一个名字会重新创建。唯一例外是 `global.jsonl`:保留作用域删空后只清内容、保留文件。
 
-scope 键的三种形态:`global`、`project:<cwd>`、`session:<会话 id>`,其余都是自定义名(小写折叠、内部空白折成一个空格、最长 64 字符,禁止 `:`、路径分隔符、控制字符、`..` 与保留名 `global/project/session/all`)。**0.5.0 没有任何数据迁移**:旧的 `project:<cwd>` 文件继续原样读写。
+scope 键的三种形态:`global`、`project:<cwd>`、`session:<会话 id>`,其余都是自定义名(小写折叠、内部空白折成一个空格、最长 64 字符,禁止 `:`、路径分隔符、控制字符、`..` 与保留名 `global/project/session/all`)。**没有任何数据迁移**:旧的 `project:<cwd>` 文件继续原样读写。
 
 `installRoot` 默认 `~/.dsh/memory-vector`;显式配了 `storeDir` 时取**它的父目录**(所以手写的 `<root>/llamacpp` + `<root>/models` 布局会被直接认出来)。
 
@@ -221,7 +221,7 @@ npm run verify  # 构建到 .verify/,不落 packages/(CI 或改动后自检)
 可选的真实加载验证(证明产物在没有 TS 支持的普通 node 里能跑):
 
 ```bash
-node tools/build-single-package.mjs --scope @restregular --version 0.5.0 \
+node tools/build-single-package.mjs --scope @restregular --version 0.5.1 \
   --host-modules <一个 @deepseek-ai 目录>       # 或设 DSH_HOST_MODULES
 ```
 
@@ -229,7 +229,7 @@ node tools/build-single-package.mjs --scope @restregular --version 0.5.0 \
 
 ```bash
 npm run build                                        # 产物落到 packages/dsh-memory(版本号在 package.json 的 build/verify 里)
-node tools/publish-npm-packages.mjs --scope @restregular --version 0.5.0
+node tools/publish-npm-packages.mjs --scope @restregular --version 0.5.1
 ```
 
 `publish-npm-packages.mjs` 发的是**单包** `packages/dsh-memory`,顺序是
@@ -280,6 +280,7 @@ tools/build-single-package.mjs   构建(产物契约检查 + 可选加载验证)
 
 ## 版本
 
+- **0.5.1** —— 清理空作用域文件:作用域被删空后(删掉最后一条、或 `POST /data/wipe`),它的 `.jsonl` 与 `.vec` 会在下一次落盘时一起移除,不再留 0 字节文件与只剩身份头的边车;下次写同一个名字会重新创建。`global.jsonl` 是唯一例外(保留作用域只清内容、留文件)。同版本的旧文件行为不变,无数据迁移。
 - **0.5.0** —— 作用域重构:
   - **默认作用域 = 当前会话**:`memory_save` 省略 `scope` 时写进 `session:<会话 id>`(子代理共享父会话;拿不到会话信息或 `scopes.session: false` 时回退当前项目,不报错)。
   - **读写默认一致**:0.4.x 的写路径默认是 `project:<cwd>`、而 provider 的读路径默认是 `global` —— 写进去的记忆默认检索不到。现在两边都是「会话 + 项目 + global」合并去重(同分时 session > project > 自定义 > global)。

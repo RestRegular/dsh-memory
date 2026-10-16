@@ -3,7 +3,7 @@
  * atomic compaction (tmp + rename). Vectors live in memory for M1; the .vec
  * sidecar format arrives in M1.5.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { Buffer } from 'node:buffer'
 import { dirname, join } from 'node:path'
@@ -85,6 +85,8 @@ export class ScopeStore {
   dirty = false
   /** true once vectors were touched since the last .vec flush. */
   vectorsDirty = false
+  /** 数据文件路径(写、以及删空后移除都走它)。 */
+           file        
           vecFile        
           events                  
   /** Embedding identity for sidecar validation; set via setVecIdentity(). */
@@ -92,6 +94,7 @@ export class ScopeStore {
 
   constructor(scope             , root        , events                   = {}) {
     this.scope = scope
+    this.file = join(root, scopeFileName(scope))
     this.vecFile = join(root, scopeFileName(scope).replace(/\.jsonl$/, '.vec'))
     this.events = events
   }
@@ -124,6 +127,27 @@ export class ScopeStore {
       this.vectorsDirty = true
     }
     return had
+  }
+
+  /**
+   * Delete this scope's data files(.jsonl 与 .vec 边车)。
+   *
+   * 只在 flush 时、且该 scope **内存里已经没有记录**的情况下调用 —— 也就是"作用域被删空了"。
+   * 留一个 0 字节的 .jsonl + 只有一个身份头的 .vec 在磁盘上没有任何价值:数据已经空,
+   * 而作用域本身是懒加载的(下次写同一个名字会重新创建)。global 永不适用(调用方 guard)。
+   */
+  removeFiles()          {
+    let removed = false
+    for (const file of [this.file, this.vecFile]) {
+      try {
+        rmSync(file, { force: true })
+        removed = true
+      } catch (err) {
+        // 删不掉不影响正确性(空文件无数据);下一次 flush 还会再试一次
+        this.events.onWarn?.(`store: cannot remove ${file}: ${(err         ).message}`)
+      }
+    }
+    return removed
   }
 
   setVector(id        , vec              )       {
@@ -403,6 +427,15 @@ export class MemoryStore {
     return join(this.root, this.fileNames.get(scope) ?? scopeFileName(scope))
   }
 
+  /**
+   * 这个 scope 删空后能不能把文件删掉。
+   * 只有 `global` 例外:它是唯一一个"永远存在"的保留作用域(所有人共享),文件不该被
+   * 任何一次清空动作从磁盘上抹掉 —— 即使将来某条路径把它删空了,也只写一个空文件。
+   */
+          isRemovable(scope             )          {
+    return scope !== 'global'
+  }
+
   anyDirty()          {
     for (const s of this.scopes.values()) if (s.dirty) return true
     return false
@@ -418,10 +451,22 @@ export class MemoryStore {
     this.flushTimer.unref?.()
   }
 
-  /** Write dirty scopes atomically (tmp + rename). */
+  /**
+   * Write dirty scopes atomically (tmp + rename).
+   *
+   * 一个被删空的 scope(内存里 0 条记录)**不再落一个 0 字节文件**,而是把它的 .jsonl 与
+   * .vec 一起删掉:空文件没有任何信息,反而在面板里留下一条 `(0)` 的作用域、在磁盘上长期堆积。
+   * 作用域是懒加载的,下次往同一个名字写入时会重新创建。`global` 永不自动删除(见 isRemovable)。
+   */
   flush()       {
     for (const s of this.scopes.values()) {
       if (!s.dirty) continue
+      if (s.records.size === 0 && this.isRemovable(s.scope)) {
+        s.removeFiles()
+        s.dirty = false
+        s.vectorsDirty = false
+        continue
+      }
       const file = this.fileFor(s.scope)
       mkdirSync(dirname(file), { recursive: true })
       const tmp = `${file}.tmp`

@@ -4,6 +4,7 @@
  * 覆盖的是 0.5.0 的核心承诺:
  *   - 写入默认落"当前会话",拿不到会话回退项目 scope(绝不报错);
  *   - 自定义 scope 首次写入才落盘,读路径绝不创建文件;
+ *   - 作用域被删空后不再留空文件(0.5.1),下次写入重新创建;
  *   - scopes.custom.max 只管自定义 scope,会话/project/global 不受限;
  *   - 默认检索 = 会话 + 项目 + global 合并去重;'all' 跨全部;
  *   - 旧文件(projects/<sha1>.jsonl + project:<cwd>)照常读写。
@@ -406,6 +407,83 @@ test('scope 数上限只影响自定义 scope:会话 scope 数量增长不受限
     }
     assert.equal(svc.store.customScopeCount(), 1)
     assert.equal(svc.store.allScopes().filter((s) => s.scope.startsWith('session:')).length, 30)
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ------------------------------------------------------------------ 删空即移除(0.5.1)
+
+test('作用域被删空后不再留空文件,下次写入重新创建', async () => {
+  const dir = tempDir()
+  const svc = newService(dir)
+  const scope = 'handbook'
+  const file = join(dir, 'projects', `${createHash('sha1').update(scope).digest('hex')}.jsonl`)
+  const vec = file.replace(/\.jsonl$/, '.vec')
+  try {
+    const rec = await svc.save({ scope, kind: 'note', content: '唯一一条' })
+    svc.store.flush()
+    assert.ok(existsSync(file), '写入后文件在')
+
+    // 删掉最后一条 → flush 时应当把 .jsonl 与 .vec 一起移除,而不是留 0 字节文件
+    await svc.forget({ id: rec.id })
+    svc.store.flush()
+    assert.equal(existsSync(file), false, '删空后 .jsonl 应当被移除')
+    assert.equal(existsSync(vec), false, '.vec 边车也一并移除')
+
+    // 删空的作用域在**同一进程**里仍然是已知的(内存里有它的 store),只是磁盘上没了
+    assert.equal(svc.store.peek(scope)?.records.size, 0)
+
+    // 再写同一个名字:重新创建(不是"复用残留空文件")
+    const again = await svc.save({ scope, kind: 'note', content: '重新写一条' })
+    svc.store.flush()
+    assert.ok(existsSync(file), '重新写入后文件回来')
+    const lines = readFileSync(file, 'utf8').split('\n').filter((l) => l.trim())
+    assert.equal(lines.length, 1)
+    assert.equal(JSON.parse(lines[0]!).id, again.id)
+
+    // 新进程:删空/移除后不会再把那个 scope 当成"存在"
+    const fresh = newService(dir)
+    try {
+      const stats = fresh.scopeStats()
+      assert.deepEqual(stats.map((s) => s.scope), ['handbook'], '只应看到还活着的那一个')
+      assert.equal(stats[0]!.records, 1)
+    } finally {
+      fresh.flushSync()
+    }
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('清空全部记忆后不留空文件(global.jsonl 是唯一例外)', async () => {
+  const dir = tempDir()
+  const svc = newService(dir)
+  try {
+    await svc.save({ scope: SESSION, kind: 'note', content: '会话' })
+    await svc.save({ scope: PROJECT, kind: 'note', content: '项目' })
+    await svc.save({ scope: 'handbook', kind: 'note', content: '自定义' })
+    svc.store.flush()
+    assert.equal(projectFiles(dir).filter((f) => f.endsWith('.jsonl')).length, 3)
+
+    const out = svc.wipeAllRecords()
+    assert.equal(out.removed, 3)
+    svc.store.flush() // 清空标记为 dirty,文件移除发生在 flush
+    assert.deepEqual(projectFiles(dir).filter((f) => f.endsWith('.jsonl')), [], 'projects/ 下不再有空 .jsonl')
+    assert.deepEqual(projectFiles(dir), [], '边车也一起清掉')
+    assert.equal(existsSync(join(dir, 'global.jsonl')), false, '这次没写过 global,自然也没有')
+
+    // global 的例外:给它写一条再清空,它保留一个空文件(保留作用域不从磁盘上消失)
+    await svc.save({ scope: 'global', kind: 'note', content: '全局' })
+    svc.store.flush()
+    const globalFile = join(dir, 'global.jsonl')
+    assert.ok(existsSync(globalFile))
+    svc.wipeAllRecords()
+    svc.store.flush()
+    assert.ok(existsSync(globalFile), 'global.jsonl 保留')
+    assert.equal(readFileSync(globalFile, 'utf8').trim(), '', '内容清空但文件在')
   } finally {
     svc.flushSync()
     rmSync(dir, { recursive: true, force: true })
