@@ -833,19 +833,97 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       try {
         const styleEl = document.createElement('style')
-        styleEl.textContent = CSS
+        // 面板样式 + 侧栏导航图标覆盖(见 NAV_ICON_CSS 的注释)
+        styleEl.textContent = `${CSS}\n${NAV_ICON_CSS}`
         document.head.appendChild(styleEl)
-        ctx.effect(() => () => { styleEl.remove() }, 'dsh-memory: styles')
+        const stopNavWatch = wrapSettingsNav()
+        ctx.effect(() => () => { styleEl.remove(); stopNavWatch() }, 'dsh-memory: styles + nav icon')
 
         const slots = ctx.get('slots')
         if (slots === undefined) return
         slots.inject('settings.section', () => slots.register(
-          { name: 'settings.section', id: 'memory', order: 24, label: '记忆' },
+          { name: 'settings.section', id: 'memory', order: 24, label: NAV_LABEL },
           () => React.createElement(MemoryPanel),
         ))
       } catch (error) {
         console.error('[dsh-memory] client apply 失败(已吞掉):', error?.message)
       }
+    }
+
+    /**
+     * 侧栏这一行的显示名。导航图标覆盖靠"认出自己那一行"来定位,所以文案必须只有一处,
+     * 注册与识别共用这个常量(改文案时不会漏改)。
+     */
+    const NAV_LABEL = '记忆'
+
+    /**
+     * 侧栏「记忆」那一行的图标。
+     *
+     * 宿主把导航图标写死在 `dsh-client-ui-settings-general` 的 `navIcon(id)` 里:只有
+     * account / models / agent-presets / plugins / archived-sessions 五个 id 有专属图标
+     * (`IconUserOutlineMedium` 等),其余(包括我们的 `memory`)一律回退成**齿轮**
+     * `IconSettingsOutlineMedium`。`settings.section` 的注册契约是
+     * `{ name, id, order, label, locale, inject }` —— **没有 icon 字段**,宿主也不读插件包
+     * `package.json` 的 `icon`(那个只用于插件管理器的卡片/行),所以插件侧没有任何
+     * "官方指定图标"的入口。
+     *
+     * 因此只有一条路:用宿主自己的类名做一次**定向覆盖** —— 隐藏那颗齿轮,在同一格里贴上
+     * 我们的记号(与 icon.svg 同一套美术:蓝色渐变圆角瓦片 + 深墨蓝芯片)。
+     * 三条护栏让它不会把界面弄坏:
+     *   1. 选择器只认 className 的**后缀**:宿主的类名是 CSS Modules 生成的
+     *      `<hash>_navCell` / `<hash>_navIcon`(hash 随构建变),所以用
+     *      `[class*="_navIcon"]` 匹配,hash 变了也照样命中;
+     *   2. 只在**我们这一行**生效:wrapSettingsNav 给"文案等于 `NAV_LABEL`"的那个按钮加
+     *      `dsh-memory-nav` 标记类,规则全部限定在它下面 —— 其它区块(账号/模型/插件市场)
+     *      的图标一个都不碰。标记打在**按钮自己**身上而不是它所在的列表上:整列共用一个
+     *      列表容器,标在容器上会波及所有区块。
+     *   3. 纯 CSS 画图,不插 DOM、不碰 React 树;万一宿主的类名约定整个变了,规则匹配不到,
+     *      图标就**自动退回原来那颗齿轮**,不会变成空白格。
+     * 尺寸沿用宿主写死的 16(它给图标的 size 就是 16),行高与 .navIcon{flex:none} 一致。
+     */
+    const NAV_ICON_CSS = [
+      // 只隐藏"我们自己那一行"的图标:标记类直接打在那一行的按钮上(见 wrapSettingsNav)
+      '.dsh-memory-nav [class*="_navIcon"] { display: none !important; }',
+      // 同一格里补上我们的记号(纯 CSS 画,不插 DOM)
+      '.dsh-memory-nav [class*="_navCell"]::before {',
+      '  content: "";',
+      '  flex: none;',
+      '  display: block;',
+      '  width: 16px;',
+      '  height: 16px;',
+      // 瓦片:圆角 26%(≈8/28,与 icon.svg 的 rx 一致)+ 同一组蓝色渐变
+      '  border-radius: 26%;',
+      '  background:',
+      // 芯片:深墨蓝边框(上下两条横带 + 左右两条竖带)+ 中心点
+      '    radial-gradient(circle at 50% 50%, #0E1C58 0 9%, rgba(0,0,0,0) 9.5%),',
+      '    linear-gradient(180deg, rgba(0,0,0,0) 0 30%, #0E1C58 30% 70%, rgba(0,0,0,0) 70%),',
+      '    linear-gradient(90deg, rgba(0,0,0,0) 0 14%, #0E1C58 14% 86%, rgba(0,0,0,0) 86%),',
+      '    linear-gradient(180deg, #69B9FF 0%, #324DE2 100%);',
+      '}',
+    ].join('\n')
+
+    /**
+     * 在"含「记忆」那一行"的按钮上打标记类,让上面的 CSS 只作用于这一行。
+     *
+     * 关键:标记打在**按钮自己**身上,绝不打在父级 navList 上 —— 整列是同一个容器,
+     * 打到父级等于给所有区块都加图标。面板随时可能卸载/重挂(它是 body 上的 portal),
+     * 所以用 MutationObserver 跟着 DOM 走;识别依据是**这一行的文案**(trim 后比对),
+     * 不依赖任何类名 —— 类名约定变了只是标记不上、图标退回宿主原来的齿轮。
+     */
+    function wrapSettingsNav() {
+      const mark = () => {
+        try {
+          for (const cell of document.querySelectorAll('[class*="_navCell"]')) {
+            const label = (cell.textContent ?? '').trim()
+            if (label === NAV_LABEL) cell.classList?.add('dsh-memory-nav')
+            else cell.classList?.remove('dsh-memory-nav')
+          }
+        } catch { /* 标记失败:图标保持宿主原样 */ }
+      }
+      mark()
+      const observer = new MutationObserver(mark)
+      observer.observe(document.body, { childList: true, subtree: true })
+      return () => observer.disconnect()
     }
 
     exports.apply = apply
