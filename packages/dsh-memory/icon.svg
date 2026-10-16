@@ -1,1 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+<svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    记忆插件的图标:一块芯片(内存条的直白隐喻 = "存下来的东西")。
+
+    沿用宿主内置插件美术的规范(packages/client/ui-primitives 的 plugin-artwork /
+    sidebar-terminal 卡片):36×36 画布、内缩 4 的 28×28 圆角瓦片(rx 8)、瓦片带自上而下的
+    蓝色渐变 #69B9FF → #324DE2。不写死 width/height,显示尺寸交给消费方
+    (宿主按 <img width=30|36> 渲染:插件管理器行 30、卡片 36)。
+
+    为什么记号是**深墨蓝**而不是白色:这个图标同时出现在浅色主题下(插件管理器卡片/行、
+    设置导航),而瓦片顶部是亮蓝 —— 白描边在那一段会糊掉(实测 36px 下整块糊成"蓝方块+
+    白点")。深墨蓝 #0E1C58 在整块渐变上都够暗,所以放小到 16px 仍然一眼可辨。
+    记号本身只用"圆角方 + 中心点"两个形状、无细引脚:20px 以下细线会消失,而这两个
+    形状靠面积说话。
+  -->
+  <g transform="translate(18 18) scale(0.9286) translate(-18 -18)">
+    <rect x="4" y="4" width="28" height="28" rx="8" fill="url(#memory_tile)" />
+    <rect x="10.6" y="10.6" width="14.8" height="14.8" rx="3.6" fill="none" stroke="#0E1C58" stroke-width="2.4" />
+    <rect x="16.2" y="16.2" width="3.6" height="3.6" rx="1.2" fill="#0E1C58" />
+  </g>
+  <defs>
+    <linearGradient id="memory_tile" x1="18" y1="4" x2="18" y2="32" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#69B9FF" />
+      <stop offset="1" stop-color="#324DE2" />
+    </linearGradient>
+  </defs>
+</svg>
