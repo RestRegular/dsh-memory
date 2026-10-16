@@ -169,21 +169,24 @@ test('retryPendingEmbeds discovers scopes created by another process (lazy-load 
       scopes: { global: true, project: true },
       retrieval: { vector: { enabled: true, endpoint: `http://127.0.0.1:${offlinePort}/v1/embeddings`, model: 'test-embed', dims: DIMS, timeoutMs: 300 } },
     })
-    writer.setDefaultScope('project:other-workspace')
+    writer.setDefaultScope('project')
+    writer.setProjectScope('project:other-workspace')
     const rec = await writer.save({ scope: 'project:other-workspace', kind: 'fact', content: '上一个进程写下的项目记忆' })
     await new Promise((r) => setTimeout(r, 400))
     assert.equal(writer.store.scope('project:other-workspace').embedPending.size, 1, 'queued while the backend was down')
     writer.flushSync()
 
-    // "fresh session": the project scope is not even loaded, so a naive
-    // pendingEmbedCount() over loaded scopes is blind to that queue
+    // "fresh session": 启动时只 eager 加载 project + global,而且**不会**为会话 scope
+    // 建文件(会话是按会话动态出现的);磁盘上那个 project:other-workspace 起始不在
+    // allScopes() 里 —— 它必须靠 discovery 才能进入回填队列。
     const reader = new LocalMemoryService({
       storeDir: dir,
       scopes: { global: true, project: true },
       retrieval: { vector: { enabled: true, endpoint: `http://127.0.0.1:${up.port}/v1/embeddings`, model: 'test-embed', dims: DIMS, timeoutMs: 300 } },
     })
     try {
-      assert.deepEqual(reader.store.allScopes().map((s) => s.scope), ['global'], 'lazy store only knows its default scope')
+      assert.deepEqual(reader.store.allScopes(), [], '启动只预载"已存在"的 scope:磁盘上只有 project:other-workspace,所以一个都没加载')
+      assert.equal(reader.store.peek('session:not-loaded'), undefined, '不存在的会话 scope 不会被预建')
       const drained = await reader.retryPendingEmbeds()
       assert.ok(drained >= 1, `discovery must expose the on-disk queue, drained=${drained}`)
       assert.equal(reader.store.scope('project:other-workspace').vectors.has(rec.id), true, 'vector written after discovery')

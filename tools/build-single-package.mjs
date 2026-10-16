@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 把四个源半边打成一个 npm 包:`@scope/dsh-memory`(单包单入口)。
  *
  *   node tools/build-single-package.mjs --scope @restregular [--version 0.2.0]
@@ -67,19 +67,57 @@ const GROUPS = [
 ]
 
 /**
- * 跨半边相对 import 的落位重映射。注意顺序:通用规则先把 .ts 改成 .js,
- * 这里的规则匹配的是 .js 形态。
- *   单入口(lib/index.js)      → ../provider|tools|inject|panel.js
- *   注入半边(lib/inject/*.js) → ../provider/*.js
+ * 半边之间的相对 import 落位重映射。源码树里每条 import 都按**源码目录**写
+ * (`../memory-local/src/x` / `../../memory-local/src/x`),而产物里半边被摊平成
+ * `lib/{provider,tools,inject}` 与 `lib/panel.js`,所以同一段源码落在不同半边里
+ * 需要不同的目标 —— 因此 `to` 是**按输出目录算的函数**,由 OUT 下所属半边决定:
+ *   lib/provider/*  → ./x.js            lib/tools/*  → ../provider/x.js
+ *   lib/panel.js    → ../provider/x.js  lib/index.js → ./provider|x.js
+ * 规则只认"源码形状",不认"当前文本已被改过",所以顺序无关。
  */
+/** 产物文件所在的半边(用 posix 分隔判断,跨平台一致)。 */
+function halfOf(destFile) {
+  const posix = destFile.split('\\').join('/')
+  if (posix.endsWith('/lib/panel.js') || posix.endsWith('/lib/index.js')) return 'entry'
+  if (posix.includes('/lib/provider/')) return 'provider'
+  if (posix.includes('/lib/tools/')) return 'tools'
+  if (posix.includes('/lib/inject/')) return 'inject'
+  return 'unknown'
+}
+
 const REWRITES = [
-  { from: /from '\.\.\/memory-local\/src\/([^']+)\.js'/g, to: "from './provider/$1.js'" },
-  { from: /from '\.\.\/tool-memory\/src\/([^']+)\.js'/g, to: "from './tools/$1.js'" },
-  { from: /from '\.\.\/memory-inject\/src\/([^']+)\.js'/g, to: "from './inject/$1.js'" },
-  { from: /from '\.\.\/memory-panel\/lib\/index\.js'/g, to: "from './panel.js'" },
-  { from: /from '\.\.\/\.\.\/memory-local\/src\/([^']+)\.js'/g, to: "from '../provider/$1.js'" },
-  { from: /import\('\.\.\/\.\.\/memory-local\/src\/([^']+)\.js'\)/g, to: "import('../provider/$1.js')" },
+  {
+    // 工具 / 注入 / 面板半边引用 provider(源码树里的 `../../memory-local/src/x`)。
+    // 产物里:lib/tools|inject/ 与 lib/provider 同级 → ../provider/;lib/panel.js 也在
+    // lib/ 下 → ./provider/;provider 自己 → ./。
+    from: /(?:\.\.\/){2}memory-local\/src\/(.+)/,
+    to: (half, file) => (half === 'provider' ? `./${file}` : half === 'entry' ? `./provider/${file}` : `../provider/${file}`),
+  },
+  {
+    // `../memory-local/src/x` —— 单入口(lib/index.js)与 provider 半边自己。
+    // 用"从字符串开头匹配"而不是 `^(\.\.\/)` 组:前一条规则已经处理过 `../../`。
+    from: /^\.\.\/memory-local\/src\/(.+)/,
+    to: (half, file) => (half === 'provider' || half === 'tools' || half === 'inject' ? `../provider/${file}` : `./provider/${file}`),
+  },
+  // 单入口引用的另外半边:工具 / 注入 / 面板
+  {
+    from: /^\.\.\/(tool-memory|memory-inject)\/src\/(.+)/,
+    to: (_half, group, file) => `${group === 'tool-memory' ? './tools' : './inject'}/${file}`,
+  },
+  { from: /^\.\.\/memory-panel\/lib\/(.+)/, to: (_half, file) => (file === 'index.js' ? './panel.js' : `./${file}`) },
 ]
+
+/** 按"半边"重写一条 specifier;未匹配任何规则时原样返回。 */
+function rewriteSpecifier(spec, half) {
+  for (const rule of REWRITES) {
+    const match = rule.from.exec(spec)
+    rule.from.lastIndex = 0
+    if (!match) continue
+    const target = rule.to(half, ...match.slice(1))
+    return spec.slice(0, match.index) + target + spec.slice(match.index + match[0].length)
+  }
+  return spec
+}
 
 function transpileFile(srcFile, destFile) {
   let code = readFileSync(srcFile, 'utf8')
@@ -89,10 +127,17 @@ function transpileFile(srcFile, destFile) {
   // 于是"提交的产物必须等于源码重建"这条护栏会对所有人假报错(dsh-market
   // #472/#563/#570 是同一类问题的三个不同表现)。
   const sourceUrl = relative(ROOT, srcFile).split('\\').join('/')
+  const half = halfOf(destFile)
   code = stripTypeScriptTypes(code, { mode: 'strip', sourceUrl })
   code = code.replace(/(from\s*')(\.[^']*?)\.ts(')/g, '$1$2.js$3')
   code = code.replace(/(import\(')(\.[^']*?)\.ts('\))/g, '$1$2.js$3')
-  for (const r of REWRITES) code = code.replace(r.from, r.to)
+  // 只重写 specifier 本身,不动 import 语句的形状:源码里的 import 可能是多行的
+  // (`import {\n a,\n b,\n} from '../x'`),按整条语句匹配会漏掉它们。
+  // 匹配 `'./` / `'../` 开头的相对 specifier,再交给 rewriteSpecifier。
+  code = code.replace(/(['"])(\.\.?\/[^'"]*)\1/g, (whole, quote, spec) => {
+    const target = rewriteSpecifier(spec, half)
+    return target === spec ? whole : `${quote}${target}${quote}`
+  })
   mkdirSync(dirname(destFile), { recursive: true })
   writeFileSync(destFile, code, 'utf8')
   emitted.push(destFile)
@@ -157,10 +202,12 @@ const README = readFileSync(join(ROOT, 'README.md'), 'utf8')
 rmSync(OUT, { recursive: true, force: true })
 for (const group of GROUPS) copyTree(group.src, join(OUT, group.dest))
 
-// 面板:服务端半边 → lib/panel.js(纯 JS,无需剥离类型);客户端 bundle 原样复制
+// 面板:服务端半边 → lib/panel.js。它本来也走 copyTree 的改写(0.5.0 起因与 provider
+// 共用 scope 规范化而有了相对 import),所以这里用 transpileFile —— client.js 是浏览器
+// bundle,必须逐字节原样复制。`stripTypeScriptTypes` 对纯 JS 是恒等的,产物不变。
 const panelDir = join(PKGS, 'memory-panel')
 mkdirSync(join(OUT, 'lib'), { recursive: true })
-cpSync(join(panelDir, 'lib', 'index.js'), join(OUT, 'lib', 'panel.js'))
+transpileFile(join(panelDir, 'lib', 'index.js'), join(OUT, 'lib', 'panel.js'))
 cpSync(join(panelDir, 'lib', 'client.js'), join(OUT, 'lib', 'client.js'))
 cpSync(join(panelDir, 'icon.svg'), join(OUT, 'icon.svg'))
 

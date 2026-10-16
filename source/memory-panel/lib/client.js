@@ -156,11 +156,20 @@ window.__ModuleLoader__.load({
       return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
     }
 
-    function scopeLabel(scope) {
-      return scope === 'global' ? '全局' : scope.startsWith('project:') ? scope.slice(8) : scope
+    /**
+     * scope 键 → 展示标签。优先用 /status 返回的 `label`(服务端能查会话标题、能解析
+     * project 的 cwd);服务端没给(旧 provider / 还没加载到)时用本地回退。
+     */
+    function scopeLabel(scope, labels) {
+      const mapped = labels && labels[scope]
+      if (typeof mapped === 'string' && mapped.length > 0) return mapped
+      if (scope === 'global') return '全局'
+      if (scope.startsWith('project:')) return scope.slice(8)
+      if (scope.startsWith('session:')) return `会话 ${scope.slice(8, 16)}`
+      return scope
     }
 
-    function RecordCard({ rec, vectorOn, onSaved, onDeleted }) {
+    function RecordCard({ rec, vectorOn, labels, onSaved, onDeleted }) {
       // collapsed by default: the list stays scannable, full text on demand
       const [expanded, setExpanded] = React.useState(false)
       const [editing, setEditing] = React.useState(false)
@@ -215,7 +224,7 @@ window.__ModuleLoader__.load({
           },
         },
           h('span', { className: open ? 'chev open' : 'chev' }, '▶'),
-          h('span', { className: 'badge scope', title: rec.scope }, scopeLabel(rec.scope)),
+          h('span', { className: 'badge scope', title: rec.scope }, scopeLabel(rec.scope, labels)),
           h('span', { className: 'badge' }, rec.kind),
           rec.supersedes ? h('span', { className: 'badge', title: `修正 #${rec.supersedes}` }, '修正') : null,
           // 只在"待嵌入"时提示:已嵌入是常态,向量没启用时这条也没有行动价值。
@@ -648,6 +657,9 @@ window.__ModuleLoader__.load({
 
       const total = scopes.reduce((n, s) => n + s.records, 0)
       const pending = scopes.reduce((n, s) => n + s.pendingEmbeds, 0)
+      // 服务端 /status 给的 scope → label 映射(会话标题、project 的 cwd 只有服务端知道)
+      const labels = {}
+      for (const s of scopes) if (s && s.scope && typeof s.label === 'string') labels[s.scope] = s.label
 
       // 向量卡片的状态判定。provider 给的 mode 决定"该不该有启停开关"：
       //   off      没配置任何后端 → 不给开关,模型与安装入口都在「模型与硬件」里
@@ -795,11 +807,11 @@ window.__ModuleLoader__.load({
             onChange: (e) => setQ(e.target.value),
             onKeyDown: (e) => { if (e.key === 'Enter') load(q, scopeFilter) },
           }),
-          // 作用域也用同一个自绘下拉(与模型/运行时统一)
+          // 作用域也用同一个自绘下拉(与模型/运行时统一);标签优先用服务端给的 label
           h(Dropdown, {
             items: [
               { value: '', label: '全部作用域' },
-              ...scopes.map((s) => ({ value: s.scope, label: scopeLabel(s.scope) })),
+              ...scopes.map((s) => ({ value: s.scope, label: s.label || scopeLabel(s.scope) })),
             ],
             value: scopeFilter,
             disabled: loading,
@@ -812,7 +824,7 @@ window.__ModuleLoader__.load({
         !loading && !error && records.length === 0
           ? h('div', { className: 'empty' }, filtering ? '没有匹配的记忆' : '还没有记忆')
           : h('div', { className: 'list' },
-              records.map((rec) => h(RecordCard, { key: rec.id, rec, vectorOn: configured && vectorEnabled, onSaved: () => load(), onDeleted: () => load() }))),
+              records.map((rec) => h(RecordCard, { key: rec.id, rec, vectorOn: configured && vectorEnabled, labels: labels, onSaved: () => load(), onDeleted: () => load() }))),
       )
     }
 

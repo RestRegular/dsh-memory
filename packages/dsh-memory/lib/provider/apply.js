@@ -14,6 +14,7 @@ import { Service,              } from '@deepseek-ai/cordis'
               
                
                   
+              
                    
 import { LocalMemoryService,                        } from './index.js'
                                              
@@ -111,12 +112,45 @@ export class CordisMemoryService extends Service {
     return this.impl.search(query)
   }
 
-  forget(input                                 )                                              {
+  forget(input                                                                              )                                              {
     return this.impl.forget(input)
   }
 
   list(input                  )                          {
     return this.impl.list(input)
+  }
+
+  /**
+   * 当前 agent 上下文 → 默认合并读取范围(会话 + 项目 + global,按开关与 key 去重)。
+   * 工具与召回注入都走它,保证与 `resolveWriteScope` 是同一套口径。
+   */
+  resolveReadScopes(agent         )                {
+    return this.impl.resolveReadScopes(agent)
+  }
+
+  /** 写路径默认 scope(省略 scope 时落到哪)。 */
+  resolveWriteScope(agent         , requested         )              {
+    return this.impl.resolveWriteScope(agent, requested)
+  }
+
+  /** 作用域清单(名字 + 条数),面板 /status 与 memory_list 共用。 */
+  scopeStats()                                               {
+    return this.impl.scopeStats()
+  }
+
+  /** 作用域清单的一行文字;SCOPE_LIMIT 错误提示里会带上它。 */
+  scopeInventory(limit         )         {
+    return this.impl.scopeInventory(limit)
+  }
+
+  /** 把磁盘上已有的 scope 全部发现并加载(读 "all" / 面板枚举前调用;带 3 秒缓存)。 */
+  discoverScopes()                                                   {
+    return this.impl.discoverScopes()
+  }
+
+  /** 当前进程已知的 scope 键(只读,不触发发现)。 */
+  knownScopes()                                                {
+    return this.impl.knownScopes()
   }
 }
 
@@ -124,6 +158,11 @@ export function apply(ctx         , config                    = {}) {
   class ScopedMemoryService extends CordisMemoryService {
     constructor(ctx2         ) {
       super(ctx2, config)
+      // 写路径默认口径来自 tools 小节(defaultScope 缺省 = 会话);项目键缺省
+      // project:<cwd>,即 DSH 进程的启动目录 = 这个 profile 目录。
+      const tools = (config                                                                                          ).tools
+      this.impl.setProjectScope((tools?.projectScope ?? `project:${process.cwd()}`)               )
+      if (tools?.defaultScope !== undefined) this.impl.setDefaultScope(tools.defaultScope)
     }
   }
   ctx.plugin(ScopedMemoryService)

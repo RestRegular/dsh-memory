@@ -299,6 +299,35 @@ const installIdle = (over: Record<string, unknown> = {}) => ({
   phase: 'idle', message: '', receivedBytes: 0, totalBytes: null, error: null, installed: false, root: 'D:/stack', ...over,
 })
 
+test('作用域下拉用服务端给的 label(会话标题 / project 的 cwd)', async () => {
+  const { hooks } = await loadBundle()
+  hooks.resetAll()
+  const tree = await mountPanel(hooks, {
+    scopes: [
+      { scope: 'global', records: 1, pendingEmbeds: 0, label: '全局' },
+      { scope: 'project:C:/demo', records: 1, pendingEmbeds: 0, label: 'C:/demo' },
+      { scope: 'session:sess-12345678', records: 1, pendingEmbeds: 0, label: '重构记忆作用域(sess-123)' },
+      { scope: 'handbook', records: 1, pendingEmbeds: 0, label: 'handbook' },
+    ],
+    embedServer: null,
+  })
+  // 统计卡仍然动态数作用域个数
+  assert.ok(textOf(tree()).includes('4'), '作用域数来自 /status 的动态枚举')
+  // 打开作用域下拉(结构里第二个 aria-haspopup=listbox;第一个是模型/运行时下拉),
+  // 选项文字必须用 label(而不是原始 scope 键)
+  const dropdowns = collect(tree()).filter((n) => n.props?.['aria-haspopup'] === 'listbox')
+  assert.ok(dropdowns.length >= 1, '找到自绘下拉')
+  const scopeDropdown = dropdowns[dropdowns.length - 1]!
+  ;(scopeDropdown.props!.onClick as () => void)()
+  hooks.runEffects()
+  const optionTexts = collect(tree())
+    .filter((n) => n.props?.role === 'option')
+    .map((n) => textOf(n))
+  assert.ok(optionTexts.includes('重构记忆作用域(sess-123)'), `下拉里显示会话标题(实际:${JSON.stringify(optionTexts)})`)
+  assert.ok(optionTexts.includes('C:/demo'), 'project scope 显示 cwd')
+  assert.ok(!optionTexts.includes('session:sess-12345678'), '不再回退成裸 scope 键')
+})
+
 test('未配置的后端:展开「模型与硬件」给出模型列表与安装按钮,而不是一个死开关', async () => {
   const { hooks } = await loadBundle()
   hooks.resetAll()

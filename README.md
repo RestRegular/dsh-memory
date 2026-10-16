@@ -11,9 +11,10 @@ English: Local, durable memory for DeepSeek Harness — one npm package, one loa
 
 | 能力 | 说明 |
 | --- | --- |
-| **落盘存储** | 每条记忆一行 JSONL,按 scope 分文件(global / project),同 scope 内按内容去重;写入前过凭据扫描 |
+| **落盘存储** | 每条记忆一行 JSONL,按 scope 分文件(会话 / project / global / 自定义),同 scope 内按内容去重;写入前过凭据扫描 |
+| **作用域** | 默认写进**当前会话**;读默认合并「会话 + 项目 + global」。也能写 `global`、当前项目,或任意自定义名(首次写入自动建) |
 | **双通道检索** | 词法(IDF + CJK bigram)**+** 向量(llama-server 的 `/v1/embeddings`)。向量缺席时自动降级为纯词法,**不报错、不阻塞** |
-| **自动召回** | `agent/pre-step` 注入相关记忆(可关、有 token 预算、按 topK 截断) |
+| **自动召回** | `agent/pre-step` 注入相关记忆(可关、有 token 预算、按 topK 截断,范围同为会话+项目+global) |
 | **四个工具** | `memory_save` / `memory_search` / `memory_list` / `memory_forget` |
 | **管理面板** | 设置页「记忆」:浏览 / 搜索 / 编辑 / 删除、向量服务启停、模型与硬件、维护(卸载 / 清空) |
 | **向量后端一键装** | 面板里选模型 → 下 llama.cpp 运行时 + 模型 → 托管 `llama-server` 进程;内置 8 个模型 + 硬件推荐 + 自定义 GGUF |
@@ -56,19 +57,31 @@ pnpm add @restregular/dsh-memory
 ```jsonc
 memory_save({
   "content": "本仓库用 pnpm 11 安装依赖,PATH 上的 pnpm 10 会踩 ERR_PNPM_UNEXPECTED_STORE",  // 必填,自洽的一句话
-  "scope": "project",                       // global(所有项目) / project(当前工作区)
-  "kind": "fact",                           // fact / decision / preference / procedure / note
+  "scope": "session",        // 可省略 = 当前会话;global(所有项目) / project(当前工作区) / 任意自定义名
+  "kind": "fact",            // fact / decision / preference / procedure / note
   "tags": ["pnpm", "toolchain"],
-  "importance": 0.8                         // 0~1
+  "importance": 0.8          // 0~1
 })
 ```
 
-**2. 检索**:`memory_search({ query: "pnpm 装依赖", scope: "project", topK: 5 })`
-**3. 列出 / 忘记**:`memory_list({ scope: "global", limit: 20 })`、`memory_forget({ id })` 或 `memory_forget({ query, scope })`。
+作用域怎么选:
+
+| 写法 | 含义 |
+| --- | --- |
+| 省略 / `session` | **当前会话**(子代理共享父会话;拿不到会话信息时回退到当前项目) |
+| `project` | 当前工作区(键是 `project:<cwd>`) |
+| `global` | 所有项目共享 |
+| `handbook`、`项目笔记` … | **自定义作用域**:任意名字,首次 `memory_save` 时自动创建 |
+| `session:<id>` / `project:<path>` | 显式钉住某个会话 / 某个工作区 |
+| `all` / `*` | **只在读取时可用**:跨所有已发现的作用域;写入会明确报错 |
+
+**2. 检索**:`memory_search({ query: "pnpm 装依赖", topK: 5 })` —— 省略 `scope` = 会话 + 项目 + global 合并(按来源标注、按 id 去重);`scope: "all"` 查所有作用域;写具体名字则只查那一个。
+**3. 列出 / 忘记**:`memory_list({ limit: 20 })`(默认只列当前会话,末尾附作用域清单 + 记录数)、`memory_forget({ id })` 或 `memory_forget({ query, scope })`(按内容删默认**只作用于当前会话**,防止跨作用域误删)。
 
 **4. 打开面板**:设置页 →「记忆」。面板里能做的事:
 
 - 顶部统计(记忆数 / 作用域数 / 待嵌入向量数)与记录列表(搜索、按作用域筛选、展开编辑、删除)
+- 作用域下拉**动态枚举实际存在的作用域**:`global` 显示「全局」、project 显示 cwd、会话 scope 显示会话标题(拿不到就显示「会话 <id 前 8 位>」)、自定义 scope 显示原名
 - 「向量服务」:状态、地址、启停开关、**模型与硬件**(见下)、维护(卸载向量服务 / 清空记忆数据,两步确认)
 
 面板后端在 `/memory/api`,全部路由:`GET /status`、`GET /records`、`POST /update`、`POST /delete`、`GET /embed/status`、`POST /embed/start|stop`、`GET /embed/model`、`POST /embed/model/refresh|install|install/cancel|uninstall`、`POST /data/wipe`。
@@ -77,11 +90,16 @@ memory_save({
 
 | 路径 | 内容 |
 | --- | --- |
-| `<storeDir>/<scope>.jsonl` | 记忆本体,一行一条。<br>`storeDir` 默认 `.dsh-memory`(相对启动目录),**建议显式配一个绝对路径** |
-| `<storeDir>/<scope>.vec` | 向量边车。首行是身份头 `#<model>\t<dims>`,后面每行 `id\t<base64 向量>` |
+| `<storeDir>/global.jsonl` | global 作用域的记忆,一行一条 |
+| `<storeDir>/projects/<sha1(scope)>.jsonl` | 其它作用域(会话 / 项目 / 自定义)各一个文件;文件名是 scope 键的 SHA-1,所以名字里带路径分隔符也不可能穿越 |
+| `<storeDir>/projects/<sha1(scope)>.vec` | 向量边车。首行是身份头 `#<model>\t<dims>`,后面每行 `id\t<base64 向量>` |
 | `<installRoot>/llamacpp/` | llama-server 运行时(exe + 依赖 dll + `llama-server.log`) |
 | `<installRoot>/models/` | 下载的 GGUF 模型 |
 | `<installRoot>/selected-model.json` | 面板里选过哪一档(比配置优先级低) |
+
+`storeDir` 默认 `.dsh-memory`(相对启动目录),**建议显式配一个绝对路径**。文件是**首次写入才创建**(读一个不存在的 scope 只会得到空结果,不会造出空文件);`projects/` 目录在插件启动时就建好。
+
+scope 键的三种形态:`global`、`project:<cwd>`、`session:<会话 id>`,其余都是自定义名(小写折叠、内部空白折成一个空格、最长 64 字符,禁止 `:`、路径分隔符、控制字符、`..` 与保留名 `global/project/session/all`)。**0.5.0 没有任何数据迁移**:旧的 `project:<cwd>` 文件继续原样读写。
 
 `installRoot` 默认 `~/.dsh/memory-vector`;显式配了 `storeDir` 时取**它的父目录**(所以手写的 `<root>/llamacpp` + `<root>/models` 布局会被直接认出来)。
 
@@ -96,7 +114,11 @@ provider 的配置在顶层,工具 / 注入 / 面板各占一个小节(合并前
   name: '@restregular/dsh-memory'
   config:
     storeDir: '~/.dsh/memory-store'
-    scopes: { global: true, project: true }
+    scopes:
+      global: true
+      project: true
+      session: true                         # 会话作用域(默认开)
+      custom: { enabled: true, max: 200 }   # 自定义作用域:开关 + 数量上限(只数自定义的)
     retrieval:
       topK: 5
       recallN: 30
@@ -118,10 +140,15 @@ provider 的配置在顶层,工具 / 注入 / 面板各占一个小节(合并前
       llm: { enabled: false }     # LLM 重排(可选)
     limits: { maxRecordsPerScope: 2000, maxRecordChars: 4000 }
     secrets: { enabled: true, mode: refuse }
-    tools: { defaultScope: project }              # 或 global;projectScope 默认 project:<cwd>
-    inject: { enabled: true, tokenBudget: 500, topK: 5 }
+    tools: { defaultScope: session }              # session(新默认)/ project / global;projectScope 默认 project:<会话 cwd>
+    inject: { enabled: true, tokenBudget: 500, topK: 5 }   # 可加 extraScopes: ['handbook']
     panel: { route: '/memory/api' }
 ```
+
+- **`tools.defaultScope`** 决定*省略 scope 时写到哪*:`session`(0.5.0 起的默认)、`project`、`global`。会话写不进去(宿主没给会话信息、或 `scopes.session: false`)时**自动回退到当前项目**,不报错。
+- **`scopes.custom.max`** 只统计自定义作用域(已发现 + 已加载去重);到上限后 `memory_save` 新建会被拒并提示可复用的名字(`SCOPE_LIMIT`),写已有作用域不受限。会话/项目/global 既不计入也不受限。
+- **读与写的默认是一致的**:写进会话的东西,`memory_search` 默认就能读回来(合并会话 + 项目 + global,按 id 去重,同分时 session > project > 自定义 > global)。想只看某一个就显式给 `scope`。
+- 旧配置(只有 `scopes: { global: true, project: true }`、`tools.defaultScope: project`)照常工作 —— 不写新字段就是新默认值(`session: true`、`custom: { enabled: true, max: 200 }`),想保持 0.4.x 的老行为就显式写 `tools.defaultScope: project`。
 
 向量检索是**按配置启用**的:写了 `endpoint`、配了 `spawn`、或面板里装了本地后端才会碰网络,否则一个请求都不发,检索自动降级为纯词法(IDF + CJK bigram)。不需要自动召回就 `inject.enabled: false`。
 
@@ -233,6 +260,15 @@ tools/build-single-package.mjs   构建(产物契约检查 + 可选加载验证)
 
 ## 版本
 
+- **0.5.0** —— 作用域重构:
+  - **默认作用域 = 当前会话**:`memory_save` 省略 `scope` 时写进 `session:<会话 id>`(子代理共享父会话;拿不到会话信息或 `scopes.session: false` 时回退当前项目,不报错)。
+  - **读写默认一致**:0.4.x 的写路径默认是 `project:<cwd>`、而 provider 的读路径默认是 `global` —— 写进去的记忆默认检索不到。现在两边都是「会话 + 项目 + global」合并去重(同分时 session > project > 自定义 > global)。
+  - **自定义作用域**:`scope` 可以填任意名字(如 `handbook`、`项目笔记`),首次写入时自动创建;新增 `scopes.custom.enabled` / `scopes.custom.max`(默认 200,只统计自定义的)与 `SCOPE_LIMIT` / `SCOPE_INVALID` 明确报错 —— **取消了"认不出的 scope 静默回退默认值"**。
+  - **`scope: 'all'`**(或 `*`)跨所有已发现作用域读取;写入路径明确报错。`memory_forget({query})` 默认只作用于当前会话,`all` + query 直接拒绝,防批量误删。
+  - **读路径不再创建文件**:`memory_search` / `memory_list` / `memory_forget` / 面板对不存在的 scope 返回空结果;只有 `memory_save` 才会建文件。
+  - 面板:作用域下拉与「作用域数」动态枚举现存作用域,会话 scope 显示会话标题(拿不到就「会话 <id 前 8 位>」)。
+  - **不迁移、不重命名任何文件**:旧的 `global.jsonl` 与 `projects/<sha1>.jsonl` 仍按原路径原样读写;`tools.defaultScope` 保留,新增取值 `session` 并作为默认。
+  - 要完全保持 0.4.x 的写行为:`tools.defaultScope: project`。
 - **0.4.0** —— 单包合并里程碑:面板并入主包(一条 entry)、模型清单与硬件推荐、自定义 GGUF、运行时风味、"一次只保留一份"。
 - **0.3.x 及更早** —— 拆分结构(provider / tools / inject / panel 各自独立 entry)。从 0.3.x 升级请按上面的单行 entry 重新挂载,并把旧的多条 entry 删掉。
 

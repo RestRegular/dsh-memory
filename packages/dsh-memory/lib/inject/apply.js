@@ -14,11 +14,18 @@
  */
                                                   
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-                                                  
-import { MemoryInjector, defaultInjectConfig,                   } from './inject.js'
+import {
+  MemoryInjector,
+  defaultInjectConfig,
+  normalizeExtraScopes,
+  resolveInjectScopes,
+                    
+                           
+                       
+} from './inject.js'
 
                                                                    
-                                                                               
+                                                                    
                        
  
 
@@ -30,14 +37,22 @@ export function apply(ctx         , config                     = {}) {
     tokenBudget: config.tokenBudget ?? defaultInjectConfig.tokenBudget,
     topK: config.topK ?? defaultInjectConfig.topK,
   }
+  const extraScopes = normalizeExtraScopes(config.extraScopes ?? [])
+  const readScopesFor = (memory                     , agent         )                       =>
+    resolveInjectScopes(memory, agent, extraScopes, ctx.get?.('sessions')                               )
 
   // One injector per activation: its repeat-suppression state must live across
   // the steps of a turn (a per-step instance would re-inject every step).
   const injector = new MemoryInjector(
-    async (query, signal) => {
-      const memory = ctx.get('memory')                                
+    async (query, signal, scopes) => {
+      const memory = ctx.get('memory')                                   
       if (!memory?.search) return []
-      return memory.search({ text: query, signal, topK: cfg.topK })
+      return memory.search({
+        text: query,
+        signal,
+        topK: cfg.topK,
+        ...(scopes !== undefined ? { scopes: [...scopes] } : {}),
+      })
     },
     cfg,
   )
@@ -48,10 +63,14 @@ export function apply(ctx         , config                     = {}) {
     // A rejected step must pass through untouched — never rebuild the decision.
     if (!decision || decision.kind === 'reject' || input.signal?.aborted) return decision
     // optional capability: absence (or partial load) → pass through untouched
-    if (!ctx.get('memory')) return decision
+    const memory = ctx.get('memory')                                   
+    if (!memory) return decision
 
+    // 会话上下文只在 pre-step 里拿得到:交给 search 的 `scopes`,与 memory_search 的
+    // 默认合并集合用同一套解析(provider 的 resolveReadScopes)。
+    const scopes = readScopesFor(memory, (input                       ).agent)
     const text = await injector.maybeInject(
-      { messages: input.messages         , signal: input.signal },
+      { messages: input.messages         , signal: input.signal, ...(scopes !== undefined ? { scopes } : {}) },
       { messages: decision.messages          },
     )
     if (!text) return decision

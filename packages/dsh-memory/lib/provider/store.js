@@ -3,7 +3,7 @@
  * atomic compaction (tmp + rename). Vectors live in memory for M1; the .vec
  * sidecar format arrives in M1.5.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { Buffer } from 'node:buffer'
 import { dirname, join } from 'node:path'
@@ -13,17 +13,30 @@ import { dirname, join } from 'node:path'
                                 
  
 
+/** 文件存在且是普通文件(目录同名时 existsSync 也为 true,这里只认文件)。 */
+function fileExists(file        )          {
+  try {
+    return statSync(file).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * scope 键 → 文件名。**保持不变**(数据兼容的硬约束):
+ *   global        → global.jsonl
+ *   其他任意键     → projects/<sha1(key)>.jsonl
+ * 哈希文件名的好处是结构上不可能路径穿越、也没有 Windows 保留名问题;代价是不可读,
+ * 所以面板用 /status 的 label 字段负责展示(见 memory-panel/lib/index.js)。
+ */
 export function scopeFileName(scope             )         {  if (scope === 'global') return 'global.jsonl'
   const hash = createHash('sha1').update(scope).digest('hex')
   return join('projects', `${hash}.jsonl`)
 }
 
-/** Derive the scope for records loaded from a file path. */
-export function scopeFromFile(file        , knownScopes                          )                     {
-  if (file.endsWith('global.jsonl')) return 'global'
-  const base = file.split(/[\\/]/).pop() ?? ''
-  for (const [scope, name] of knownScopes) if (name === base) return scope
-  return null
+/** 自定义 scope(既不是 global,也不是 project:/session: 前缀)。 */
+export function isCustomScopeKey(scope             )          {
+  return scope !== 'global' && !scope.startsWith('project:') && !scope.startsWith('session:')
 }
 
 /**
@@ -278,7 +291,7 @@ export class MemoryStore {
 
           loadScope(scope             )       {
     const file = this.fileFor(scope)
-    if (!existsSync(file)) return
+    if (!fileExists(file)) return
     let text        
     try {
       text = readFileSync(file, 'utf8')
@@ -324,6 +337,38 @@ export class MemoryStore {
       this.loadScope(scope)
     }
     return s
+  }
+
+  /**
+   * 读路径的 scope 访问:已加载就返回;**磁盘上有数据**就加载并返回;都没有则 `undefined`。
+   *
+   * 与 `scope()` 的区别是这里绝不创建:早先 `search`/`list`/`forget`/面板 /records 都走
+   * `scope()`,于是"查一个不存在的 scope"会在内存里造出一个空 store,`allScopes()` 立刻把它
+   * 算进"作用域数",后续任何一次 flush 还会给它落一个空文件。读路径必须无副作用。
+   */
+  peek(scope             )                         {
+    const existing = this.scopes.get(scope)
+    if (existing) return existing
+    const file = join(this.root, scopeFileName(scope))
+    if (!fileExists(file)) return undefined
+    return this.scope(scope)
+  }
+
+  /** 自定义 scope 数(去重后);用于 scopes.custom.max 限额,会话/项目/global 不计入。 */
+  customScopeCount()         {
+    const seen = new Set             ()
+    for (const s of this.scopes.values()) {
+      if (isCustomScopeKey(s.scope)) seen.add(s.scope)
+    }
+    const projDir = join(this.root, 'projects')
+    if (existsSync(projDir)) {
+      for (const file of readdirSync(projDir)) {
+        if (!file.endsWith('.jsonl')) continue
+        const scope = firstScopeInFile(join(projDir, file))
+        if (scope !== null && isCustomScopeKey(scope)) seen.add(scope)
+      }
+    }
+    return seen.size
   }
 
   allScopes()               {
@@ -440,7 +485,9 @@ export class MemoryStore {
 
   /** Substring match over normalized content, used by forget-by-query. */
   findIdsByQuery(scope             , query        )           {
-    const s = this.scope(scope)
+    // 读/删路径:用 peek,不存在的 scope 返回空,绝不创建。
+    const s = this.peek(scope)
+    if (!s) return []
     const needle = normalizeContent(query)
     if (!needle) return []
     const ids           = []

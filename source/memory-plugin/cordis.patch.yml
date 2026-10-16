@@ -9,6 +9,10 @@
     scopes:
       global: true
       project: true
+      session: true                 # 写路径默认落"当前会话";会话标题由 DSH 提供
+      custom:
+        enabled: true               # 允许 memory_save 用任意名字自建 scope
+        max: 200                    # 只统计自定义 scope;会话/项目/global 不计入
     retrieval:
       topK: 5
       recallN: 30
@@ -26,11 +30,12 @@
       enabled: true
       mode: refuse
     tools:
-      defaultScope: project
-      # projectScope 缺省用 project:<cwd>;要固定团队库可显式指定
+      defaultScope: session         # session(新默认)/ project / global;省略 scope 时写到哪
+      # projectScope 缺省用 project:<会话 cwd>;要固定团队库可显式指定
     inject:
       enabled: true
       tokenBudget: 500
       topK: 5
+      # extraScopes: ['handbook']    # 额外参与自动召回的 scope(默认是 会话+项目+global)
     panel:
       route: '/memory/api'

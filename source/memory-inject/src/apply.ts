@@ -14,11 +14,18 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { MemoryServiceApi } from 'dsh-memory'
-import { MemoryInjector, defaultInjectConfig, type InjectConfig } from './inject.ts'
+import {
+  MemoryInjector,
+  defaultInjectConfig,
+  normalizeExtraScopes,
+  resolveInjectScopes,
+  type InjectConfig,
+  type InjectMemoryService,
+  type SessionRegistry,
+} from './inject.ts'
 
 export interface MemoryInjectConfig extends Partial<InjectConfig> {
-  /** Save/forget tools will land here when unset (project:<cwd> style key). */
+  /** @deprecated 用 provider 的项目键(默认 project:<会话 cwd>);保留仅为兼容旧配置。 */
   projectScope?: string
 }
 
@@ -30,14 +37,22 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
     tokenBudget: config.tokenBudget ?? defaultInjectConfig.tokenBudget,
     topK: config.topK ?? defaultInjectConfig.topK,
   }
+  const extraScopes = normalizeExtraScopes(config.extraScopes ?? [])
+  const readScopesFor = (memory: InjectMemoryService, agent: unknown): string[] | undefined =>
+    resolveInjectScopes(memory, agent, extraScopes, ctx.get?.('sessions') as SessionRegistry | undefined)
 
   // One injector per activation: its repeat-suppression state must live across
   // the steps of a turn (a per-step instance would re-inject every step).
   const injector = new MemoryInjector(
-    async (query, signal) => {
-      const memory = ctx.get('memory') as MemoryServiceApi | undefined
+    async (query, signal, scopes) => {
+      const memory = ctx.get('memory') as InjectMemoryService | undefined
       if (!memory?.search) return []
-      return memory.search({ text: query, signal, topK: cfg.topK })
+      return memory.search({
+        text: query,
+        signal,
+        topK: cfg.topK,
+        ...(scopes !== undefined ? { scopes: [...scopes] } : {}),
+      })
     },
     cfg,
   )
@@ -48,10 +63,14 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
     // A rejected step must pass through untouched — never rebuild the decision.
     if (!decision || decision.kind === 'reject' || input.signal?.aborted) return decision
     // optional capability: absence (or partial load) → pass through untouched
-    if (!ctx.get('memory')) return decision
+    const memory = ctx.get('memory') as InjectMemoryService | undefined
+    if (!memory) return decision
 
+    // 会话上下文只在 pre-step 里拿得到:交给 search 的 `scopes`,与 memory_search 的
+    // 默认合并集合用同一套解析(provider 的 resolveReadScopes)。
+    const scopes = readScopesFor(memory, (input as { agent?: unknown }).agent)
     const text = await injector.maybeInject(
-      { messages: input.messages as never, signal: input.signal },
+      { messages: input.messages as never, signal: input.signal, ...(scopes !== undefined ? { scopes } : {}) },
       { messages: decision.messages as never },
     )
     if (!text) return decision

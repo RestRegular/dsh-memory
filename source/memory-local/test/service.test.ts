@@ -15,8 +15,12 @@ const PROJECT: MemoryScope = 'project:test-workspace'
 let svc: LocalMemoryService
 
 beforeEach(() => {
+  // 0.5.0:provider 自己的默认写口径是 'session'(拿不到会话时回退项目 scope)。测试里
+  // 没有 agent 上下文,所以显式把"当前项目"设成固定的 PROJECT —— 这样读写两边看到的是
+  // 同一个 scope,与旧用例的语义一致(旧的 setDefaultScope(PROJECT) 只影响写路径)。
   svc = new LocalMemoryService({ storeDir: DIR, scopes: { global: true, project: true } })
-  svc.setDefaultScope(PROJECT)
+  svc.setDefaultScope('project')
+  svc.setProjectScope(PROJECT)
 })
 
 after(() => {
@@ -96,7 +100,8 @@ test('persistence: records survive reopen from disk', async () => {
   const r = await svc.save({ scope: PROJECT, kind: 'decision', content: '选择 JSONL 而非 sqlite 作为 M1 存储' })
   svc.flushSync()
   const reopened = new LocalMemoryService({ storeDir: DIR, scopes: { global: true, project: true } })
-  reopened.setDefaultScope(PROJECT)
+  reopened.setDefaultScope('project')
+  reopened.setProjectScope(PROJECT)
   const records = await reopened.list({ scope: PROJECT })
   assert.ok(records.some((x) => x.id === r.id))
   reopened.flushSync()
@@ -119,7 +124,8 @@ test('store writes valid JSONL atomically (no .tmp leftovers)', async () => {
 function toolOptsWith(mock: Record<string, Function>) {
   return {
     getService: () => mock as never,
-    defaultScope: () => PROJECT,
+    defaultScope: 'project' as const,
+    projectScope: PROJECT,
   }
 }
 
@@ -139,6 +145,45 @@ test('tools: save validates and forwards scope resolution', async () => {
   await assert.rejects(() => tools.memory_save.execute({ content: 'x', importance: 2 }), /importance/)
 })
 
+test('tools: 省略 scope 时由 provider 落点(会话优先),不再猜测', async () => {
+  const calls: Array<Record<string, unknown>> = []
+  const service = {
+    save: async (input: Record<string, unknown>) => {
+      calls.push(input)
+      return { id: 'id-2', scope: (input.scope as string) ?? 'session:s1', content: 'x' }
+    },
+    // 有会话的 provider:写路径落 session:s1
+    resolveReadScopes: () => ['session:s1', PROJECT, 'global'],
+  }
+  const tools = memoryTools({ getService: () => service as never, defaultScope: 'session', projectScope: PROJECT })
+  const saved = await tools.memory_save.execute({ content: '会话内记一条' })
+  assert.equal(saved.scope, 'session:s1', '省略 scope → 当前会话')
+  // 没有会话上下文的 provider:回退到项目 scope(不报错)
+  const noSessionCalls: Array<Record<string, unknown>> = []
+  const noSessionService = {
+    save: async (input: Record<string, unknown>) => {
+      noSessionCalls.push(input)
+      return { id: 'id-3', scope: (input.scope as string) ?? PROJECT, content: 'x' }
+    },
+    resolveReadScopes: () => [PROJECT, 'global'],
+  }
+  const tools2 = memoryTools({ getService: () => noSessionService as never, defaultScope: 'session', projectScope: PROJECT })
+  const saved2 = await tools2.memory_save.execute({ content: '无会话上下文' })
+  assert.equal(saved2.scope, PROJECT, '拿不到会话 → 回退项目 scope')
+  assert.equal(noSessionCalls.length, 1, '保存只发生一次')
+  // 省略 scope 时不带 scope 字段:provider 的 save 是默认值的唯一权威
+  assert.equal('scope' in noSessionCalls[0]!, false)
+})
+
+test('tools: 非法 scope 报 SCOPE_INVALID,不再静默回退', async () => {
+  const opts = toolOptsWith({ save: async () => ({ id: 'x', scope: 'x', content: 'x' }) })
+  const tools = memoryTools(opts)
+  await assert.rejects(
+    () => tools.memory_save.execute({ content: 'x', scope: '../etc/passwd' }),
+    (e: Error & { code?: string }) => e.code === 'SCOPE_INVALID',
+  )
+})
+
 test('tools: forget enforces xor(id, query)', async () => {
   const opts = toolOptsWith({ forget: async () => ({ removed: 1, ids: ['a'] }) })
   const tools = memoryTools(opts)
@@ -149,6 +194,6 @@ test('tools: forget enforces xor(id, query)', async () => {
 })
 
 test('tools: unavailable service fails with clear code', async () => {
-  const tools = memoryTools({ getService: () => undefined, defaultScope: () => PROJECT })
+  const tools = memoryTools({ getService: () => undefined, defaultScope: 'project', projectScope: PROJECT })
   await assert.rejects(() => tools.memory_search.execute({ query: 'x' }), /not loaded/)
 })

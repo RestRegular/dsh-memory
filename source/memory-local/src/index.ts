@@ -14,7 +14,15 @@ import type {
   MemoryScope,
   MemoryServiceApi,
 } from 'dsh-memory'
-import { MemoryStore, type ScopeStore } from './store.ts'
+import { MemoryStore, scopeFileName, type ScopeStore } from './store.ts'
+import {
+  isCustomScope,
+  resolveCurrentScopes,
+  scopeKind,
+  scopeTier,
+  writeScopeForDefault,
+  type ScopeKey,
+} from './scope.ts'
 import { buildStats, lexicalScore, recordScore, tokenize, cosine, normalizeInPlace, hasStrongHit } from './scoring.ts'
 import { EmbedClient } from './embed.ts'
 import { DailyBudget, blendScores, rerank, type LlmInvoke, type RerankConfig } from './rerank.ts'
@@ -57,7 +65,16 @@ function isInside(parent: string, child: string): boolean {
 export interface MemoryLocalConfig {
   /** Store root directory. Created if missing. */
   storeDir?: string
-  scopes?: { global?: boolean; project?: boolean }
+  /**
+   * 作用域开关。`global` / `project` / `session` 是布尔(关掉后对应 scope 的**写**一律
+   * SCOPE_DISABLED);`custom` 既接受布尔(兼容简写)也接受 `{ enabled, max }`。
+   */
+  scopes?: {
+    global?: boolean
+    project?: boolean
+    session?: boolean
+    custom?: boolean | { enabled?: boolean; max?: number }
+  }
   retrieval?: {
     topK?: number
     recallN?: number
@@ -136,6 +153,12 @@ export interface ResolvedConfig {
   storeDir: string
   globalEnabled: boolean
   projectEnabled: boolean
+  /** 会话 scope 开关(scopes.session,默认 true)。关掉后写路径回退到 project。 */
+  sessionEnabled: boolean
+  /** 自定义 scope 开关(scopes.custom.enabled,默认 true)。 */
+  customEnabled: boolean
+  /** 自定义 scope 数量上限(scopes.custom.max,默认 200)。 */
+  customMaxScopes: number
   topK: number
   recallN: number
   globalThreshold: number
@@ -358,10 +381,20 @@ export function resolveConfig(config: MemoryLocalConfig = {}): ResolvedConfig {
   const configured = endpointConfigured || spawnConfigured
   const vectorEnabled = v.enabled ?? configured
   const flavor = selection.flavor ?? 'cpu'
+  // scopes.custom 既可能是布尔(简写)也可能是对象 —— 两种都要认,旧配置(只有
+  // global/project 两个布尔)当然照常工作。
+  const customCfg = config.scopes?.custom
+  const customEnabled = typeof customCfg === 'boolean' ? customCfg : (customCfg?.enabled ?? true)
+  const customMax = typeof customCfg === 'object' && customCfg !== null && typeof customCfg.max === 'number'
+    ? customCfg.max
+    : 200
   return {
     storeDir,
     globalEnabled: config.scopes?.global ?? true,
     projectEnabled: config.scopes?.project ?? true,
+    sessionEnabled: config.scopes?.session ?? true,
+    customEnabled,
+    customMaxScopes: customMax,
     topK: config.retrieval?.topK ?? 5,
     recallN: config.retrieval?.recallN ?? 30,
     globalThreshold: config.retrieval?.globalThreshold ?? 0.12,
@@ -448,8 +481,12 @@ export class LocalMemoryService implements MemoryServiceApi {
   private rerankCache = new RerankCache()
   /** Host-provided one-shot LLM call; null = rerank disabled (recall order). */
   private llmInvoke: LlmInvoke | null = null
-  /** Where saves land when the caller does not pin a scope. */
-  private defaultScope: MemoryScope = 'global'
+  /** 写路径的默认口径(tools.defaultScope);'session' 拿不到会话时回退 project。 */
+  private defaultWriteScope: 'session' | 'project' | 'global' = 'session'
+  /** 当前项目 scope 键;缺省 project:<启动 cwd>。 */
+  private projectScope: MemoryScope = `project:${process.cwd()}`
+  /** 上次发现磁盘 scope 的时间(限流用;0 = 还没发现过)。 */
+  private discoveredAt = 0
 
   constructor(config: MemoryLocalConfig = {}) {
     this.cfg = resolveConfig(config)
@@ -461,7 +498,13 @@ export class LocalMemoryService implements MemoryServiceApi {
     // whenever the dimensions matched — and the next flush would then rewrite the
     // header as the new model, making the mismatch permanent.
     this.store.setVecIdentity(this.cfg.vector.model, this.cfg.vector.dims)
-    this.store.loadAll(this.cfg.projectEnabled && this.cfg.globalEnabled ? [this.defaultScope, 'global'] : [this.defaultScope])
+    // 会话 scope 是按会话动态生成的,**不能**在这里 eager 加载(加载谁?);只预载
+    // project 与 global 这两个稳定作用域。其余按需 peek/loadDiscovered。
+    // eager 只加载"已存在"的 scope(peek),不会为不存在的 scope 建空文件。
+    const eager: MemoryScope[] = []
+    if (this.cfg.projectEnabled) eager.push(this.projectScope)
+    if (this.cfg.globalEnabled) eager.push('global')
+    for (const scope of eager) this.store.peek(scope)
     this.embed = new EmbedClient({
       endpoint: this.cfg.vector.endpoint,
       model: this.cfg.vector.model,
@@ -936,8 +979,22 @@ export class LocalMemoryService implements MemoryServiceApi {
     return this.backfillAll({ throttleMs: 100 })
   }
 
-  setDefaultScope(scope: MemoryScope): void {
-    this.defaultScope = scope
+  /**
+   * 写路径默认 scope 口径(tools.defaultScope 取值)。
+   * 兼容:旧调用方传的是**具体 scope 键**(如 'project:<cwd>'),此时按"固定项目"处理。
+   */
+  setDefaultScope(scope: 'session' | 'project' | 'global' | MemoryScope): void {
+    if (scope === 'session' || scope === 'project' || scope === 'global') {
+      this.defaultWriteScope = scope
+      return
+    }
+    this.defaultWriteScope = 'project'
+    this.projectScope = scope as MemoryScope
+  }
+
+  /** 固定项目 scope(默认 project:<启动 cwd>);宿主装配用它对齐 session.header.cwd。 */
+  setProjectScope(scope: MemoryScope): void {
+    this.projectScope = scope
   }
 
   /**
@@ -950,22 +1007,104 @@ export class LocalMemoryService implements MemoryServiceApi {
     this.llmInvoke = invoke
   }
 
-  get activeDefaultScope(): MemoryScope {
-    return this.defaultScope
+  /** 写路径默认口径('session' | 'project' | 'global')。 */
+  get activeDefaultScope(): 'session' | 'project' | 'global' {
+    return this.defaultWriteScope
+  }
+
+  get activeProjectScope(): MemoryScope {
+    return this.projectScope
   }
 
   private assertScopeAllowed(scope: MemoryScope): void {
-    if (scope === 'global' && !this.cfg.globalEnabled) {
-      throw memoryError('SCOPE_DISABLED', 'global scope is disabled by configuration')
+    if (scope === 'global') {
+      if (!this.cfg.globalEnabled) throw memoryError('SCOPE_DISABLED', 'global scope is disabled by configuration')
+      return
     }
-    if (scope.startsWith('project:') && !this.cfg.projectEnabled) {
-      throw memoryError('SCOPE_DISABLED', 'project scope is disabled by configuration')
+    if (scope.startsWith('project:')) {
+      if (!this.cfg.projectEnabled) throw memoryError('SCOPE_DISABLED', 'project scope is disabled by configuration')
+      return
     }
+    if (scope.startsWith('session:')) {
+      if (!this.cfg.sessionEnabled) throw memoryError('SCOPE_DISABLED', 'session scope is disabled by configuration')
+      return
+    }
+    if (!this.cfg.customEnabled) throw memoryError('SCOPE_DISABLED', 'custom scopes are disabled by configuration')
+  }
+
+  /**
+   * scopes.custom.max 只统计**新建**的自定义 scope,而且只统计自定义的
+   * (会话 / project / global 既不计入也不受限)。
+   *
+   * 计数走 `store.customScopeCount()`,它会顺带扫一遍磁盘 —— 只在"内存里的已加载数已经触到
+   * 上限"时才真扫,否则直接放行,避免每次保存都读一遍 projects/ 目录。
+   */
+  private assertCustomScopeBudget(scope: MemoryScope): void {
+    if (!isCustomScope(scope)) return
+    if (this.store.peek(scope) !== undefined) return // 已存在(内存或磁盘)→ 写入不受限
+    const loaded = this.store.allScopes().filter((s) => isCustomScope(s.scope)).length
+    if (loaded < this.cfg.customMaxScopes && this.store.customScopeCount() < this.cfg.customMaxScopes) return
+    throw memoryError(
+      'SCOPE_LIMIT',
+      `custom scope limit reached (${this.cfg.customMaxScopes}); reuse an existing scope instead. ${this.scopeInventory(5)}`,
+    )
+  }
+
+  /** 作用域清单(名字 + 条数),给 SCOPE_LIMIT 之类的错误提示用。 */
+  scopeInventory(limit = 20): string {
+    const scopes = this.scopeStats()
+    const lines = scopes.slice(0, limit).map((s) => `${s.scope}(${s.records})`)
+    const rest = scopes.length - lines.length
+    return rest > 0 ? `${lines.join(', ')}, …另有 ${rest} 个` : lines.join(', ')
+  }
+
+  /**
+   * 写路径的 scope 解析:agent 上下文 → 当前会话 / 当前项目;模型省略 scope 时按
+   * `tools.defaultScope`(默认 'session')落点。拿不到会话信息就回退 project,**不抛错**。
+   */
+  resolveWriteScope(agent: unknown, requested?: string): MemoryScope {
+    const refs = this.scopeRefs(agent)
+    const want = requested?.trim()
+    if (want === undefined || want === '' || want.toLowerCase() === 'session') {
+      // scopes.session 关掉时"当前会话"不存在:按 defaultScope 口径回退(默认口径是
+      // session 而会话被关 → project),而不是让写撞上 SCOPE_DISABLED。
+      const session = this.cfg.sessionEnabled ? refs.session : undefined
+      return writeScopeForDefault(this.defaultWriteScope, { ...refs, session })
+    }
+    if (want.toLowerCase() === 'project') return refs.project
+    if (want.toLowerCase() === 'global') return 'global'
+    return requested as MemoryScope // 具体键(project:/session:/自定义名)由工具层 normalize 后传入
+  }
+
+  /** agent 上下文 → { session?, project }(会话能否用由调用方按 scopes.session 决定)。 */
+  scopeRefs(agent: unknown): { session?: MemoryScope; project: MemoryScope } {
+    return resolveCurrentScopes(agent, { projectScope: this.projectScope })
+  }
+
+  /**
+   * 无显式 scope 时的**读取**合并集合:当前会话 + 当前项目 + global(各自开关生效、按 key 去重)。
+   * 工具 / 注入都用它,保证"写进会话的东西,默认读得回来"。
+   */
+  resolveReadScopes(agent: unknown): MemoryScope[] {
+    const refs = this.scopeRefs(agent)
+    const out: MemoryScope[] = []
+    const push = (scope: MemoryScope | undefined, enabled: boolean): void => {
+      if (scope === undefined || !enabled || out.includes(scope)) return
+      out.push(scope)
+    }
+    push(refs.session, this.cfg.sessionEnabled)
+    push(refs.project, this.cfg.projectEnabled)
+    push('global', this.cfg.globalEnabled)
+    return out
   }
 
   async save(input: MemorySaveInput): Promise<MemoryRecord> {
-    const scope = input.scope ?? this.defaultScope
+    // 省略 scope 时按当前会话落点 —— 会话上下文必须**从调用方带进来**
+    // (工具 handler 拿得到 exec.agent,provider 自己看不到)。
+    const scope = input.scope ?? this.resolveWriteScope((input as MemorySaveInput & { agent?: unknown }).agent)
     this.assertScopeAllowed(scope)
+    // 自定义 scope 的**新建**受 scopes.custom.max 限制;写已存在的 scope 不受限。
+    this.assertCustomScopeBudget(scope)
     let content = input.content?.trim()
     if (!content) throw memoryError('CONTENT_EMPTY', 'content must be a non-empty string')
     if (content.length > this.cfg.maxRecordChars) {
@@ -987,7 +1126,7 @@ export class LocalMemoryService implements MemoryServiceApi {
     const { record } = this.store.save(
       { ...input, scope, content },
       { importance: input.source?.origin === 'auto' ? 0.4 : 0.8, source: { origin: 'explicit' } },
-    )
+    ) 
     void this.embedRecord(record).catch(() => {})
     this.store.scheduleFlush()
     return record
@@ -1059,18 +1198,30 @@ export class LocalMemoryService implements MemoryServiceApi {
   }
 
   async search(query: MemoryQuery): Promise<MemoryHit[]> {
+    // 多 scope 合并由调用方显式给出(工具层传"会话 + 项目 + global");宿主类型里的
+    // MemoryQuery 只有单值 scope,所以这里按结构化读一次可选数组,保持原语义不变。
+    const queryScopes = (query as MemoryQuery & { scopes?: MemoryScope[] }).scopes
     const topK = query.topK ?? this.cfg.topK
     const recallN = query.recallN ?? this.cfg.recallN
     const now = Date.now()
     const queryTokens = [...new Set(tokenize(query.text))]
 
-    // candidate scopes: pinned, else project + global
-    const stores: { store: ScopeStore; isGlobal: boolean }[] = []
-    if (query.scope) {
-      stores.push({ store: this.store.scope(query.scope), isGlobal: query.scope === 'global' })
-    } else {
-      if (this.cfg.projectEnabled) stores.push({ store: this.store.scope(this.defaultScope), isGlobal: this.defaultScope === 'global' })
-      if (this.cfg.globalEnabled) stores.push({ store: this.store.scope('global'), isGlobal: true })
+    // 候选 scope:显式 pin(单值)优先;否则用调用方给的合并集合(query.scopes,
+    // 工具 / 注入传"会话 + 项目 + global");两者都没有才退回旧的 project + global。
+    // `peek` 而不是 `scope`:读路径不创建,不存在的 scope 直接跳过。
+    const wanted: MemoryScope[] = query.scope
+      ? [query.scope]
+      : (queryScopes ?? []).length > 0
+        ? queryScopes!
+        : [this.projectScope, 'global']
+    const stores: { store: ScopeStore; scope: MemoryScope; isGlobal: boolean }[] = []
+    const seen = new Set<MemoryScope>()
+    for (const scope of wanted) {
+      if (seen.has(scope)) continue // 按 scope key 去重(也顺手消掉 defaultScope==='global' 时的重复 push)
+      seen.add(scope)
+      const store = this.store.peek(scope)
+      if (!store) continue
+      stores.push({ store, scope, isGlobal: scope === 'global' })
     }
 
     // --- channel 1: lexical recall, scored per scope with local IDF ---
@@ -1087,6 +1238,8 @@ export class LocalMemoryService implements MemoryServiceApi {
         if (lex <= 0) continue
         // Weak-only overlap (no shared word/bigram) must clear the "real hit"
         // floor, not the permissive threshold — kills single-char collisions.
+        // 阈值只分两档:global 用 globalThreshold,其余(session / project / 自定义)用
+        // projectThreshold —— 不新增配置项。
         const floor = isGlobal ? this.cfg.globalThreshold : this.cfg.projectThreshold
         const effective = hasStrongHit(queryTokens, tokenSets[i]!) ? floor : Math.max(floor, REAL_HIT_FLOOR)
         if (lex < effective) continue
@@ -1136,7 +1289,13 @@ export class LocalMemoryService implements MemoryServiceApi {
         superseded: supersededIds.has(c.record.id),
       })
 
-    const ranked = [...candidates.values()].sort((a, b) => shape(b) - shape(a)).slice(0, recallN)
+    // 稳定 tie-break:同分时 session > project > 自定义 > global,再同分按 record id ——
+    // 否则 Map 的插入顺序(取决于 scope 顺序)会让同一查询在不同进程间给出不同结果。
+    const ranked = [...candidates.values()]
+      .sort((a, b) => shape(b) - shape(a)
+        || scopeTier(a.record.scope) - scopeTier(b.record.scope)
+        || a.record.id.localeCompare(b.record.id))
+      .slice(0, recallN)
 
     // --- channel 3: LLM rerank (optional; any skip/failure keeps recall order) ---
     const finalScores = new Map<string, number>(ranked.map((c) => [c.id, shape(c)]))
@@ -1176,19 +1335,32 @@ export class LocalMemoryService implements MemoryServiceApi {
     return undefined
   }
 
-  async forget(input: { id?: string; query?: string; scope?: MemoryScope }): Promise<{ removed: number; ids: string[] }> {
+  async forget(input: { id?: string; query?: string; scope?: MemoryScope; scopes?: MemoryScope[] }): Promise<{ removed: number; ids: string[] }> {
     const ids: string[] = []
     if (input.id) {
+      // 按 id 删除天然跨 scope:调用方给的是精确 id,不存在误删别的 scope 的风险。
       for (const s of this.store.allScopes()) {
         if (s.remove(input.id)) ids.push(input.id)
       }
       if (ids.length === 0) throw memoryError('RECORD_NOT_FOUND', `id ${input.id} not found`)
     } else if (input.query) {
-      const scope = input.scope ?? this.defaultScope
-      ids.push(...this.store.findIdsByQuery(scope, input.query))
-      const s = this.store.scope(scope)
-      for (const id of ids) s.remove(id)
-      if (ids.length === 0) throw memoryError('RECORD_NOT_FOUND', `no record matching query in ${scope}`)
+      // 按 query 删除的默认范围由工具层显式给出(默认只有当前会话);这里不再回退到
+      // provider 的默认 scope —— 那正是"以为删了会话记忆、其实删了 global"的来源。
+      const targets = input.scope !== undefined
+        ? [input.scope]
+        : (input.scopes ?? []).length > 0
+          ? input.scopes!
+          : [this.projectScope]
+      const seen = new Set<MemoryScope>()
+      for (const scope of targets) {
+        if (seen.has(scope)) continue
+        seen.add(scope)
+        const store = this.store.peek(scope) // 读/删路径不创建
+        if (!store) continue
+        const hit = this.store.findIdsByQuery(scope, input.query)
+        for (const id of hit) if (store.remove(id)) ids.push(id)
+      }
+      if (ids.length === 0) throw memoryError('RECORD_NOT_FOUND', `no record matching query in ${targets.join(', ')}`)
     } else {
       throw memoryError('RECORD_NOT_FOUND', 'forget requires id or query')
     }
@@ -1196,12 +1368,76 @@ export class LocalMemoryService implements MemoryServiceApi {
     return { removed: ids.length, ids }
   }
 
+  /**
+   * 列记录。显式 scope 只列它;`scopes` 数组用于"全部作用域";两者都没有时退回项目 scope。
+   * 一律走 `peek`,所以列一个不存在的 scope 只会得到空数组,不会造出文件。
+   */
   async list(input: MemoryListInput = {}): Promise<MemoryRecord[]> {
-    const scope = input.scope ?? this.defaultScope
-    let records = [...this.store.scope(scope).records.values()]
+    const wanted = input.scope !== undefined
+      ? [input.scope]
+      : (input.scopes ?? []).length > 0
+        ? input.scopes!
+        : [this.projectScope]
+    const seen = new Set<MemoryScope>()
+    let records: MemoryRecord[] = []
+    for (const scope of wanted) {
+      if (seen.has(scope)) continue
+      seen.add(scope)
+      const store = this.store.peek(scope)
+      if (store) records.push(...store.records.values())
+    }
     if (input.kind) records = records.filter((r) => r.kind === input.kind)
     records.sort((a, b) => b.updatedAt - a.updatedAt)
     return records.slice(0, input.limit ?? 50)
+  }
+
+  /**
+   * 作用域清单(名字 + 条数 + 待嵌入 + 最近活跃时间),给面板 /status 与 memory_list 的尾部清单用。
+   *
+   * 先 `discoverScopes()`:进程内 store 是懒加载的,只列"已加载"的 scope 会让面板/清单
+   * 漏掉别的进程(上一次会话、另一个 agent)写下的作用域。
+   * 排序键是"最近活跃"(`updatedAt`):面板据此只给最近活跃的前 N 个会话 scope 查标题。
+   */
+  scopeStats(): Array<{ scope: MemoryScope; records: number; pendingEmbeds: number; updatedAt: number }> {
+    this.discoverScopes()
+    return this.store.allScopes()
+      .map((s) => ({
+        scope: s.scope,
+        records: s.records.size,
+        pendingEmbeds: s.embedPending.size,
+        updatedAt: [...s.records.values()].reduce((max, r) => Math.max(max, r.updatedAt), 0),
+      }))
+      .sort((a, b) => b.updatedAt - a.updatedAt || b.records - a.records || a.scope.localeCompare(b.scope))
+  }
+
+  /**
+   * 发现磁盘上的 scope(带时间缓存)。面板每次 /status、每次 memory_list 都要一份完整
+   * 清单,而 discovery 要读每个文件的第一条记录 —— 限流到最短 3 秒一次,既保证清单够新,
+   * 也不至于把 projects/ 目录读成热路径(面板侧还有一层同样时长的缓存,旧 provider 也能受益)。
+   */
+  /**
+   * 当前进程已知的 scope 键:**只读**,不触发发现(要完整清单用 discoverScopes()/scopeStats())。
+   */
+  knownScopes(): MemoryScope[] {
+    return this.store.allScopes().map((s) => s.scope)
+  }
+
+  /**
+   * 发现磁盘上的 scope(带时间缓存)。面板每次 /status、每次 memory_list 都要一份完整
+   * 清单,而 discovery 要读每个文件的第一条记录 —— 限流到最短 3 秒一次,既保证清单够新,
+   * 也不至于把 projects/ 目录读成热路径(面板侧还有一层同样时长的缓存,旧 provider 也能受益)。
+   */
+  discoverScopes(): MemoryScope[] {
+    const now = Date.now()
+    if (this.discoveredAt === 0 || now - this.discoveredAt >= DISCOVER_TTL_MS) {
+      this.discoveredAt = now
+      try {
+        this.store.loadDiscovered()
+      } catch {
+        // 发现失败不影响读写,清单里少几个而已
+      }
+    }
+    return this.knownScopes()
   }
 
   /** Force a synchronous flush (dispose/HMR path). */
@@ -1264,6 +1500,9 @@ function memoryError(code: string, message: string): Error & { code: string } {
   err.code = code
   return err
 }
+
+/** discoverScopes() 的最短间隔:清单要够新,但 projects/ 目录不该被读成热路径。 */
+const DISCOVER_TTL_MS = 3000
 
 export function createMemoryService(config: MemoryLocalConfig = {}): LocalMemoryService {
   return new LocalMemoryService(config)

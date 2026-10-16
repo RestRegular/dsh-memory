@@ -8,12 +8,12 @@
  *   - apply 整体兜底 catch:任何意外都不允许向外抛。
  *
  * 提供管理员 API(前缀路由 /memory/api):
- *   GET  /status    各 scope 记录数 + 待嵌入数
+ *   GET  /status    各 scope 记录数 + 待嵌入数 + 展示标签
  *   GET  /records   ?scope=&q=  枚举/过滤记录
  *   POST /update    {id, content?, kind?, importance?, tags?, supersededBy?}
  *   POST /delete    {id}
- * scope 惰性加载是同步的(store.scope()),无需 ready 门。内容编辑会作废旧向量
- * 并加入 embedPending,由 provider 的回填队列重新嵌入。
+ * scope 惰性加载是同步的(store.peek(),**读路径不创建**),无需 ready 门。内容编辑会作废旧
+ * 向量并加入 embedPending,由 provider 的回填队列重新嵌入。
  *
  * 安全(每个路由都过 refuseRequest,见下):
  *   注册在裸 webServer 上的路由**既不在宿主的 /api 围栏之后,也不在浏览器登录
@@ -22,6 +22,11 @@
  *   可被无 session 调用 = 任意代码执行)。这里的读接口能读出全部记忆,写接口能改写、
  *   删除、清空,还能拉起/卸载向量服务,所以必须自己问一次。
  */
+// scope 规范化与 provider 共用同一份实现。路径按**源码树位置**写:构建脚本的改写表
+// 会把它落成产物里的 `../provider/scope.js`(`lib/panel.js` → `lib/provider/scope.js`),
+// 在源码树里同一路径直接命中 source/memory-local/src —— 测试与真实加载都能解析。
+import { normalizeScopeInput } from './provider/scope.js'
+
 
 function writeJson(res, body, status = 200) {
   try {
@@ -125,6 +130,62 @@ async function readJsonBody(req) {
   return raw.length > 0 ? JSON.parse(raw) : {}
 }
 
+/**
+ * scope 键 → **不需要查宿主服务**的展示标签。
+ *   global        → 「全局」
+ *   project:<cwd> → cwd
+ *   session:<id>  → 「会话 <id 前 8 位>」
+ *   其他           → 原名(自定义 scope)
+ */
+function fallbackScopeLabel(scope) {
+  if (scope === 'global') return '全局'
+  if (scope.startsWith('project:')) return scope.slice('project:'.length)
+  if (scope.startsWith('session:')) return `会话 ${scope.slice('session:'.length, 'session:'.length + 8)}`
+  return scope
+}
+
+/**
+ * scope 键 → 展示标签。在 fallback 之上多一步:会话 scope 尽力取会话标题
+ * (宿主 `sessionTitle` 服务的 `get(session)` → `{ title }`,见 @deepseek-ai/dsh-session-title)。
+ * 所有宿主服务访问都在 try/catch 里:面板绝不能因为拿不到标题而失败。
+ */
+function scopeLabel(ctx, scope) {
+  if (!scope.startsWith('session:')) return fallbackScopeLabel(scope)
+  const id = scope.slice('session:'.length)
+  const short = id.slice(0, 8)
+  try {
+    const session = ctx?.get?.('sessions')?.get?.(id)
+    if (session !== undefined) {
+      const title = ctx.get('sessionTitle')?.get?.(session)?.title
+      if (typeof title === 'string' && title.length > 0) return `${title}(${short})`
+    }
+  } catch { /* 标题是尽力而为 */ }
+  return `会话 ${short}`
+}
+
+/** 会话 scope 查标题的上限:标题要读会话事件日志,scope 多了它就成了 /status 的大头。 */
+const TITLE_LOOKUP_LIMIT = 50
+/** discovery(读每个 scope 文件的第一条记录)结果的缓存时长。 */
+const DISCOVER_CACHE_MS = 3000
+/** 每个 memory 服务的发现缓存。面板看不到进程数,所以按服务实例各存一份。 */
+const discoveryCache = new WeakMap()
+
+/**
+ * 发现磁盘上的 scope,3 秒内只做一次。
+ * 面板每个请求都想要一份完整清单(别的进程写下的 scope 也要看得见),而 discovery 要
+ * 读每个文件的第一条记录 —— 没有缓存的话刷新一下就是一次全目录扫描。
+ */
+function discoverScopes(memory, store) {
+  const now = Date.now()
+  const cached = discoveryCache.get(memory)
+  if (cached !== undefined && now - cached.at < DISCOVER_CACHE_MS) return
+  discoveryCache.set(memory, { at: now })
+  try {
+    if (typeof memory.discoverScopes === 'function') memory.discoverScopes()
+    else store.loadDiscovered?.()
+  } catch { /* discovery is best-effort */ }
+}
+
 function wireRecord(rec, scopeStore) {
   return {
     id: rec.id,
@@ -164,14 +225,18 @@ async function handle(ctx, routePath, req, res) {
     const store = memory.store
     // Scopes are created lazily, so a fresh process only knows the ones it has
     // touched. A management view must see everything written on disk (project
-    // memories from earlier sessions included) — best-effort discovery.
-    try { store.loadDiscovered?.() } catch { /* discovery is best-effort */ }
+    // memories from earlier sessions included) — best-effort discovery, cached.
+    discoverScopes(memory, store)
 
     if (method === 'GET' && path === '/status') {
-      const scopes = store.allScopes().map((s) => ({
-        scope: s.scope,
-        records: s.records.size,
-        pendingEmbeds: s.embedPending.size,
+      const stats = typeof memory.scopeStats === 'function'
+        ? memory.scopeStats()
+        : store.allScopes().map((s) => ({ scope: s.scope, records: s.records.size, pendingEmbeds: s.embedPending.size }))
+      // 会话标题是尽力而为的增强,而且要读会话事件日志:只给最近活跃的前 N 个查,
+      // 其余直接用「会话 <id 前 8 位>」。列表本身**始终**完整(不受这个上限影响)。
+      const scopes = stats.map((s, index) => ({
+        ...s,
+        label: index < TITLE_LOOKUP_LIMIT ? scopeLabel(ctx, s.scope) : fallbackScopeLabel(s.scope),
       }))
       let embedServer = null
       // older providers have no lifecycle API — the panel simply omits the card
@@ -259,10 +324,34 @@ async function handle(ctx, routePath, req, res) {
       return
     }
     if (method === 'GET' && path === '/records') {
-      const scope = url.searchParams.get('scope')
+      const rawScope = url.searchParams.get('scope')
       const query = (url.searchParams.get('q') ?? '').trim().toLowerCase()
-      const stores = scope ? [store.scope(scope)] : store.allScopes()
-      let records = stores.flatMap((s) => collectScope(s))
+      // scope 先过同一套规范化:非法 → 400(而不是当成一个陌生 scope 去建文件);
+      // 合法但不存在的 scope → 空列表。`peek`/`peekScope`,**绝不通过 store.scope() 创建**。
+      let scope = null
+      if (rawScope !== null && rawScope.trim() !== '') {
+        const normalized = normalizeScopeInput(rawScope)
+        if (!normalized.ok) throw new ApiError(400, normalized.code, normalized.message)
+        if (normalized.kind === 'all') {
+          scope = null // 全部
+        } else if (normalized.kind === 'current-session' || normalized.kind === 'current-project') {
+          // 面板不在某个 agent 里:按 provider 的读取集合解析('project' → 当前项目键);
+          // 解析不出会话时就退化为全部,而不是报错。
+          const refs = typeof memory.resolveReadScopes === 'function' ? memory.resolveReadScopes(undefined) : []
+          scope = refs.length > 0 ? refs : null
+        } else {
+          scope = normalized.scope ?? null
+        }
+      } else {
+        scope = null
+      }
+      const stores = scope === null
+        ? store.allScopes()
+        : (Array.isArray(scope) ? scope : [scope])
+            .map((s) => store.peek(s))
+            .filter((s) => s !== undefined)
+      let records = []
+      for (const s of stores) records.push(...collectScope(s))
       if (query) {
         records = records.filter((r) =>
           r.content.toLowerCase().includes(query)
@@ -321,6 +410,8 @@ async function handle(ctx, routePath, req, res) {
 }
 
 export const name = 'dsh-memory-panel'
+/** 路由处理器(导出供测试直接调用:围栏、规范化、peek 行为都在这里)。 */
+export { handle as handleRequest }
 export function apply(ctx, config = {}) {
   const routePath = String(config.route || '/memory/api').replace(/\/$/, '')
   try {
@@ -351,3 +442,6 @@ export function apply(ctx, config = {}) {
     console.error('[dsh-memory-panel] apply 意外失败(已吞掉,不影响启动):', error?.message)
   }
 }
+
+
+//# sourceURL=source/memory-panel/lib/index.js
