@@ -17,8 +17,6 @@ English: Local, durable memory for DeepSeek Harness — one npm package, one loa
 
 ![memory_search 工具调用](./preview/memory-search.png)
 
-更多截图见 [`preview/`](./preview/)。
-
 ## 它给你什么
 
 | 能力 | 说明 |
