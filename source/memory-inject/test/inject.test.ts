@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   pickQueryText,
   renderRecallBlock,
+  hasRecallMessage,
   MemoryInjector,
   defaultInjectConfig,
   type MemoryHit,
@@ -93,4 +94,21 @@ test('injector respects disabled config and empty hit list', async () => {
   assert.equal(await off.maybeInject(input, input), undefined)
   const empty = new MemoryInjector(async () => [], defaultInjectConfig)
   assert.equal(await empty.maybeInject(input, input), undefined)
+})
+
+test('hasRecallMessage catches a duplicate recall block from a second activation', () => {
+  const text = '以下是与此请求可能相关的长期记忆，供参考（可用 memory_search 核实，用 memory_forget 删除）：\n- 一条记忆'
+  const sourced = (role: string, body: string, kind?: string) => ({
+    role,
+    content: [{ type: 'text', text: body }],
+    ...(kind === undefined ? {} : { source: { kind } }),
+  })
+  // 同一段召回块已经在 decision 里 → 第二次注入必须跳过
+  assert.equal(hasRecallMessage([sourced('user', '你好'), sourced('user', text, 'memory')], text), true)
+  // 普通用户消息不算
+  assert.equal(hasRecallMessage([sourced('user', text, 'user')], text), false)
+  // 记忆消息但内容不同 / 角色不是 user → 不算
+  assert.equal(hasRecallMessage([sourced('user', '别的块', 'memory')], text), false)
+  assert.equal(hasRecallMessage([sourced('assistant', text, 'memory')], text), false)
+  assert.equal(hasRecallMessage([], text), false)
 })

@@ -17,6 +17,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import {
   MemoryInjector,
   defaultInjectConfig,
+  hasRecallMessage,
   normalizeExtraScopes,
   resolveInjectScopes,
   type InjectConfig,
@@ -74,6 +75,9 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
       { messages: decision.messages as never },
     )
     if (!text) return decision
+    // 幂等:同一段召回块已经在 decision 里(另一个激活实例放进去的),不再追加。
+    // 宿主把 entry 应用两次时,两个注入器会各自注入一条逐字相同的消息。
+    if (hasRecallMessage(decision.messages as never, text)) return decision
     const message = createUserMessage({
       content: [{ type: 'text', text }],
       source: { kind: 'memory', form: 'recall' },

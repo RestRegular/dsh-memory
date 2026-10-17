@@ -128,6 +128,32 @@ export function pickQueryText(messages: readonly InputMessageView[]): string {
   return ''
 }
 
+/**
+ * 这一步的 messages 里是否已经有一条内容完全相同的召回块。
+ *
+ * 正常情况下永远不会命中:一个激活只有一个 MemoryInjector,而它自己用 lastText
+ * 去重。但只要宿主把这条 entry 应用了两次(热重载/重新启用时旧 fiber 的
+ * agent/pre-step 监听没被清掉),两个注入器就会各追加一条逐字相同的消息 ——
+ * 表现在会话轨迹里就是同一轮「上下轮」卡片连着出现两次(2026-10-17 实况)。
+ * 注入本身是"多一条也无害、少一条也不坏"的提示块,所以这里按内容做一次幂等:
+ * 另一个实例已经放进去的同一段,就不要再放。
+ */
+export function hasRecallMessage(
+  messages: ReadonlyArray<InputMessageView & { source?: { kind?: string } }>,
+  text: string,
+): boolean {
+  for (const m of messages) {
+    if (m.role !== 'user') continue
+    if (m.source?.kind !== 'memory') continue
+    const joined = (m.content ?? [])
+      .filter((b) => b.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text!)
+      .join('\n')
+    if (joined === text) return true
+  }
+  return false
+}
+
 /** Render hits into a recall text block, greedily within the token budget. */
 export function renderRecallBlock(hits: MemoryHit[], cfg: InjectConfig): { text: string; tokens: number } | null {
   if (hits.length === 0) return null
