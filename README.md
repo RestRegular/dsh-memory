@@ -7,6 +7,14 @@ DeepSeek Harness 的本地长期记忆插件 —— **一个包、一条 Loader 
 
 English: Local, durable memory for DeepSeek Harness — one npm package, one loader entry: a JSONL store, local vector recall through llama-server, four model-facing tools, automatic recall injection, and a management panel in the settings page.
 
+## 预览 / Preview
+
+设置页 →「记忆」:顶部统计、向量服务(状态 / 模型与硬件)、维护(卸载向量服务 / 清空记忆数据)、记录列表(搜索 + 作用域筛选)。
+
+![设置页「记忆」面板](./preview/memory-panel.png)
+
+更多截图见 [`preview/`](./preview/)。
+
 ## 它给你什么
 
 | 能力 | 说明 |
