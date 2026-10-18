@@ -88,3 +88,17 @@ test('importRecords: 拒绝非文档格式与超量导入', async () => {
     await assert.rejects(() => svc.importRecords(Array.from({ length: 5001 }, () => ({ scope: 'global', content: 'x' }))), /IMPORT_TOO_LARGE/)
   })
 })
+test('memory_get: 完整 id 与 8 位前缀都能取到,找不到的进 missing', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-get-'))
+  const svc = new LocalMemoryService({ storeDir: dir, scopes: { global: true, project: true } })
+  try {
+    const rec = await svc.save({ scope: 'global', kind: 'fact', content: '按 id 取的一条' })
+    const prefix = rec.id.slice(0, 8)
+    assert.deepEqual(svc.getByIds([rec.id]).map((r) => r.id), [rec.id])
+    assert.deepEqual(svc.getByIds([prefix]).map((r) => r.id), [rec.id])
+    assert.deepEqual(svc.getByIds(['deadbeef']), [])
+    svc.flushSync()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

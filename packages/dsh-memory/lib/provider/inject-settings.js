@@ -41,12 +41,18 @@
                   
  
 
+/** 界面:是否在左侧栏「插件」下方显示记忆入口(点击在主界面打开面板)。 */
+                                  
+                  
+ 
+
                                  
                         
                         
                                 
                         
                       
+                          
                           
  
 
@@ -57,6 +63,7 @@ export const defaultInjectSettings                 = {
   policy: { enabled: true },
   rules: { enabled: true, maxItems: 10, tokenBudget: 300 },
   turnEnd: { enabled: false },
+  sidebar: { enabled: false },
 }
 
 const clampInt = (value         , min        , max        , fallback        )         => {
@@ -94,6 +101,7 @@ export function normalizeInjectSettings(raw         , base                 = def
   const policy = section('policy')
   const rules = section('rules')
   const turnEnd = section('turnEnd')
+  const sidebar = section('sidebar')
   return {
     recall: {
       enabled: bool(recall.enabled, base.recall.enabled),
@@ -116,6 +124,7 @@ export function normalizeInjectSettings(raw         , base                 = def
       tokenBudget: clampInt(rules.tokenBudget, 50, 4000, base.rules.tokenBudget),
     },
     turnEnd: { enabled: bool(turnEnd.enabled, base.turnEnd.enabled) },
+    sidebar: { enabled: bool(sidebar.enabled, base.sidebar.enabled) },
   }
 }
 

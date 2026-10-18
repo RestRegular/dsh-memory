@@ -120,6 +120,11 @@ export class CordisMemoryService extends Service {
     return this.impl.list(input)
   }
 
+  /** memory_get:按 id 批量取记录。 */
+  getByIds(ids: string[]): MemoryRecord[] {
+    return this.impl.getByIds(ids)
+  }
+
   /** 面板新建记忆 / 规则。 */
   createRecord(input: Parameters<LocalMemoryService['createRecord']>[0]): Promise<MemoryRecord> {
     return this.impl.createRecord(input)

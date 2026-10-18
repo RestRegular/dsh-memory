@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 会话摘要(L1):会话第一步给一次"这个项目/全局已经记了什么"的全景。
  *
  * 与逐轮召回的分工:召回按这一轮的问题找;摘要不按问题,按重要度 × 新鲜度
@@ -9,7 +9,7 @@ import { estimateTokens } from '../../memory-local/src/rerank.ts'
 import type { DigestSettings } from '../../memory-local/src/inject-settings.ts'
 
 const HEADER =
-  '以下是本项目 / 全局已有的长期记忆摘要（按重要度挑出的前几条，省得你重复摸索；' +
+  '以下是本项目 / 全局已有的长期记忆摘要（按重要度挑出的前几条；' +
   '需要原文用 memory_search，删除用 memory_forget）：'
 
 /** scope 的中文标签:global/项目/会话/自定义。 */
@@ -52,7 +52,7 @@ export function renderDigestBlock(
   let tokens = estimateTokens(HEADER) + 4
   const lines: string[] = []
   for (const record of rankForDigest(records).slice(0, cfg.topK)) {
-    const line = `- [${digestScopeLabel(record.scope)}/${record.kind}] ${record.content.replace(/\s+/g, ' ').slice(0, 160)}`
+    const line = `- ${record.id.slice(0, 8)} [${digestScopeLabel(record.scope)}/${record.kind}] ${record.content.replace(/\s+/g, ' ').slice(0, 160)}`
     const cost = estimateTokens(line) + 1
     if (tokens + cost > cfg.tokenBudget) break
     lines.push(line)

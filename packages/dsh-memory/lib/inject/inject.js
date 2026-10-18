@@ -172,12 +172,12 @@ export function renderRecallBlock(
   const impression = options.impression === true
   const chars = impression ? (options.chars ?? 120) : 300
   const header = impression
-    ? '以下是与你这次请求可能相关的记忆（摘要形态；判断相关但需要原文时，用 memory_search 取全文）：'
+    ? '以下是与你这次请求可能相关的记忆摘要：'
     : '以下是与此请求可能相关的长期记忆，供参考（可用 memory_search 核实，用 memory_forget 删除）：'
   let tokens = estimateTokens(header) + 4
   const lines           = []
   for (const h of hits.slice(0, cfg.topK)) {
-    const line = `- ${h.record.content.replace(/\s+/g, ' ').slice(0, chars)}`
+    const line = `- ${h.record.id.slice(0, 8)} ${h.record.content.replace(/\s+/g, ' ').slice(0, chars)}`
     const cost = estimateTokens(line) + 1
     if (tokens + cost > cfg.tokenBudget) break
     lines.push(line)

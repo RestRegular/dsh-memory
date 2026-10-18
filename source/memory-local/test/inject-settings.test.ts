@@ -87,3 +87,8 @@ test('provider: listSync 只读已加载的 scope,按 kind 过滤', async () => 
     rmSync(dir, { recursive: true, force: true })
   }
 })
+test('sidebar: 默认关闭,面板可把它打开', () => {
+  assert.equal(normalizeInjectSettings(undefined).sidebar.enabled, false)
+  const merged = mergeInjectSettings(defaultInjectSettings, { sidebar: { enabled: true } })
+  assert.equal(merged.sidebar.enabled, true)
+})

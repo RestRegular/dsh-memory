@@ -135,21 +135,34 @@ window.__ModuleLoader__.load({
       '.memp .dropitem.on{background:var(--dsw-alias-bg-layer-2)}',
       '.memp .dropitem.on .dropname{font-weight:600;color:var(--dsw-alias-brand-primary)}',
       '.memp .warn{font-size:11.5px;color:var(--dsw-alias-label-secondary)}',
-      // 面板内的标签栏:记录 / 设置
-      '.memp .tabs{display:flex;gap:2px;border-bottom:1px solid var(--dsw-alias-border-l1);margin-bottom:12px}',
-      '.memp .tab{background:none;border:0;border-bottom:2px solid transparent;padding:6px 12px;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:13px}',
-      '.memp .tab.on{color:var(--dsw-alias-brand-primary);border-bottom-color:var(--dsw-alias-brand-primary);font-weight:600}',
-      '.memp .setrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:10px 0;border-bottom:1px solid var(--dsw-alias-border-l1)}',
-      '.memp .setrow .set-title{min-width:132px;font-weight:600;font-size:13px}',
-      '.memp .setrow .set-desc{flex:1 1 100%;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5}',
+      // 面板内的标签栏:分段式按钮(参照宿主设置页的分段控件)
+      '.memp .tabs{display:inline-flex;gap:2px;padding:2px;border-radius:9px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);margin-bottom:14px}',
+      '.memp .tab{background:none;border:0;border-radius:7px;padding:4px 14px;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:13px;line-height:1.6;transition:background .12s ease,color .12s ease}',
+      '.memp .tab:hover{color:var(--dsw-alias-label-primary)}',
+      '.memp .tab.on{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-brand-primary);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.10)}',
+      // 记录视图:各区块之间留出呼吸感(之前全贴在一起)
+      '.memp .memp-body > * + *{margin-top:14px}',
+      '.memp .stats{margin-bottom:0}',
+      '.memp .setrow{display:flex;flex-wrap:wrap;align-items:center;gap:6px 14px;padding:11px 0;border-bottom:1px solid var(--dsw-alias-border-l1)}',
+      '.memp .setrow .set-title{min-width:112px;font-weight:600;font-size:13px}',
+      '.memp .setrow .set-desc{flex:1 1 100%;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
       '.memp .setrow .set-field{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--dsw-alias-label-secondary)}',
       '.memp .setrow input[type=number]{width:78px}',
+      // 开关:与向量服务的 toggle 同一套视觉(轨道 + 圆点)
+      '.memp .switch{position:relative;width:34px;height:20px;padding:0;border:0;border-radius:999px;background:var(--dsw-alias-border-l1);cursor:pointer;transition:background .12s ease}',
+      '.memp .switch.on{background:var(--dsw-alias-brand-primary)}',
+      '.memp .switch .knob{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .12s ease;box-shadow:0 1px 2px rgba(0,0,0,.25)}',
+      '.memp .switch.on .knob{left:16px}',
       '.memp .setfoot{display:flex;align-items:center;gap:10px;padding-top:12px}',
       '.memp .create{padding:10px 12px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;margin:8px 0;background:var(--dsw-alias-bg-layer-2)}',
       '.memp .create .row{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}',
       '.memp .create textarea{width:100%;min-height:64px}',
       '.memp .data{padding-top:4px}',
       '.memp .data .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px}',
+      // 侧栏入口打开的主界面页面:整块可滚动,内容用面板本体
+      '.mem-page{height:100%;overflow:auto;padding:16px 20px 40px}',
+      '.mem-page-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}',
+      '.mem-page-head h2{font-size:15px;font-weight:600;margin:0}',
     ].join('')
 
     async function api(method, body) {
@@ -558,15 +571,28 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** 设置项开关:轨道 + 圆点,与向量服务的 toggle 同一套视觉。 */
+    function Switch({ checked, disabled, onChange, title }) {
+      return h('button', {
+        type: 'button',
+        className: 'switch' + (checked ? ' on' : ''),
+        role: 'switch',
+        'aria-checked': Boolean(checked),
+        disabled: Boolean(disabled),
+        ...(title ? { title } : {}),
+        onClick: () => onChange(!checked),
+      }, h('span', { className: 'knob' }))
+    }
+
     /**
      * 设置标签页:这些开关直接改注入行为,保存后下一步生效(不进 cordis 配置,
      * 落盘在记忆数据目录的 settings.json)。分组顺序与「注入链路」一致:
-     * 每轮召回 → 印象 → 会话摘要 → 系统提示(策略/规则) → 轮末提醒。
+     * 每轮召回 → 印象 → 会话摘要 → 系统提示(策略/规则) → 轮末提醒 → 界面。
      */
     const SETTINGS_GROUPS = [
       {
         key: 'recall', title: '每轮召回',
-        desc: '按这一轮的问题检索记忆并插入上下文；内容没变时不会重复注入。',
+        desc: '按本轮问题检索记忆并插入上下文，内容没变不重复注入。',
         fields: [
           { k: 'enabled', label: '启用', type: 'bool' },
           { k: 'topK', label: '最多条数', type: 'num', min: 1, max: 20, step: 1 },
@@ -575,7 +601,7 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'impression', title: '印象形态',
-        desc: '召回只给每条的开头摘要；模型判断相关但需要细节时，自己用 memory_search 取全文。',
+        desc: '每条只给摘要，细节由模型用 memory_get 取。',
         fields: [
           { k: 'enabled', label: '启用', type: 'bool' },
           { k: 'chars', label: '每条字数', type: 'num', min: 40, max: 800, step: 20 },
@@ -583,7 +609,7 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'digest', title: '会话摘要',
-        desc: '会话第一步给一次「这个项目 / 全局已有记忆」的概览（按重要度 × 新鲜度挑选，每个会话一次）。',
+        desc: '会话第一步给一次项目 / 全局的记忆概览。',
         fields: [
           { k: 'enabled', label: '启用', type: 'bool' },
           { k: 'topK', label: '最多条数', type: 'num', min: 1, max: 30, step: 1 },
@@ -592,12 +618,13 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'policy', title: '记忆使用策略',
-        desc: '系统提示里的常驻段：什么时候该查记忆、查到怎么用、查不到怎么办。文本稳定，可随前缀缓存。',
+        desc: '系统提示常驻段：何时查、查到怎么用、查不到怎么办。',
         fields: [{ k: 'enabled', label: '启用', type: 'bool' }],
       },
       {
         key: 'rules', title: '硬性规则',
-        desc: '把 kind = rule 的记忆放进系统提示常驻段。可机械校验的规则更适合做成钩子，而不是写在这里。',
+        desc: '把 kind=rule 的记忆放进系统提示常驻段。',
+        hint: '关闭只影响系统提示常驻段，记忆本身仍可被检索',
         fields: [
           { k: 'enabled', label: '启用', type: 'bool' },
           { k: 'maxItems', label: '最多条数', type: 'num', min: 1, max: 40, step: 1 },
@@ -606,7 +633,12 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'turnEnd', title: '轮末提醒',
-        desc: '本轮跑过多步时，下一轮开头提醒一句「若产生了可复用的结论，先 memory_save」。默认关闭。',
+        desc: '下一轮开头提醒把本轮结论落盘，默认关闭。',
+        fields: [{ k: 'enabled', label: '启用', type: 'bool' }],
+      },
+      {
+        key: 'sidebar', title: '侧栏入口',
+        desc: '在左侧栏「插件」下方显示记忆入口，点击打开面板。',
         fields: [{ k: 'enabled', label: '启用', type: 'bool' }],
       },
     ]
@@ -675,6 +707,9 @@ window.__ModuleLoader__.load({
           const next = await api('settings', settings)
           setSettings(next)
           setNotice('已保存，下一步生效')
+          if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+            try { window.dispatchEvent(new CustomEvent('dsh-memory:settings')) } catch { /* 没有 CustomEvent 就等下次启动 */ }
+          }
         } catch (e) {
           setError(String(e.message || e))
         }
@@ -690,13 +725,13 @@ window.__ModuleLoader__.load({
           return h('div', { className: 'setrow', key: group.key },
             h('span', { className: 'set-title' }, group.title),
             group.fields.map((field) => field.type === 'bool'
-              ? h('label', { className: 'set-field', key: field.k }, ' ',
-                  h('input', {
-                    type: 'checkbox',
-                    checked: Boolean(value[field.k]),
-                    disabled: busy,
-                    onChange: (e) => patch(group.key, field.k, e.target.checked),
-                  }), ' ', field.label)
+              ? h(Switch, {
+                  key: field.k,
+                  checked: Boolean(value[field.k]),
+                  disabled: busy,
+                  title: group.hint || field.label,
+                  onChange: (next) => patch(group.key, field.k, next),
+                })
               : h('label', { className: 'set-field', key: field.k }, field.label, ' ',
                   h('input', {
                     type: 'number', min: field.min, max: field.max, step: field.step, value: value[field.k],
@@ -711,7 +746,7 @@ window.__ModuleLoader__.load({
         }),
         h('div', { className: 'setrow data' },
           h('span', { className: 'set-title' }, '数据'),
-          h('span', { className: 'set-desc' }, '导出只含文本（作用域 / 类型 / 内容 / 标签 / 重要度），不含向量；导入时按当前模型重新嵌入。导入按「作用域 + 内容」去重。'),
+          h('span', { className: 'set-desc' }, '导出文本（不含向量），导入按当前模型重新嵌入并按内容去重。'),
           h('div', { className: 'row' },
             h('button', { onClick: exportAll }, '导出全部'),
             h('label', { className: 'set-field' }, '导入文件',
@@ -1113,6 +1148,23 @@ window.__ModuleLoader__.load({
 
     const inject = ['slots']
 
+    /** 侧栏入口打开的主界面页面(整块可滚动,内容就是面板本体)。 */
+    function MemoryPage() {
+      return h('div', { className: 'mem-page' },
+        h('div', { className: 'mem-page-head' }, h('h2', null, '记忆')),
+        h(MemoryPanel, {}),
+      )
+    }
+
+    /** 侧栏图标:16px 单色线稿芯片,与设置导航那一列同一规范。 */
+    function NavChipIcon() {
+      return h('svg', { width: 16, height: 16, viewBox: '0 0 16 16', fill: 'none', 'aria-hidden': 'true' },
+        h('rect', { x: 5, y: 5, width: 6, height: 6, rx: 1.4, stroke: 'currentColor', strokeWidth: 1.3 }),
+        h('rect', { x: 6.9, y: 6.9, width: 2.2, height: 2.2, rx: 0.6, stroke: 'currentColor', strokeWidth: 1.3 }),
+        h('path', { d: 'M8 5V3.2M8 11v1.8M5 8H3.2M11 8h1.8', stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round' }),
+      )
+    }
+
     function apply(ctx) {
       try {
         const styleEl = document.createElement('style')
@@ -1128,6 +1180,40 @@ window.__ModuleLoader__.load({
           { name: 'settings.section', id: 'memory', order: 24, label: NAV_LABEL },
           () => React.createElement(MemoryPanel),
         ))
+
+        // 侧栏入口(可选):开启后在左侧栏「插件」下方多一个「记忆」,点击在主界面打开面板。
+        // 注册契约见 dsh-client-ui-schedule:sidebar.panellist 给 id/label/icon,main 用同一个 key。
+        let sidebarDisposers = null
+        const syncSidebar = () => {
+          api('settings').then((settings) => {
+            const want = Boolean(settings && settings.sidebar && settings.sidebar.enabled)
+            if (want === (sidebarDisposers !== null)) return
+            if (!want) {
+              for (const dispose of sidebarDisposers ?? []) {
+                try { if (typeof dispose === 'function') dispose() } catch { /* 已卸载 */ }
+              }
+              sidebarDisposers = null
+              return
+            }
+            try {
+              sidebarDisposers = [
+                slots.inject('main', () => slots.register({ name: 'main', key: 'memory' }, () => React.createElement(MemoryPage))),
+                slots.inject('sidebar.panellist', () => slots.register(
+                  { name: 'sidebar.panellist', id: 'memory', order: 20, label: () => NAV_LABEL },
+                  () => React.createElement(NavChipIcon),
+                )),
+              ]
+            } catch (error) {
+              sidebarDisposers = null
+              console.warn('[dsh-memory] 侧栏入口注册失败:', error?.message)
+            }
+          }).catch(() => { /* 读不到设置就维持现状 */ })
+        }
+        syncSidebar()
+        if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+          window.addEventListener('dsh-memory:settings', syncSidebar)
+          ctx.effect(() => () => window.removeEventListener('dsh-memory:settings', syncSidebar), 'dsh-memory: sidebar entry')
+        }
       } catch (error) {
         console.error('[dsh-memory] client apply 失败(已吞掉):', error?.message)
       }

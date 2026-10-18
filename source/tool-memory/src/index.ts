@@ -33,6 +33,8 @@ export interface MemoryToolService {
   scopeStats?(): Array<{ scope: string; records: number; pendingEmbeds: number }>
   /** 无显式 scope 时的合并读取集合(会话 + 项目 + global)。 */
   resolveReadScopes?(agent: unknown): MemoryScope[]
+  /** 按 id 批量取记录(召回摘要里带了 id,模型可直接取全文)。 */
+  getByIds?(ids: string[]): Array<{ id: string; scope: string; kind: string; content: string; tags: string[]; importance: number; updatedAt: number }>
   /** 写路径默认 scope(省略 scope 时落到哪)。 */
   resolveWriteScope?(agent: unknown, requested?: string): MemoryScope
   /**
@@ -373,11 +375,50 @@ export function memoryListTool(opts: MemoryToolsOptions): ToolSpec<ListArgs, Lis
   }
 }
 
+export interface GetArgs { ids: string[] }
+export interface GetResult {
+  records: Array<{ id: string; scope: string; kind: string; content: string; tags: string[]; importance: number; updatedAt: number }>
+  missing: string[]
+}
+
+export function memoryGetTool(opts: MemoryToolsOptions): ToolSpec<GetArgs, GetResult> {
+  return {
+    name: 'memory_get',
+    description: 'Fetch memories by id or by the 8-char id prefix shown in recall/digest summaries. Fast path: no retrieval needed.',
+    parameters: {
+      ids: { type: 'array', items: { type: 'string' }, description: '记忆 id 或摘要开头的 8 位前缀,1~50 个', required: true },
+    },
+    async execute(args: GetArgs): Promise<GetResult> {
+      const service = svc(opts)
+      const ids = Array.isArray(args.ids)
+        ? [...new Set(args.ids.map(String).filter((id) => id.trim() !== ''))].slice(0, 50)
+        : []
+      if (ids.length === 0) throw toolError(new Error('ids 不能为空'))
+      if (typeof service.getByIds !== 'function') {
+        throw toolError(new Error('当前 provider 不支持 memory_get（请升级 @restregular/dsh-memory）'))
+      }
+      try {
+        const found = service.getByIds(ids)
+        return {
+          records: found.map((r) => ({
+            id: r.id, scope: r.scope, kind: r.kind, content: r.content,
+            tags: r.tags, importance: r.importance, updatedAt: r.updatedAt,
+          })),
+          missing: ids.filter((token) => !found.some((r) => r.id === token || r.id.startsWith(token))),
+        }
+      } catch (error) {
+        throw toolError(error)
+      }
+    },
+  }
+}
+
 export function memoryTools(opts: MemoryToolsOptions) {
   return {
     memory_save: memorySaveTool(opts),
     memory_search: memorySearchTool(opts),
     memory_forget: memoryForgetTool(opts),
     memory_list: memoryListTool(opts),
+    memory_get: memoryGetTool(opts),
   }
 }

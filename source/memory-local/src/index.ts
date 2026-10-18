@@ -1475,6 +1475,30 @@ export class LocalMemoryService implements MemoryServiceApi {
   }
 
   /**
+   * 按 id 批量取记录(memory_get)。接受完整 id,也接受摘要里给出的前 8 位前缀
+   * (前缀命中多条时全部返回,由调用方/模型自行判断)。取全文不需要再检索。
+   */
+  getByIds(ids: string[]): MemoryRecord[] {
+    this.discoverScopes()
+    const scopes = this.store.allScopes()
+    const out: MemoryRecord[] = []
+    const seen = new Set<string>()
+    for (const token of ids) {
+      if (typeof token !== 'string' || token.length === 0) continue
+      for (const s of scopes) {
+        for (const rec of s.records.values()) {
+          if (seen.has(rec.id)) continue
+          if (rec.id === token || rec.id.startsWith(token)) {
+            seen.add(rec.id)
+            out.push(rec)
+          }
+        }
+      }
+    }
+    return out
+  }
+
+  /**
    * 面板新建一条记忆 / 规则。scope 必须是**明确的键**(global / project:<路径> /
    * session:<id> / 自定义名)—— 面板拿不到会话上下文,'project'/'session' 这种
    * 相对写法没法解析,直接拒绝比猜一个错的强。
