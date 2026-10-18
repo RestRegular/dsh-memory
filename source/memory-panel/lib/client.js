@@ -145,6 +145,11 @@ window.__ModuleLoader__.load({
       '.memp .setrow .set-field{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--dsw-alias-label-secondary)}',
       '.memp .setrow input[type=number]{width:78px}',
       '.memp .setfoot{display:flex;align-items:center;gap:10px;padding-top:12px}',
+      '.memp .create{padding:10px 12px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;margin:8px 0;background:var(--dsw-alias-bg-layer-2)}',
+      '.memp .create .row{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}',
+      '.memp .create textarea{width:100%;min-height:64px}',
+      '.memp .data{padding-top:4px}',
+      '.memp .data .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px}',
     ].join('')
 
     async function api(method, body) {
@@ -611,10 +616,53 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState('')
       const [notice, setNotice] = React.useState('')
+      const [rulesCount, setRulesCount] = React.useState(null)
+      const [dataNotice, setDataNotice] = React.useState('')
 
       React.useEffect(() => {
         api('settings').then(setSettings).catch((e) => setError(String(e.message || e)))
+        api('status')
+          .then((status) => setRulesCount(status && status.rules ? status.rules : null))
+          .catch(() => setRulesCount(null))
       }, [])
+
+      /** 导出:纯文本 JSON,不含向量(导入时按当前模型重新嵌入)。 */
+      const exportAll = async () => {
+        setDataNotice('')
+        try {
+          const doc = await api('export')
+          const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = `dsh-memory-${new Date().toISOString().slice(0, 10)}.json`
+          a.click()
+          setTimeout(() => URL.revokeObjectURL(url), 2000)
+          setDataNotice(`已导出 ${doc.records.length} 条（${doc.records.length > 0 ? '含作用域与类型' : '暂无记忆'}）`)
+        } catch (e) {
+          setDataNotice(`导出失败：${String(e.message || e)}`)
+        }
+      }
+
+      /** 导入:接受导出的同一个文档(或记录数组),逐条走 save,自动重新嵌入。 */
+      const importFile = async (event) => {
+        const file = event && event.target && event.target.files && event.target.files[0]
+        if (!file) return
+        setDataNotice('')
+        try {
+          const text = await file.text()
+          const doc = JSON.parse(text)
+          const result = await api('import', doc)
+          const firstError = result.errors && result.errors.length > 0 ? `；${result.errors[0]}` : ''
+          setDataNotice(`导入完成：新增 ${result.imported}，跳过重复 ${result.skipped}，失败 ${result.rejected}${firstError}`)
+          if (result.imported > 0 && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+            try { window.dispatchEvent(new CustomEvent('dsh-memory:refresh')) } catch { /* 没有 CustomEvent 就靠下次打开面板刷新 */ }
+          }
+        } catch (e) {
+          setDataNotice(`导入失败：${String(e.message || e)}`)
+        }
+        event.target.value = ''
+      }
 
       const patch = (group, key, value) => setSettings((current) => {
         if (!current) return current
@@ -656,13 +704,102 @@ window.__ModuleLoader__.load({
                     onChange: (e) => patch(group.key, field.k, Number(e.target.value)),
                   }))),
             h('span', { className: 'set-desc' }, group.desc),
+            group.key === 'rules' && rulesCount !== null
+              ? h('span', { className: 'set-field' }, `${rulesCount.total} 条规则 / ${rulesCount.scopes} 个作用域（在「记录 → 新建」里选 kind=rule 添加）`)
+              : null,
           )
         }),
+        h('div', { className: 'setrow data' },
+          h('span', { className: 'set-title' }, '数据'),
+          h('span', { className: 'set-desc' }, '导出只含文本（作用域 / 类型 / 内容 / 标签 / 重要度），不含向量；导入时按当前模型重新嵌入。导入按「作用域 + 内容」去重。'),
+          h('div', { className: 'row' },
+            h('button', { onClick: exportAll }, '导出全部'),
+            h('label', { className: 'set-field' }, '导入文件',
+              h('input', { type: 'file', accept: '.json,application/json', onChange: importFile })),
+            dataNotice ? h('span', { className: 'muted' }, dataNotice) : null,
+          ),
+        ),
         h('div', { className: 'setfoot' },
           h('button', { onClick: save, disabled: busy }, busy ? '保存中…' : '保存设置'),
           notice ? h('span', { className: 'muted' }, notice) : null,
           error ? h('span', { className: 'err' }, error) : null,
         ),
+      )
+    }
+
+    /**
+     * 新建记忆 / 规则。作用域必须是**明确的键**:面板拿不到会话上下文,所以
+     * 'project' / 'session' 这种相对写法不提供,列出现有作用域 + global,再加
+     * 一个自定义输入(project:<路径> / session:<id> / 自定义名)。
+     */
+    function CreateForm({ scopes, onCancel, onCreated }) {
+      const [scope, setScope] = React.useState('global')
+      const [customScope, setCustomScope] = React.useState('')
+      const [kind, setKind] = React.useState('note')
+      const [content, setContent] = React.useState('')
+      const [tags, setTags] = React.useState('')
+      const [importance, setImportance] = React.useState(0.6)
+      const [busy, setBusy] = React.useState(false)
+      const [error, setError] = React.useState('')
+
+      const scopeItems = [
+        { value: 'global', label: '全局（global）' },
+        ...scopes
+          .filter((s) => s.scope !== 'global')
+          .map((s) => ({ value: s.scope, label: s.label || scopeLabel(s.scope) })),
+        { value: '__custom__', label: '自定义 / 指定作用域…' },
+      ]
+      const resolvedScope = scope === '__custom__' ? customScope.trim() : scope
+
+      const submit = async () => {
+        setBusy(true); setError('')
+        try {
+          await api('create', {
+            scope: resolvedScope,
+            kind,
+            content,
+            tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
+            importance: Number(importance),
+          })
+          setBusy(false)
+          onCreated()
+        } catch (e) {
+          setError(String(e.message || e))
+          setBusy(false)
+        }
+      }
+
+      return h('div', { className: 'create' },
+        h('div', { className: 'row' },
+          h(Dropdown, { items: scopeItems, value: scope, disabled: busy, onChange: setScope }),
+          scope === '__custom__'
+            ? h('input', {
+                type: 'text', style: { width: 260 },
+                placeholder: 'project:<路径> / session:<id> / 自定义名',
+                value: customScope, onChange: (e) => setCustomScope(e.target.value),
+              })
+            : null,
+          h(Dropdown, {
+            items: ['fact', 'decision', 'preference', 'procedure', 'note', 'rule'].map((k) => ({ value: k, label: k })),
+            value: kind, disabled: busy, onChange: setKind,
+          }),
+          kind === 'rule' ? h('span', { className: 'warn' }, '规则会进入系统提示常驻段') : null,
+        ),
+        h('div', { className: 'row' },
+          h('textarea', {
+            rows: 3,
+            placeholder: '内容：一句自洽的话，脱离上下文也能读懂（写之前先搜一下有没有重复）',
+            value: content, onChange: (e) => setContent(e.target.value),
+          }),
+        ),
+        h('div', { className: 'row' },
+          h('input', { type: 'text', placeholder: '标签, 逗号分隔', value: tags, onChange: (e) => setTags(e.target.value) }),
+          h('label', null, '重要度 ',
+            h('input', { type: 'number', min: 0, max: 1, step: 0.1, value: importance, onChange: (e) => setImportance(e.target.value) })),
+          h('button', { onClick: submit, disabled: busy || content.trim() === '' || resolvedScope === '' }, busy ? '保存中…' : '保存'),
+          h('button', { className: 'linkbtn', onClick: onCancel, disabled: busy }, '取消'),
+        ),
+        error ? h('div', { className: 'err' }, error) : null,
       )
     }
 
@@ -679,6 +816,7 @@ window.__ModuleLoader__.load({
       const [loading, setLoading] = React.useState(true)
       const [error, setError] = React.useState('')
       const [tab, setTab] = React.useState('records')
+      const [creating, setCreating] = React.useState(false)
 
       const load = async (query, scopeF) => {
         setLoading(true); setError('')
@@ -699,6 +837,13 @@ window.__ModuleLoader__.load({
         setLoading(false)
       }
       React.useEffect(() => { load('', '') }, [])
+      // 导入完成后从设置页切换回记录页时,列表要能看到新数据(事件由设置页发出)。
+      React.useEffect(() => {
+        if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined
+        const onRefresh = () => { load('', '') }
+        window.addEventListener('dsh-memory:refresh', onRefresh)
+        return () => window.removeEventListener('dsh-memory:refresh', onRefresh)
+      }, [])
 
       const embedAction = async (action, body = {}) => {
         setEmbedBusy(true); setEmbedNotice('')
@@ -946,9 +1091,17 @@ window.__ModuleLoader__.load({
             disabled: loading,
             onChange: (next) => { setScopeFilter(next); load(q, next) },
           }),
+          h('button', { onClick: () => setCreating((v) => !v), disabled: loading }, creating ? '收起' : '新建'),
           h('button', { onClick: () => load(q, scopeFilter), disabled: loading }, loading ? '刷新中…' : '刷新'),
           filtering ? h('button', { className: 'linkbtn', onClick: () => { setQ(''); setScopeFilter(''); load('', '') } }, '清空筛选') : null,
         ),
+        creating
+          ? h(CreateForm, {
+              scopes,
+              onCancel: () => setCreating(false),
+              onCreated: () => { setCreating(false); load('', '') },
+            })
+          : null,
         error ? h('div', { className: 'err' }, error) : null,
         !loading && !error && records.length === 0
           ? h('div', { className: 'empty' }, filtering ? '没有匹配的记忆' : '还没有记忆')

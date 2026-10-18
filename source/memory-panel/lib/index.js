@@ -35,9 +35,16 @@ function writeJson(res, body, status = 200) {
   } catch { /* 客户端已断开 */ }
 }
 
+/** provider 侧的"调用方输入有问题"错误码 → 400;其余未标注的仍算 500。 */
+const CLIENT_ERROR_CODES = new Set([
+  'SCOPE_INVALID', 'SCOPE_DISABLED', 'CONTENT_EMPTY', 'CONTENT_TOO_LONG',
+  'SECRET_DETECTED', 'IMPORT_INVALID', 'IMPORT_TOO_LARGE', 'KIND_INVALID',
+])
+
 function writeError(res, error) {
-  const status = Number(error?.status) || 500
-  writeJson(res, { ok: false, error: { code: error?.code || 'internal', message: error?.message || String(error) } }, status)
+  const code = typeof error?.code === 'string' ? error.code : 'internal'
+  const status = Number(error?.status) || (CLIENT_ERROR_CODES.has(code) ? 400 : code === 'SCOPE_LIMIT' ? 409 : 500)
+  writeJson(res, { ok: false, error: { code, message: error?.message || String(error) } }, status)
 }
 
 class ApiError extends Error {
@@ -241,7 +248,9 @@ async function handle(ctx, routePath, req, res) {
       let embedServer = null
       // older providers have no lifecycle API — the panel simply omits the card
       try { embedServer = (await memory.embedServerStatus?.()) ?? null } catch { embedServer = null }
-      writeJson(res, { ok: true, value: { scopes, embedServer } })
+      let rules = null
+      try { rules = typeof memory.ruleStats === 'function' ? memory.ruleStats() : null } catch { rules = null }
+      writeJson(res, { ok: true, value: { scopes, embedServer, rules } })
       return
     }
     if (method === 'GET' && path === '/settings') {
@@ -253,6 +262,33 @@ async function handle(ctx, routePath, req, res) {
       if (typeof memory.updateInjectSettings !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供注入设置接口（请升级 @restregular/dsh-memory）')
       const body = await readJsonBody(req)
       writeJson(res, { ok: true, value: memory.updateInjectSettings(body) })
+      return
+    }
+    if (method === 'POST' && path === '/create') {
+      if (typeof memory.createRecord !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供新建接口（请升级 @restregular/dsh-memory）')
+      const body = await readJsonBody(req)
+      const record = await memory.createRecord({
+        ...(typeof body.scope === 'string' ? { scope: body.scope } : {}),
+        ...(typeof body.kind === 'string' ? { kind: body.kind } : {}),
+        ...(typeof body.content === 'string' ? { content: body.content } : {}),
+        ...(Array.isArray(body.tags) ? { tags: body.tags.map(String) } : {}),
+        ...(typeof body.importance === 'number' ? { importance: body.importance } : {}),
+      })
+      console.log(`[dsh-memory-panel] 新建 ${record.kind} @ ${record.scope}: ${record.id}`)
+      writeJson(res, { ok: true, value: { record } })
+      return
+    }
+    if (method === 'GET' && path === '/export') {
+      if (typeof memory.exportAll !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供导出接口（请升级 @restregular/dsh-memory）')
+      writeJson(res, { ok: true, value: memory.exportAll() })
+      return
+    }
+    if (method === 'POST' && path === '/import') {
+      if (typeof memory.importRecords !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供导入接口（请升级 @restregular/dsh-memory）')
+      const body = await readJsonBody(req)
+      const result = await memory.importRecords(body)
+      console.log(`[dsh-memory-panel] 导入完成: 新增 ${result.imported} / 跳过 ${result.skipped} / 失败 ${result.rejected}`)
+      writeJson(res, { ok: true, value: result })
       return
     }
     if (method === 'GET' && path === '/embed/status') {      if (typeof memory.embedServerStatus !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供向量服务管理接口')

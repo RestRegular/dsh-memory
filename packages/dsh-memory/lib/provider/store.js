@@ -528,6 +528,17 @@ export class MemoryStore {
     return { record, deduped: false }
   }
 
+  /** 该 scope 里是否已有相同内容(导入去重计数用;只读,不建文件)。 */
+  hasContent(scope             , content        )          {
+    const s = this.peek(scope)
+    if (!s) return false
+    const hash = contentHash(scope, content)
+    for (const rec of s.records.values()) {
+      if (contentHash(rec.scope, rec.content) === hash) return true
+    }
+    return false
+  }
+
   /** Substring match over normalized content, used by forget-by-query. */
   findIdsByQuery(scope             , query        )           {
     // 读/删路径:用 peek,不存在的 scope 返回空,绝不创建。

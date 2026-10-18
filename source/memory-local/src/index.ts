@@ -17,6 +17,7 @@ import type {
 import { MemoryStore, scopeFileName, type ScopeStore } from './store.ts'
 import {
   isCustomScope,
+  normalizeScopeInput,
   resolveCurrentScopes,
   scopeKind,
   scopeTier,
@@ -1471,6 +1472,127 @@ export class LocalMemoryService implements MemoryServiceApi {
     if (input.kind) records = records.filter((r) => r.kind === input.kind)
     records.sort((a, b) => b.updatedAt - a.updatedAt)
     return records.slice(0, input.limit ?? 50)
+  }
+
+  /**
+   * 面板新建一条记忆 / 规则。scope 必须是**明确的键**(global / project:<路径> /
+   * session:<id> / 自定义名)—— 面板拿不到会话上下文,'project'/'session' 这种
+   * 相对写法没法解析,直接拒绝比猜一个错的强。
+   */
+  async createRecord(input: {
+    scope?: string
+    kind?: string
+    content?: string
+    tags?: string[]
+    importance?: number
+  }): Promise<MemoryRecord> {
+    const normalized = normalizeScopeInput(input.scope)
+    if (!normalized.ok) throw memoryError('SCOPE_INVALID', normalized.message)
+    if (normalized.scope === undefined) {
+      throw memoryError('SCOPE_INVALID', '面板写入需要明确的 scope(global / project:<路径> / session:<id> / 自定义名)')
+    }
+    return this.save({
+      scope: normalized.scope as MemoryScope,
+      kind: (input.kind ?? 'note') as MemoryRecord['kind'],
+      content: String(input.content ?? ''),
+      ...(input.tags !== undefined ? { tags: input.tags } : {}),
+      ...(input.importance !== undefined ? { importance: input.importance } : {}),
+    })
+  }
+
+  /**
+   * 导出全部记忆为**纯文本**文档(不含向量)。向量在导入时按当前模型重新算,
+   * 所以换过模型也照样导得回去。
+   */
+  exportAll(now = Date.now()): {
+    version: 1
+    exportedAt: number
+    records: Array<{
+      scope: MemoryScope
+      kind: string
+      content: string
+      tags: string[]
+      importance: number
+      createdAt: number
+      updatedAt: number
+    }>
+  } {
+    this.discoverScopes()
+    const records = []
+    for (const s of this.store.allScopes()) {
+      for (const rec of s.records.values()) {
+        records.push({
+          scope: rec.scope,
+          kind: rec.kind,
+          content: rec.content,
+          tags: rec.tags,
+          importance: rec.importance,
+          createdAt: rec.createdAt,
+          updatedAt: rec.updatedAt,
+        })
+      }
+    }
+    records.sort((a, b) => a.scope.localeCompare(b.scope) || a.createdAt - b.createdAt)
+    return { version: 1, exportedAt: now, records }
+  }
+
+  /**
+   * 导入文本记忆。逐条走 `save()`(凭据扫描 / 上限 / 去重 / 向量回填都在那条路上),
+   * 所以导入的记录会自动按当前模型重新嵌入。返回计数,失败不中断其余条目。
+   */
+  async importRecords(input: unknown): Promise<{ imported: number; skipped: number; rejected: number; errors: string[] }> {
+    const list = Array.isArray(input)
+      ? input
+      : (input && typeof input === 'object' && Array.isArray((input as { records?: unknown }).records))
+        ? (input as { records: unknown[] }).records
+        : null
+    if (list === null) throw memoryError('IMPORT_INVALID', '导入格式不对:需要 {version, records:[...]} 或记录数组')
+    if (list.length > 5000) throw memoryError('IMPORT_TOO_LARGE', `一次最多导入 5000 条(收到 ${list.length} 条)`)
+
+    let imported = 0
+    let skipped = 0
+    let rejected = 0
+    const errors: string[] = []
+    for (const [index, raw] of list.entries()) {
+      try {
+        const rec = raw as { scope?: unknown; kind?: unknown; content?: unknown; tags?: unknown; importance?: unknown }
+        const content = typeof rec.content === 'string' ? rec.content : ''
+        if (content.trim().length === 0) throw new Error('content 为空')
+        const normalized = normalizeScopeInput(typeof rec.scope === 'string' ? rec.scope : undefined)
+        if (!normalized.ok) throw new Error(normalized.message)
+        if (normalized.scope === undefined) throw new Error('缺少明确的 scope')
+        const scope = normalized.scope as MemoryScope
+        if (this.store.hasContent(scope, content)) {
+          skipped += 1
+          continue
+        }
+        await this.save({
+          scope,
+          kind: (typeof rec.kind === 'string' && rec.kind.length > 0 ? rec.kind : 'note') as MemoryRecord['kind'],
+          content,
+          ...(Array.isArray(rec.tags) ? { tags: rec.tags.map(String) } : {}),
+          ...(typeof rec.importance === 'number' ? { importance: rec.importance } : {}),
+        })
+        imported += 1
+      } catch (error) {
+        rejected += 1
+        if (errors.length < 20) errors.push(`#${index}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    this.store.scheduleFlush()
+    return { imported, skipped, rejected, errors }
+  }
+
+  /** 规则条数(面板设置页显示;只数已加载/已发现的作用域)。 */
+  ruleStats(): { total: number; scopes: number } {
+    this.discoverScopes()
+    let total = 0
+    let scopes = 0
+    for (const s of this.store.allScopes()) {
+      const n = [...s.records.values()].filter((r) => r.kind === 'rule').length
+      if (n > 0) { total += n; scopes += 1 }
+    }
+    return { total, scopes }
   }
 
   /**

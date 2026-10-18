@@ -776,3 +776,47 @@ test('设置标签页:读取注入设置、渲染各组开关并能保存', asyn
   assert.deepEqual((posted as Record<string, unknown>).digest, settingsValue.digest)
   assert.ok(calls.some((c) => c.method === 'POST' && c.url.includes('/settings')))
 })
+
+test('记录页:点「新建」出现表单,可选 rule 类型;设置页有导入/导出', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  ;(globalThis as Record<string, unknown>).fetch = async (url: unknown) => {
+    const u = String(url)
+    if (u.includes('/status')) return { status: 200, json: async () => ({ ok: true, value: { scopes: [], embedServer: null, rules: { total: 0, scopes: 0 } } }) }
+    if (u.includes('/embed/model')) return { status: 200, json: async () => ({ ok: true, value: modelReport() }) }
+    if (u.includes('/settings')) return { status: 200, json: async () => ({ ok: true, value: {
+      recall: { enabled: true, topK: 5, tokenBudget: 500 },
+      digest: { enabled: true, topK: 8, tokenBudget: 400 },
+      impression: { enabled: true, chars: 120 },
+      policy: { enabled: true },
+      rules: { enabled: true, maxItems: 10, tokenBudget: 300 },
+      turnEnd: { enabled: false },
+    } }) }
+    return { status: 200, json: async () => ({ ok: true, value: { records: [] } }) }
+  }
+
+  const MemoryPanel = (exports.__test as { MemoryPanel: (p: Record<string, unknown>) => unknown }).MemoryPanel
+  const element = () => hooks.React.createElement(MemoryPanel, {})
+  let current: RenderNode | null = render(element(), hooks)
+  hooks.setRerender(() => { current = render(element(), hooks) })
+  const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve() }
+  hooks.runEffects(); await flush(); hooks.runEffects(); await flush()
+
+  const createBtn = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '新建')
+  assert.ok(createBtn, '记录页有「新建」按钮')
+  ;(createBtn!.props!.onClick as () => void)()
+  hooks.runEffects(); await flush()
+  const afterOpen = textOf(current)
+  assert.ok(afterOpen.includes('保存'), '表单有保存按钮')
+  assert.ok(afterOpen.includes('取消'), '表单有取消按钮')
+
+  // 切到设置页,确认数据区在
+  const settingsTab = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '设置')
+  assert.ok(settingsTab)
+  ;(settingsTab!.props!.onClick as () => void)()
+  hooks.runEffects(); await flush(); hooks.runEffects(); await flush()
+  const text = textOf(current)
+  assert.ok(text.includes('导出全部'), '设置页有导出按钮')
+  assert.ok(text.includes('导入文件'), '设置页有导入入口')
+  assert.ok(text.includes('0 条规则'), '设置页显示规则条数')
+})

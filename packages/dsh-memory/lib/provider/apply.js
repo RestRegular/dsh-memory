@@ -120,6 +120,26 @@ export class CordisMemoryService extends Service {
     return this.impl.list(input)
   }
 
+  /** 面板新建记忆 / 规则。 */
+  createRecord(input                                                   )                        {
+    return this.impl.createRecord(input)
+  }
+
+  /** 面板导出:纯文本 + 元数据,不含向量。 */
+  exportAll()                                              {
+    return this.impl.exportAll()
+  }
+
+  /** 面板导入:逐条 save(自动重新嵌入),失败不中断。 */
+  importRecords(input         )                                                  {
+    return this.impl.importRecords(input)
+  }
+
+  /** 设置页显示规则条数。 */
+  ruleStats()                                              {
+    return this.impl.ruleStats()
+  }
+
   /** 同步列记录(系统提示里的规则段用,不能等异步 list)。 */
   listSync(input                                               )                                             {
     return this.impl.listSync(input)
