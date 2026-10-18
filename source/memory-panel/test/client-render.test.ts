@@ -768,12 +768,14 @@ test('设置标签页:读取注入设置、渲染各组开关并能保存', asyn
     assert.ok(text.includes(label), `设置页应显示「${label}」`)
   }
 
-  const save = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '保存设置')
-  assert.ok(save, '有保存按钮')
-  ;(save!.props!.onClick as () => void)()
-  await flush()
-  assert.ok(posted, '保存会 POST 设置')
-  assert.deepEqual((posted as Record<string, unknown>).digest, settingsValue.digest)
+  // 没有「保存设置」按钮:拨动第一个开关(recall.enabled)后自动 POST
+  assert.equal(collect(current).some((n) => n.tag === 'button' && textOf(n).trim() === '保存设置'), false)
+  const firstSwitch = collect(current).find((n) => n.tag === 'button' && n.props?.role === 'switch')
+  assert.ok(firstSwitch, '设置页用开关按钮')
+  ;(firstSwitch!.props!.onClick as () => void)()
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  assert.ok(posted, '改动即自动保存')
+  assert.equal((posted as Record<string, unknown>).recall && ((posted as Record<string, unknown>).recall as { enabled?: boolean }).enabled, false)
   assert.ok(calls.some((c) => c.method === 'POST' && c.url.includes('/settings')))
 })
 

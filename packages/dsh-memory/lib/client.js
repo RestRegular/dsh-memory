@@ -584,9 +584,11 @@ window.__ModuleLoader__.load({
       }, h('span', { className: 'knob' }))
     }
 
+    /** 设置自动保存的合并定时器:连续调数值只发一次请求。 */
+    let autoSaveTimer = null
+
     /**
-     * 设置标签页:这些开关直接改注入行为,保存后下一步生效(不进 cordis 配置,
-     * 落盘在记忆数据目录的 settings.json)。分组顺序与「注入链路」一致:
+     * 设置标签页:这些开关直接改注入行为,改完立即保存(没有"保存"按钮)。
      * 每轮召回 → 印象 → 会话摘要 → 系统提示(策略/规则) → 轮末提醒 → 界面。
      */
     const SETTINGS_GROUPS = [
@@ -645,7 +647,6 @@ window.__ModuleLoader__.load({
 
     function SettingsTab() {
       const [settings, setSettings] = React.useState(null)
-      const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState('')
       const [notice, setNotice] = React.useState('')
       const [rulesCount, setRulesCount] = React.useState(null)
@@ -696,30 +697,37 @@ window.__ModuleLoader__.load({
         event.target.value = ''
       }
 
-      const patch = (group, key, value) => setSettings((current) => {
-        if (!current) return current
-        return { ...current, [group]: { ...current[group], [key]: value } }
-      })
+      // 改动即保存:开关/数值一变就提交(数值连续输入时合并成一次请求)，
+      // 不再有"保存设置"按钮 —— 界面上也就不该再写"保存后生效"这类话。
+      const patch = (group, key, value) => {
+        if (!settings) return
+        const next = { ...settings, [group]: { ...settings[group], [key]: value } }
+        setSettings(next)
+        autoSave(next)
+      }
 
-      const save = async () => {
-        setBusy(true); setError(''); setNotice('')
-        try {
-          const next = await api('settings', settings)
-          setSettings(next)
-          setNotice('已保存，下一步生效')
-          if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
-            try { window.dispatchEvent(new CustomEvent('dsh-memory:settings')) } catch { /* 没有 CustomEvent 就等下次启动 */ }
+      const autoSave = (next) => {
+        if (autoSaveTimer !== null) clearTimeout(autoSaveTimer)
+        setError('')
+        autoSaveTimer = setTimeout(async () => {
+          autoSaveTimer = null
+          try {
+            await api('settings', next)
+            setNotice('已保存')
+            setTimeout(() => setNotice(''), 1500)
+            if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+              try { window.dispatchEvent(new CustomEvent('dsh-memory:settings')) } catch { /* 没有 CustomEvent 就等下次启动 */ }
+            }
+          } catch (e) {
+            setError(String(e.message || e))
           }
-        } catch (e) {
-          setError(String(e.message || e))
-        }
-        setBusy(false)
+        }, 250)
       }
 
       if (!settings) return h('div', { className: 'empty' }, error || '加载设置…')
 
       return h('div', { className: 'setp' },
-        h('div', { className: 'hint' }, '开关立即生效，无需重启；设置保存在记忆数据目录的 settings.json。'),
+        h('div', { className: 'hint' }, '设置保存在记忆数据目录的 settings.json。'),
         SETTINGS_GROUPS.map((group) => {
           const value = settings[group.key] || {}
           return h('div', { className: 'setrow', key: group.key },
@@ -728,14 +736,12 @@ window.__ModuleLoader__.load({
               ? h(Switch, {
                   key: field.k,
                   checked: Boolean(value[field.k]),
-                  disabled: busy,
                   title: group.hint || field.label,
                   onChange: (next) => patch(group.key, field.k, next),
                 })
               : h('label', { className: 'set-field', key: field.k }, field.label, ' ',
                   h('input', {
                     type: 'number', min: field.min, max: field.max, step: field.step, value: value[field.k],
-                    disabled: busy,
                     onChange: (e) => patch(group.key, field.k, Number(e.target.value)),
                   }))),
             h('span', { className: 'set-desc' }, group.desc),
@@ -754,11 +760,8 @@ window.__ModuleLoader__.load({
             dataNotice ? h('span', { className: 'muted' }, dataNotice) : null,
           ),
         ),
-        h('div', { className: 'setfoot' },
-          h('button', { onClick: save, disabled: busy }, busy ? '保存中…' : '保存设置'),
-          notice ? h('span', { className: 'muted' }, notice) : null,
-          error ? h('span', { className: 'err' }, error) : null,
-        ),
+        error ? h('div', { className: 'err' }, error) : null,
+        notice ? h('div', { className: 'muted' }, notice) : null,
       )
     }
 
