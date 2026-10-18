@@ -135,6 +135,16 @@ window.__ModuleLoader__.load({
       '.memp .dropitem.on{background:var(--dsw-alias-bg-layer-2)}',
       '.memp .dropitem.on .dropname{font-weight:600;color:var(--dsw-alias-brand-primary)}',
       '.memp .warn{font-size:11.5px;color:var(--dsw-alias-label-secondary)}',
+      // 面板内的标签栏:记录 / 设置
+      '.memp .tabs{display:flex;gap:2px;border-bottom:1px solid var(--dsw-alias-border-l1);margin-bottom:12px}',
+      '.memp .tab{background:none;border:0;border-bottom:2px solid transparent;padding:6px 12px;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:13px}',
+      '.memp .tab.on{color:var(--dsw-alias-brand-primary);border-bottom-color:var(--dsw-alias-brand-primary);font-weight:600}',
+      '.memp .setrow{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:10px 0;border-bottom:1px solid var(--dsw-alias-border-l1)}',
+      '.memp .setrow .set-title{min-width:132px;font-weight:600;font-size:13px}',
+      '.memp .setrow .set-desc{flex:1 1 100%;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5}',
+      '.memp .setrow .set-field{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .setrow input[type=number]{width:78px}',
+      '.memp .setfoot{display:flex;align-items:center;gap:10px;padding-top:12px}',
     ].join('')
 
     async function api(method, body) {
@@ -240,7 +250,7 @@ window.__ModuleLoader__.load({
                     h('div', { className: 'editrow' },
                       // 类型也用同一个自绘下拉(全站不再有原生 select)
                       h(Dropdown, {
-                        items: ['fact', 'decision', 'preference', 'procedure', 'note'].map((k) => ({ value: k, label: k })),
+                        items: ['fact', 'decision', 'preference', 'procedure', 'note', 'rule'].map((k) => ({ value: k, label: k })),
                         value: kind,
                         disabled: busy,
                         onChange: (next) => setKind(next),
@@ -543,6 +553,119 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * 设置标签页:这些开关直接改注入行为,保存后下一步生效(不进 cordis 配置,
+     * 落盘在记忆数据目录的 settings.json)。分组顺序与「注入链路」一致:
+     * 每轮召回 → 印象 → 会话摘要 → 系统提示(策略/规则) → 轮末提醒。
+     */
+    const SETTINGS_GROUPS = [
+      {
+        key: 'recall', title: '每轮召回',
+        desc: '按这一轮的问题检索记忆并插入上下文；内容没变时不会重复注入。',
+        fields: [
+          { k: 'enabled', label: '启用', type: 'bool' },
+          { k: 'topK', label: '最多条数', type: 'num', min: 1, max: 20, step: 1 },
+          { k: 'tokenBudget', label: 'token 预算', type: 'num', min: 50, max: 4000, step: 50 },
+        ],
+      },
+      {
+        key: 'impression', title: '印象形态',
+        desc: '召回只给每条的开头摘要；模型判断相关但需要细节时，自己用 memory_search 取全文。',
+        fields: [
+          { k: 'enabled', label: '启用', type: 'bool' },
+          { k: 'chars', label: '每条字数', type: 'num', min: 40, max: 800, step: 20 },
+        ],
+      },
+      {
+        key: 'digest', title: '会话摘要',
+        desc: '会话第一步给一次「这个项目 / 全局已有记忆」的概览（按重要度 × 新鲜度挑选，每个会话一次）。',
+        fields: [
+          { k: 'enabled', label: '启用', type: 'bool' },
+          { k: 'topK', label: '最多条数', type: 'num', min: 1, max: 30, step: 1 },
+          { k: 'tokenBudget', label: 'token 预算', type: 'num', min: 50, max: 4000, step: 50 },
+        ],
+      },
+      {
+        key: 'policy', title: '记忆使用策略',
+        desc: '系统提示里的常驻段：什么时候该查记忆、查到怎么用、查不到怎么办。文本稳定，可随前缀缓存。',
+        fields: [{ k: 'enabled', label: '启用', type: 'bool' }],
+      },
+      {
+        key: 'rules', title: '硬性规则',
+        desc: '把 kind = rule 的记忆放进系统提示常驻段。可机械校验的规则更适合做成钩子，而不是写在这里。',
+        fields: [
+          { k: 'enabled', label: '启用', type: 'bool' },
+          { k: 'maxItems', label: '最多条数', type: 'num', min: 1, max: 40, step: 1 },
+          { k: 'tokenBudget', label: 'token 预算', type: 'num', min: 50, max: 4000, step: 50 },
+        ],
+      },
+      {
+        key: 'turnEnd', title: '轮末提醒',
+        desc: '本轮跑过多步时，下一轮开头提醒一句「若产生了可复用的结论，先 memory_save」。默认关闭。',
+        fields: [{ k: 'enabled', label: '启用', type: 'bool' }],
+      },
+    ]
+
+    function SettingsTab() {
+      const [settings, setSettings] = React.useState(null)
+      const [busy, setBusy] = React.useState(false)
+      const [error, setError] = React.useState('')
+      const [notice, setNotice] = React.useState('')
+
+      React.useEffect(() => {
+        api('settings').then(setSettings).catch((e) => setError(String(e.message || e)))
+      }, [])
+
+      const patch = (group, key, value) => setSettings((current) => {
+        if (!current) return current
+        return { ...current, [group]: { ...current[group], [key]: value } }
+      })
+
+      const save = async () => {
+        setBusy(true); setError(''); setNotice('')
+        try {
+          const next = await api('settings', settings)
+          setSettings(next)
+          setNotice('已保存，下一步生效')
+        } catch (e) {
+          setError(String(e.message || e))
+        }
+        setBusy(false)
+      }
+
+      if (!settings) return h('div', { className: 'empty' }, error || '加载设置…')
+
+      return h('div', { className: 'setp' },
+        h('div', { className: 'hint' }, '开关立即生效，无需重启；设置保存在记忆数据目录的 settings.json。'),
+        SETTINGS_GROUPS.map((group) => {
+          const value = settings[group.key] || {}
+          return h('div', { className: 'setrow', key: group.key },
+            h('span', { className: 'set-title' }, group.title),
+            group.fields.map((field) => field.type === 'bool'
+              ? h('label', { className: 'set-field', key: field.k }, ' ',
+                  h('input', {
+                    type: 'checkbox',
+                    checked: Boolean(value[field.k]),
+                    disabled: busy,
+                    onChange: (e) => patch(group.key, field.k, e.target.checked),
+                  }), ' ', field.label)
+              : h('label', { className: 'set-field', key: field.k }, field.label, ' ',
+                  h('input', {
+                    type: 'number', min: field.min, max: field.max, step: field.step, value: value[field.k],
+                    disabled: busy,
+                    onChange: (e) => patch(group.key, field.k, Number(e.target.value)),
+                  }))),
+            h('span', { className: 'set-desc' }, group.desc),
+          )
+        }),
+        h('div', { className: 'setfoot' },
+          h('button', { onClick: save, disabled: busy }, busy ? '保存中…' : '保存设置'),
+          notice ? h('span', { className: 'muted' }, notice) : null,
+          error ? h('span', { className: 'err' }, error) : null,
+        ),
+      )
+    }
+
     function MemoryPanel() {
       const [records, setRecords] = React.useState([])
       const [scopes, setScopes] = React.useState([])
@@ -555,6 +678,7 @@ window.__ModuleLoader__.load({
       const [q, setQ] = React.useState('')
       const [loading, setLoading] = React.useState(true)
       const [error, setError] = React.useState('')
+      const [tab, setTab] = React.useState('records')
 
       const load = async (query, scopeF) => {
         setLoading(true); setError('')
@@ -740,6 +864,11 @@ window.__ModuleLoader__.load({
       const filtering = q.trim() !== '' || scopeFilter !== ''
 
       return h('div', { className: 'memp' },
+        h('div', { className: 'tabs' },
+          h('button', { className: 'tab' + (tab === 'records' ? ' on' : ''), onClick: () => setTab('records') }, '记录'),
+          h('button', { className: 'tab' + (tab === 'settings' ? ' on' : ''), onClick: () => setTab('settings') }, '设置'),
+        ),
+        tab === 'settings' ? h(SettingsTab, {}) : h('div', { className: 'memp-body' },
         h('div', { className: 'stats' },
           h('div', { className: 'stat' }, h('b', null, String(total)), h('span', null, '条记忆')),
           h('div', { className: 'stat' }, h('b', null, String(scopes.length)), h('span', null, '个作用域')),
@@ -825,6 +954,7 @@ window.__ModuleLoader__.load({
           ? h('div', { className: 'empty' }, filtering ? '没有匹配的记忆' : '还没有记忆')
           : h('div', { className: 'list' },
               records.map((rec) => h(RecordCard, { key: rec.id, rec, vectorOn: configured && vectorEnabled, labels: labels, onSaved: () => load(), onDeleted: () => load() }))),
+        ),
       )
     }
 

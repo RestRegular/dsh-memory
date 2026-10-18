@@ -722,3 +722,57 @@ test('the installer shows progress while downloading and an error with a retry',
   assert.ok(failedText.includes('GitHub API 限流'), 'surfaces the failure reason')
   assert.ok(failedText.includes('重试下载'), 'offers a retry')
 })
+
+test('设置标签页:读取注入设置、渲染各组开关并能保存', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const settingsValue = {
+    recall: { enabled: true, topK: 5, tokenBudget: 500 },
+    digest: { enabled: true, topK: 8, tokenBudget: 400 },
+    impression: { enabled: true, chars: 120 },
+    policy: { enabled: true },
+    rules: { enabled: true, maxItems: 10, tokenBudget: 300 },
+    turnEnd: { enabled: false },
+  }
+  const calls: Array<{ url: string; method?: string; body?: string }> = []
+  let posted: Record<string, unknown> | null = null
+  ;(globalThis as Record<string, unknown>).fetch = async (url: unknown, init?: { method?: string; body?: string }) => {
+    const u = String(url)
+    calls.push({ url: u, method: init?.method, body: init?.body })
+    if (u.includes('/settings')) {
+      if (init?.method === 'POST') {
+        posted = JSON.parse(String(init.body))
+        return { status: 200, json: async () => ({ ok: true, value: posted }) }
+      }
+      return { status: 200, json: async () => ({ ok: true, value: settingsValue }) }
+    }
+    if (u.includes('/status')) return { status: 200, json: async () => ({ ok: true, value: { scopes: [], embedServer: null } }) }
+    if (u.includes('/embed/model')) return { status: 200, json: async () => ({ ok: true, value: modelReport() }) }
+    return { status: 200, json: async () => ({ ok: true, value: { records: [] } }) }
+  }
+
+  const MemoryPanel = (exports.__test as { MemoryPanel: (p: Record<string, unknown>) => unknown }).MemoryPanel
+  const element = () => hooks.React.createElement(MemoryPanel, {})
+  let current: RenderNode | null = render(element(), hooks)
+  hooks.setRerender(() => { current = render(element(), hooks) })
+  const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve() }
+  hooks.runEffects(); await flush(); hooks.runEffects(); await flush()
+
+  const tab = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '设置')
+  assert.ok(tab, '面板里有「设置」标签')
+  ;(tab!.props!.onClick as () => void)()
+  hooks.runEffects(); await flush(); hooks.runEffects(); await flush()
+
+  const text = textOf(current)
+  for (const label of ['每轮召回', '印象形态', '会话摘要', '记忆使用策略', '硬性规则', '轮末提醒']) {
+    assert.ok(text.includes(label), `设置页应显示「${label}」`)
+  }
+
+  const save = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '保存设置')
+  assert.ok(save, '有保存按钮')
+  ;(save!.props!.onClick as () => void)()
+  await flush()
+  assert.ok(posted, '保存会 POST 设置')
+  assert.deepEqual((posted as Record<string, unknown>).digest, settingsValue.digest)
+  assert.ok(calls.some((c) => c.method === 'POST' && c.url.includes('/settings')))
+})

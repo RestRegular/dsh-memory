@@ -5,7 +5,7 @@
  * is a single `context` block with `contextForm: 'recall'`, prepended to the
  * messages that enter the step via the agent/pre-step waterfall.
  */
-                                           
+                                                         
 import { estimateTokens } from '../provider/rerank.js'
 import { normalizeScopeInput } from '../provider/scope.js'
 
@@ -154,14 +154,30 @@ export function hasRecallMessage(
   return false
 }
 
+/** 召回的两种形态:旧的长文(300 字)与新的"印象"(短摘要 + 指路取全文)。 */
+                                      
+                                    
+                
+                   
+                      
+ 
+
 /** Render hits into a recall text block, greedily within the token budget. */
-export function renderRecallBlock(hits             , cfg              )                                          {
+export function renderRecallBlock(
+  hits             ,
+  cfg              ,
+  options                      = {},
+)                                          {
   if (hits.length === 0) return null
-  const header = '以下是与此请求可能相关的长期记忆，供参考（可用 memory_search 核实，用 memory_forget 删除）：'
+  const impression = options.impression === true
+  const chars = impression ? (options.chars ?? 120) : 300
+  const header = impression
+    ? '以下是与你这次请求可能相关的记忆（摘要形态；判断相关但需要原文时，用 memory_search 取全文）：'
+    : '以下是与此请求可能相关的长期记忆，供参考（可用 memory_search 核实，用 memory_forget 删除）：'
   let tokens = estimateTokens(header) + 4
   const lines           = []
   for (const h of hits.slice(0, cfg.topK)) {
-    const line = `- ${h.record.content.replace(/\s+/g, ' ').slice(0, 300)}`
+    const line = `- ${h.record.content.replace(/\s+/g, ' ').slice(0, chars)}`
     const cost = estimateTokens(line) + 1
     if (tokens + cost > cfg.tokenBudget) break
     lines.push(line)
@@ -185,24 +201,31 @@ export function recallText(text        )         {
  * Repeated identical injections are suppressed so a multi-step turn does not
  * repeat the same block before every model call.
  */
+/** 配置既可以给静态值,也可以给 getter —— 面板改了设置,下一步就生效。 */
+                                    
+
 export class MemoryInjector {
           lastText = ''
                    search                                                                                           
-                   cfg              
+                   cfg                            
+                   renderOptions                                   
 
   constructor(
     search                                                                                           ,
-    cfg              ,
+    cfg                            ,
+    renderOptions                                    = {},
   ) {
     this.search = search
     this.cfg = cfg
+    this.renderOptions = renderOptions
   }
 
   async maybeInject(
     input             ,
     _decision                     ,
   )                              {
-    if (!this.cfg.enabled) return undefined
+    const cfg = typeof this.cfg === 'function' ? this.cfg() : this.cfg
+    if (!cfg.enabled) return undefined
     const query = pickQueryText(input.messages)
     if (!query) return undefined
 
@@ -213,11 +236,60 @@ export class MemoryInjector {
       return undefined // retrieval failure never breaks the agent loop
     }
 
-    const block = renderRecallBlock(hits, this.cfg)
+    const options = typeof this.renderOptions === 'function' ? this.renderOptions() : this.renderOptions
+    const block = renderRecallBlock(hits, cfg, options)
     if (!block || block.text === this.lastText) return undefined
     this.lastText = block.text
 
     return block.text
+  }
+}
+
+/** 从 agent 上取会话 id;取不到就没有"每个会话只发一次摘要"的锚点。 */
+export function sessionIdOf(agent         )                     {
+  const id = (agent                                              )?.session?.id
+  return typeof id === 'string' && id.length > 0 ? id : undefined
+}
+
+/** 摘要注入最多记住多少个会话(一个进程里开过的会话上界,防止 Set 无限长)。 */
+const MAX_DIGESTED_SESSIONS = 500
+
+/**
+ * 会话摘要注入器:一个会话只注入一次"已有哪些记忆"的摘要。
+ * 检索失败或结果为空也标记为已完成 —— 摘要不是必需品,不能每步重试。
+ */
+export class MemoryDigester {
+                   done = new Set        ()
+                   list                                                                    
+
+  constructor(
+    list                                                                    ,
+  ) {
+    this.list = list
+  }
+
+  async maybeDigest(
+    sessionId                    ,
+    scopes                               ,
+    render                                            ,
+  )                              {
+    if (sessionId === undefined || this.done.has(sessionId)) return undefined
+    this.markDone(sessionId)
+    let records                
+    try {
+      records = await this.list(scopes)
+    } catch {
+      return undefined
+    }
+    return render(records) ?? undefined
+  }
+
+          markDone(sessionId        )       {
+    this.done.add(sessionId)
+    if (this.done.size > MAX_DIGESTED_SESSIONS) {
+      const oldest = this.done.values().next()
+      if (!oldest.done) this.done.delete(oldest.value)
+    }
   }
 }
 

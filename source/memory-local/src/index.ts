@@ -23,6 +23,7 @@ import {
   writeScopeForDefault,
   type ScopeKey,
 } from './scope.ts'
+import { mergeInjectSettings, normalizeInjectSettings, type InjectSettings } from './inject-settings.ts'
 import { buildStats, lexicalScore, recordScore, tokenize, cosine, normalizeInPlace, hasStrongHit } from './scoring.ts'
 import { EmbedClient } from './embed.ts'
 import { DailyBudget, blendScores, rerank, type LlmInvoke, type RerankConfig } from './rerank.ts'
@@ -487,9 +488,12 @@ export class LocalMemoryService implements MemoryServiceApi {
   private projectScope: MemoryScope | undefined
   /** 上次发现磁盘 scope 的时间(限流用;0 = 还没发现过)。 */
   private discoveredAt = 0
+  /** 注入设置(面板「设置」标签页可改;落盘在 <storeDir>/settings.json)。 */
+  private inject: InjectSettings
 
   constructor(config: MemoryLocalConfig = {}) {
     this.cfg = resolveConfig(config)
+    this.inject = this.loadInjectSettings((config as { inject?: unknown }).inject)
     this.rerankBudget = new DailyBudget(this.cfg.llm.dailyBudgetTokens)
     this.store = new MemoryStore(this.cfg.storeDir, { onWarn: (m) => console.warn(`[dsh-memory-local] ${m}`) })
     // Identity BEFORE the eager load (issue #1): ScopeStore skips its sidecar
@@ -517,8 +521,63 @@ export class LocalMemoryService implements MemoryServiceApi {
     this.startEmbedServer()
   }
 
-  /** Own the embedding backend's lifetime: spawn on activation, stop on dispose. */
-  private startEmbedServer(): void {
+  /** 设置文件:与记忆数据同目录,便于一起备份/清理。 */
+  get settingsPath(): string {
+    return join(this.cfg.storeDir, 'settings.json')
+  }
+
+  /** 读取注入设置(归一化后的快照)。 */
+  injectSettings(): InjectSettings {
+    return normalizeInjectSettings(this.inject, this.inject)
+  }
+
+  /** 面板改设置:合并补丁 → 落盘 → 返回新值。写盘失败只告警,不影响运行中的设置。 */
+  updateInjectSettings(patch: unknown): InjectSettings {
+    this.inject = mergeInjectSettings(this.inject, patch)
+    try {
+      mkdirSync(this.cfg.storeDir, { recursive: true })
+      writeFileSync(this.settingsPath, `${JSON.stringify(this.inject, null, 2)}\n`, 'utf8')
+    } catch (error) {
+      console.warn(`[dsh-memory-local] 无法写入注入设置 ${this.settingsPath}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    return this.injectSettings()
+  }
+
+  /** 配置先给底,磁盘上的 settings.json 覆盖它;坏文件忽略而不是启动失败。 */
+  private loadInjectSettings(fromConfig: unknown): InjectSettings {
+    const base = normalizeInjectSettings(fromConfig)
+    try {
+      if (existsSync(this.settingsPath)) {
+        return mergeInjectSettings(base, JSON.parse(readFileSync(this.settingsPath, 'utf8')))
+      }
+    } catch (error) {
+      console.warn(`[dsh-memory-local] 忽略损坏的注入设置 ${this.settingsPath}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    return base
+  }
+
+  /**
+   * 同步列记录(只读、不触发磁盘发现)。系统提示里的「硬性规则」段每步都要
+   * 渲染,必须是同步的;这里直接读已加载 scope 的内存快照。
+   */
+  listSync(input: { scopes?: MemoryScope[]; kind?: string; limit?: number } = {}): MemoryRecord[] {
+    const seen = new Set<MemoryScope>()
+    const out: MemoryRecord[] = []
+    for (const scope of input.scopes ?? []) {
+      if (seen.has(scope)) continue
+      seen.add(scope)
+      const s = this.store.peek(scope)
+      if (!s) continue
+      for (const rec of s.records.values()) {
+        if (input.kind !== undefined && rec.kind !== input.kind) continue
+        out.push(rec)
+      }
+    }
+    out.sort((a, b) => b.updatedAt - a.updatedAt)
+    return out.slice(0, input.limit ?? 100)
+  }
+
+  /** Own the embedding backend's lifetime: spawn on activation, stop on dispose. */  private startEmbedServer(): void {
     // Nothing configured and retrieval switched off → do not even build the
     // manager, so no probe, no spawn attempt, no misleading panel state.
     if (!this.cfg.vector.enabled || !this.cfg.vector.configured) return

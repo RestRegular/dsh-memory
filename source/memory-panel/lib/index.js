@@ -244,8 +244,18 @@ async function handle(ctx, routePath, req, res) {
       writeJson(res, { ok: true, value: { scopes, embedServer } })
       return
     }
-    if (method === 'GET' && path === '/embed/status') {
-      if (typeof memory.embedServerStatus !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供向量服务管理接口')
+    if (method === 'GET' && path === '/settings') {
+      if (typeof memory.injectSettings !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供注入设置接口（请升级 @restregular/dsh-memory）')
+      writeJson(res, { ok: true, value: memory.injectSettings() })
+      return
+    }
+    if (method === 'POST' && path === '/settings') {
+      if (typeof memory.updateInjectSettings !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供注入设置接口（请升级 @restregular/dsh-memory）')
+      const body = await readJsonBody(req)
+      writeJson(res, { ok: true, value: memory.updateInjectSettings(body) })
+      return
+    }
+    if (method === 'GET' && path === '/embed/status') {      if (typeof memory.embedServerStatus !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供向量服务管理接口')
       writeJson(res, { ok: true, value: await memory.embedServerStatus() })
       return
     }

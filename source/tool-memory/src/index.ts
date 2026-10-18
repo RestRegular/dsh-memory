@@ -157,11 +157,11 @@ export interface SaveResult {
 export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, SaveResult> {
   return {
     name: 'memory_save',
-    description: 'Save a durable memory (fact, decision, preference, procedure) for future sessions.',
+    description: 'Save a durable memory (fact, decision, preference, procedure, rule) for future sessions.',
     parameters: {
       content: { type: 'string', description: 'Self-contained declarative sentence, readable without context', required: true },
       scope: { type: 'string', description: SCOPE_DESCRIPTION },
-      kind: { type: 'string', enum: ['fact', 'decision', 'preference', 'procedure', 'note'] },
+      kind: { type: 'string', enum: ['fact', 'decision', 'preference', 'procedure', 'note', 'rule'] },
       tags: { type: 'array', items: { type: 'string' } },
       importance: { type: 'number', description: '0~1, higher = more important' },
       supersedes: { type: 'string', description: 'Record id this corrects/replaces' },

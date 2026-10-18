@@ -25,8 +25,12 @@ English: Local, durable memory for DeepSeek Harness — one npm package, one loa
 | **作用域** | 默认写进**当前会话**;读默认合并「会话 + 项目 + global」。也能写 `global`、当前项目,或任意自定义名(首次写入自动建) |
 | **双通道检索** | 词法(IDF + CJK bigram)**+** 向量(llama-server 的 `/v1/embeddings`)。向量缺席时自动降级为纯词法,**不报错、不阻塞** |
 | **自动召回** | `agent/pre-step` 注入相关记忆(可关、有 token 预算、按 topK 截断,范围同为会话+项目+global) |
+| **印象形态** | 每轮只给每条记忆的短摘要;模型判断相关但需要细节时再 `memory_search` 取全文(可在面板关掉,退回长文召回) |
+| **会话摘要** | 会话第一步注入一次「已有记忆」概览:项目 + global 按**重要度 × 新鲜度**挑几条,省得模型从头摸索 |
+| **记忆使用策略** | 系统提示常驻段:什么时候该查记忆、查到怎么复用、查不到时低风险推断 / 高风险先问用户 |
+| **硬性规则** | `kind: rule` 的记忆进系统提示常驻段(限量、可关)。能机械校验的规则应该做成钩子,提示词只做解释 |
 | **四个工具** | `memory_save` / `memory_search` / `memory_list` / `memory_forget` |
-| **管理面板** | 设置页「记忆」:浏览 / 搜索 / 编辑 / 删除、向量服务启停、模型与硬件、维护(卸载 / 清空) |
+| **管理面板** | 设置页「记忆」:记录(浏览 / 搜索 / 编辑 / 删除)+ 设置(召回、摘要、印象、策略、规则、轮末提醒逐项开关)、向量服务启停、模型与硬件、维护(卸载 / 清空) |
 | **向量后端一键装** | 面板里选模型 → 下 llama.cpp 运行时 + 模型 → 托管 `llama-server` 进程;内置 8 个模型 + 硬件推荐 + 自定义 GGUF |
 
 ## 安装 / Install
@@ -88,13 +92,12 @@ memory_save({
 **2. 检索**:`memory_search({ query: "pnpm 装依赖", topK: 5 })` —— 省略 `scope` = 会话 + 项目 + global 合并(按来源标注、按 id 去重);`scope: "all"` 查所有作用域;写具体名字则只查那一个。
 **3. 列出 / 忘记**:`memory_list({ limit: 20 })`(默认只列当前会话,末尾附作用域清单 + 记录数)、`memory_forget({ id })` 或 `memory_forget({ query, scope })`(按内容删默认**只作用于当前会话**,防止跨作用域误删)。
 
-**4. 打开面板**:设置页 →「记忆」。面板里能做的事:
+**4. 打开面板**:设置页 →「记忆」。面板分两个标签:
 
-- 顶部统计(记忆数 / 作用域数 / 待嵌入向量数)与记录列表(搜索、按作用域筛选、展开编辑、删除)
-- 作用域下拉**动态枚举实际存在的作用域**:`global` 显示「全局」、project 显示 cwd、会话 scope 显示会话标题(拿不到就显示「会话 <id 前 8 位>」)、自定义 scope 显示原名
-- 「向量服务」:状态、地址、启停开关、**模型与硬件**(见下)、维护(卸载向量服务 / 清空记忆数据,两步确认)
+- **记录**:顶部统计(记忆数 / 作用域数 / 待嵌入向量数)、记录列表(搜索、按作用域筛选、展开编辑、删除);作用域下拉**动态枚举实际存在的作用域**(`global` 显示「全局」、project 显示 cwd、会话 scope 显示会话标题、自定义 scope 显示原名);「向量服务」:状态、地址、启停开关、**模型与硬件**(见下)、维护(卸载向量服务 / 清空记忆数据,两步确认)
+- **设置**:注入链路逐项开关 —— 每轮召回(topK / 预算)、印象形态(每条字数)、会话摘要(条数 / 预算)、记忆使用策略段、硬性规则段(条数 / 预算)、轮末提醒。改完立即生效,不需要重启
 
-面板后端在 `/memory/api`,全部路由:`GET /status`、`GET /records`、`POST /update`、`POST /delete`、`GET /embed/status`、`POST /embed/start|stop`、`GET /embed/model`、`POST /embed/model/refresh|install|install/cancel|uninstall`、`POST /data/wipe`。
+面板后端在 `/memory/api`,全部路由:`GET /status`、`GET /records`、`POST /update`、`POST /delete`、`GET /settings`、`POST /settings`、`GET /embed/status`、`POST /embed/start|stop`、`GET /embed/model`、`POST /embed/model/refresh|install|install/cancel|uninstall`、`POST /data/wipe`。
 
 ## 数据与文件布局
 
@@ -103,6 +106,7 @@ memory_save({
 | `<storeDir>/global.jsonl` | global 作用域的记忆,一行一条 |
 | `<storeDir>/projects/<sha1(scope)>.jsonl` | 其它作用域(会话 / 项目 / 自定义)各一个文件;文件名是 scope 键的 SHA-1,所以名字里带路径分隔符也不可能穿越 |
 | `<storeDir>/projects/<sha1(scope)>.vec` | 向量边车。首行是身份头 `#<model>\t<dims>`,后面每行 `id\t<base64 向量>` |
+| `<storeDir>/settings.json` | 面板「设置」里改过的注入开关(配置里的值是默认值,这里覆盖它) |
 | `<installRoot>/llamacpp/` | llama-server 运行时(exe + 依赖 dll + `llama-server.log`) |
 | `<installRoot>/models/` | 下载的 GGUF 模型 |
 | `<installRoot>/selected-model.json` | 面板里选过哪一档(比配置优先级低) |
@@ -151,7 +155,16 @@ provider 的配置在顶层,工具 / 注入 / 面板各占一个小节(合并前
     limits: { maxRecordsPerScope: 2000, maxRecordChars: 4000 }
     secrets: { enabled: true, mode: refuse }
     tools: { defaultScope: session }              # session(新默认)/ project / global;projectScope 默认 project:<会话 cwd>
-    inject: { enabled: true, tokenBudget: 500, topK: 5 }   # 可加 extraScopes: ['handbook']
+    inject:
+      enabled: true                 # 整个注入半边(含下面的段)的总开关
+      extraScopes: ['handbook']     # 可选:额外参与召回的 scope
+      # 以下都可以在面板「记忆 → 设置」里改(立即生效);这里是默认值
+      recall: { enabled: true, topK: 5, tokenBudget: 500 }
+      impression: { enabled: true, chars: 120 }      # 每条只给摘要,细节再 memory_search
+      digest: { enabled: true, topK: 8, tokenBudget: 400 }   # 会话第一步的概览
+      policy: { enabled: true }                        # 系统提示:记忆使用策略
+      rules: { enabled: true, maxItems: 10, tokenBudget: 300 }  # 系统提示:kind=rule
+      turnEnd: { enabled: false }                      # 轮末提醒(下一轮开头提示落盘)
     panel: { route: '/memory/api' }
 ```
 
@@ -159,6 +172,9 @@ provider 的配置在顶层,工具 / 注入 / 面板各占一个小节(合并前
 - **`scopes.custom.max`** 只统计自定义作用域(已发现 + 已加载去重);到上限后 `memory_save` 新建会被拒并提示可复用的名字(`SCOPE_LIMIT`),写已有作用域不受限。会话/项目/global 既不计入也不受限。
 - **读与写的默认是一致的**:写进会话的东西,`memory_search` 默认就能读回来(合并会话 + 项目 + global,按 id 去重,同分时 session > project > 自定义 > global)。想只看某一个就显式给 `scope`。
 - 旧配置(只有 `scopes: { global: true, project: true }`、`tools.defaultScope: project`)照常工作 —— 不写新字段就是新默认值(`session: true`、`custom: { enabled: true, max: 200 }`),想保持 0.4.x 的老行为就显式写 `tools.defaultScope: project`。
+
+- **注入分四层**:`recall`(每轮按问题检索)、`digest`(会话第一步给概览)、`policy`(系统提示常驻的使用策略)、`rules`(系统提示常驻的 `kind=rule` 规则),外加 `turnEnd`(轮末提醒,默认关)。每层独立开关,`inject.enabled: false` 全关。面板改过的值写在 `<storeDir>/settings.json`,**优先级高于这里的配置**。
+- **写规则**:`memory_save({ kind: 'rule', content: '改 lib 必须同时改 source' })`。规则会进系统提示常驻段;能机械校验的规则更适合做成钩子,提示词只负责解释。
 
 向量检索是**按配置启用**的:写了 `endpoint`、配了 `spawn`、或面板里装了本地后端才会碰网络,否则一个请求都不发,检索自动降级为纯词法(IDF + CJK bigram)。不需要自动召回就 `inject.enabled: false`。
 
@@ -290,6 +306,14 @@ tools/build-single-package.mjs   构建(产物契约检查 + 可选加载验证)
 
 ## 版本
 
+- **0.6.0** —— 注入分层,面板加「设置」标签页:
+  - **印象形态召回**:每轮召回默认只给每条记忆的开头(默认 120 字)+「需要细节用 memory_search」的指引,不再一次灌 300 字全文;面板可关掉退回长文。
+  - **会话摘要**:会话第一步注入一次概览 —— 项目 + global 按「新鲜度(30 天半衰期)× 重要度」挑 8 条,同分时会话 > 项目 > 自定义 > 全局。
+  - **记忆使用策略**:系统提示常驻段,写清什么时候该查、查到怎么复用、查不到时低风险推断 / 高风险先问用户、什么时候该写。
+  - **硬性规则**:新增记忆类型 `rule`,`kind=rule` 的记忆进系统提示常驻段(限量 10 条 / 300 token);能机械校验的规则建议做成钩子。
+  - **轮末提醒**:可选(默认关),本轮跑过多步时,下一轮开头提醒「若产生了可复用结论先 memory_save」。
+  - **面板设置页**:以上逐项开关 + 数值(条数 / 预算 / 每条字数),保存即生效;落盘 `<storeDir>/settings.json`。
+  - 摘要 / 召回 / 提醒合并成**同一条** `source.kind='memory'` 消息,不再一步两张卡片;注入按内容幂等,重复激活也不会出现两份。
 - **0.5.6** —— **`project:` 作用域此前是失效的**。项目键本应跟着工作区走,但代码把 `project:${process.cwd()}` 当"显式配置"抢先传进解析函数,而 `process.cwd()` 在 DSH 里是**服务进程的启动目录 = profile 目录**(`~/.dsh/profiles/<name>`),不是工作区。后果:该 profile 下**所有项目的项目级记忆挤进同一个桶**(`project:C:\Users\…\.dsh\profiles\desktop`),互相被检索到,而真正的 `project:<工作区>` 永远是空的;面板「当前项目」也指向那里。三处同一份逻辑(服务解析、装配层默认、工具层各算一份)全部统一:**会话 `cwd` > 显式配置 `projectScope` > `process.cwd()`**,工具层改为向服务端要解析结果(`projectKeyFor`),不再自己算。显式配置现在会正确脱掉 `project:` 前缀,不再拼出 `project:project:/x`。之前写进错误桶里的数据不会自动搬家(那需要判断哪条属于哪个项目),受影响的话请手动重存。
 - **0.5.5** —— 侧栏图标改成**与那一列同风格**的线稿芯片。0.5.4 虽然修好了"空一格",但画的是"蓝色瓦片 + 深墨蓝芯片"的实心方块,那是**插件管理器卡片/行**(36/30px,`icon.svg`)那套插件美术;而设置侧栏这一列全是 16px 单色细线图标(宿主内置 `Icon*OutlineMedium`:16 网格、`fill:none`、`stroke:currentColor`、线宽 1.3),实心蓝块混在里面格格不入。现在只用宿主渲染的那颗 svg 的**子节点**画线稿芯片(圆角方 + 内方 + 四引脚,1.3 描边、跟随主题),尺寸/对齐/行高仍由宿主保证。三条被验证过走不通的路都写进了代码注释:`::before` 补一个(盒子不成形 → 空一格)、给 svg 上背景(画不出描边线稿)、`content: url(...)` 替换 svg 内容(SVG 不支持 content 替换)。
 - **0.5.4** —— 修 0.5.3 的图标空洞。0.5.3 是"把齿轮 `display:none` 藏掉、再用 `::before` 在同一格补一个记号",真机上出现**齿轮没了、记号也没画出来**,只剩一个空位。改成**就地覆盖**那颗 svg(不再隐藏、不再插节点)。同时删掉 0.1.0 遗留的空壳目录 `packages/dsh-memory-panel`(0.4.0 起已被单包取代),免得它继续干扰"哪个子包才是可安装的"这类判断。

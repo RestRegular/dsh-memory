@@ -120,6 +120,25 @@ export class CordisMemoryService extends Service {
     return this.impl.list(input)
   }
 
+  /** 同步列记录(系统提示里的规则段用,不能等异步 list)。 */
+  listSync(input                                               )                                             {
+    return this.impl.listSync(input)
+  }
+
+  /** 注入设置(面板「设置」标签页读它)。 */
+  injectSettings()                                                   {
+    return this.impl.injectSettings()
+  }
+
+  /** 面板改设置:落盘后广播,注入半边下一步就能按新设置跑。 */
+  updateInjectSettings(patch         )                                                   {
+    const next = this.impl.updateInjectSettings(patch)
+    try {
+      this.ctx.emit('memory/inject-settings', next)
+    } catch { /* 广播失败不影响设置本身 */ }
+    return next
+  }
+
   /**
    * 当前 agent 上下文 → 默认合并读取范围(会话 + 项目 + global,按开关与 key 去重)。
    * 工具与召回注入都走它,保证与 `resolveWriteScope` 是同一套口径。
