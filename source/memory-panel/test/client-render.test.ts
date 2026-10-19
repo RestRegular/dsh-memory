@@ -870,13 +870,23 @@ test('记录卡:标签渲染成气泡,修正关系两个方向都有明确徽标
   const RecordCard = (exports.__test as { RecordCard: (p: Record<string, unknown>) => unknown }).RecordCard
 
   let tree: RenderNode | null = null
-  const element = (rec: Record<string, unknown>) => hooks.React.createElement(RecordCard, { rec, onSaved: () => {}, onDeleted: () => {} })
-  hooks.setRerender(() => {})
-  tree = render(element(makeRecord({ tags: ['pnpm', '工具链'], supersedes: 'abcdef1234567890' })), hooks)
+  let current: Record<string, unknown> = makeRecord({ tags: ['pnpm', '工具链'], supersedes: 'abcdef1234567890' })
+  const element = () => hooks.React.createElement(RecordCard, { rec: current, onSaved: () => {}, onDeleted: () => {} })
+  hooks.setRerender(() => { tree = render(element(), hooks) })
+  tree = render(element(), hooks)
+
+  // 折叠时不显示标签(避免列表变吵)
+  assert.ok(!textOf(tree).includes('pnpm'), '折叠状态不显示标签')
+  // 展开后:内容、完整 id、标签一起出现
+  const head = collect(tree).find((n) => String(n.props?.className ?? '') === 'rec-head')
+  assert.ok(head, '卡片头存在')
+  ;(head!.props!.onClick as () => void)()
   const text = textOf(tree)
-  assert.ok(text.includes('pnpm') && text.includes('工具链'), `标签要显示在卡片上(${text})`)
+  assert.ok(text.includes('pnpm') && text.includes('工具链'), `标签在展开区(${text})`)
+  assert.ok(text.includes('rec-1'), '展开后显示记录 id')
   assert.ok(text.includes('修正自 abcdef12'), '修正版徽标带旧记录 id 前缀')
 
-  tree = render(element(makeRecord({ tags: [], supersededBy: 'ffff000011112222' })), hooks)
+  current = makeRecord({ tags: [], supersededBy: 'ffff000011112222' })
+  tree = render(element(), hooks)
   assert.ok(textOf(tree).includes('已被修正'), '被修正的记录有「已被修正」徽标')
 })

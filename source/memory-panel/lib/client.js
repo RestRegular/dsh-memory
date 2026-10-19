@@ -82,6 +82,10 @@ window.__ModuleLoader__.load({
       '.memp .badge.corrected{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary)}',
       '.memp .tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}',
       '.memp .tag{font-size:11px;line-height:1.7;padding:0 6px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2)}',
+      '.memp .meta{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .meta-id{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11.5px;padding:1px 6px;border-radius:5px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);cursor:pointer;user-select:all}',
+      '.memp .meta-id:hover{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary)}',
+      '.memp .meta-done{color:var(--dsw-alias-brand-primary);font-size:11.5px}',
       '.memp .pending{flex:none}',
       '.memp .time{margin-left:auto;flex:none}',
       '.memp .preview{margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dsw-alias-label-secondary);line-height:1.5}',
@@ -223,6 +227,15 @@ window.__ModuleLoader__.load({
       const [importance, setImportance] = React.useState(rec.importance)
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState('')
+      const [copied, setCopied] = React.useState(false)
+
+      const copyId = () => {
+        try {
+          if (navigator?.clipboard?.writeText) void navigator.clipboard.writeText(rec.id)
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1200)
+        } catch { /* 剪贴板不可用时忽略 */ }
+      }
 
       // editing implies expanded: the editor replaces the body
       const open = expanded || editing
@@ -287,9 +300,6 @@ window.__ModuleLoader__.load({
           h('span', { className: 'time', title: `更新于 ${fmtTime(rec.updatedAt)}` }, fmtTime(rec.updatedAt)),
         ),
         !open ? h('div', { className: 'preview' }, rec.content) : null,
-        rec.tags && rec.tags.length > 0
-          ? h('div', { className: 'tags' }, rec.tags.map((tag) => h('span', { className: 'tag', key: tag }, tag)))
-          : null,
         open
           ? h('div', { className: 'rec-body' },
               editing
@@ -312,7 +322,17 @@ window.__ModuleLoader__.load({
                       h('button', { disabled: busy, onClick: cancelEdit }, '取消'),
                     ),
                   )
-                : h('div', { className: 'content' }, rec.content),
+                : h('div', null,
+                    h('div', { className: 'content' }, rec.content),
+                    h('div', { className: 'meta' },
+                      h('span', { className: 'meta-label' }, 'id'),
+                      h('code', { className: 'meta-id', title: '点击复制完整 id', onClick: copyId }, rec.id),
+                      copied ? h('span', { className: 'meta-done' }, '已复制') : null,
+                    ),
+                    rec.tags && rec.tags.length > 0
+                      ? h('div', { className: 'tags' }, rec.tags.map((tag) => h('span', { className: 'tag', key: tag }, tag)))
+                      : null,
+                  ),
             )
           : null,
         error ? h('div', { className: 'err' }, error) : null,
