@@ -320,6 +320,7 @@ tools/build-single-package.mjs   构建(产物契约检查 + 可选加载验证)
 
 ## 版本
 
+- **0.7.2** —— Star / issue 那行改为居中展示。
 - **0.7.1** —— 「服务」页底部加了 Star / issue 入口:「觉得好用？⭐ 去 GitHub 点个 Star · 💬 反馈建议 / 提 issue」,两段都是外链(仓库主页 / 新建 issue)。
 - **0.7.0** —— 作用域语义:**`path` 指定工作区,`scope` 用作作用域显示名(别名)**。
   - `memory_save({ path: "D:/proj", scope: "我的项目" })` 写入 `project:D:/proj`;省略 `scope` 时名字就是路径。
