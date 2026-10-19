@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 会话作用域 / 自定义作用域 / 多 scope 合并 的服务层与工具层测试(0.5.0)。
  *
  * 覆盖的是 0.5.0 的核心承诺:
@@ -511,6 +511,73 @@ test('清空全部记忆后不留空文件(global.jsonl 是唯一例外)', async
     svc.store.flush()
     assert.ok(existsSync(globalFile), 'global.jsonl 保留')
     assert.equal(readFileSync(globalFile, 'utf8').trim(), '', '内容清空但文件在')
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ------------------------------------------------------------ 0.7.0 path + 作用域别名
+
+test('path 写入项目作用域;scope 用作该作用域的显示名(别名)', async () => {
+  const dir = tempDir()
+  const svc = newService(dir)
+  const workspace = join(tmpdir(), 'ws-demo')
+  try {
+    const tools = toolsFor(svc)
+    const saved = await tools.memory_save.execute({
+      content: '带路径的一条', path: workspace, scope: '演示项目',
+    }, { agent: agent('sess-1') })
+    assert.equal(saved.scope, `project:${workspace}`)
+    assert.equal(saved.scopeName, '演示项目')
+    assert.equal(svc.scopeName(`project:${workspace}`), '演示项目', '别名已登记')
+
+    // 读路径可以直接用别名
+    const found = await svc.search({ text: '带路径', scopes: ['演示项目'] as never })
+    assert.equal(found.length, 1, '用别名能检索到该作用域')
+    assert.equal(found[0]!.record.scope, `project:${workspace}`)
+
+    // 同一路径同名幂等;不同路径同名拒绝
+    await tools.memory_save.execute({ content: '同路径再写一条', path: workspace, scope: '演示项目' }, { agent: agent('sess-1') })
+    await assert.rejects(
+      () => tools.memory_save.execute({ content: '另一个路径抢名字', path: join(tmpdir(), 'ws-other'), scope: '演示项目' }, { agent: agent('sess-1') }),
+      (error) => (error as { code?: string }).code === 'SCOPE_NAME_TAKEN',
+    )
+    // 保留名 / 非法名 = SCOPE_NAME_INVALID
+    await assert.rejects(
+      () => tools.memory_save.execute({ content: 'x', path: workspace, scope: 'global' }, { agent: agent('sess-1') }),
+      (error) => (error as { code?: string }).code === 'PATH_SCOPE_CONFLICT',
+    )
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('path 省略 scope 时,作用域名回退为路径本身', async () => {
+  const dir = tempDir()
+  const svc = newService(dir)
+  const workspace = join(tmpdir(), 'ws-noname')
+  try {
+    const tools = toolsFor(svc)
+    const saved = await tools.memory_save.execute({ content: '只给路径', path: workspace }, { agent: agent('sess-1') })
+    assert.equal(saved.scope, `project:${workspace}`)
+    assert.equal(saved.scopeName, undefined)
+    assert.equal(svc.scopeName(`project:${workspace}`), undefined, '没有别名时显示路径本身')
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('别名只能加在项目作用域上', async () => {
+  const dir = tempDir()
+  const svc = newService(dir)
+  try {
+    await assert.rejects(
+      () => svc.save({ scope: 'global', kind: 'fact', content: 'x', name: '全局别名' } as never),
+      (error) => (error as { code?: string }).code === 'SCOPE_NAME_UNSUPPORTED',
+    )
   } finally {
     svc.flushSync()
     rmSync(dir, { recursive: true, force: true })

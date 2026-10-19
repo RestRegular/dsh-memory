@@ -114,6 +114,11 @@ function normalizePrefixed(key: string, label: 'project' | 'session'): { ok: tru
   return { ok: true, key: `${label}:${value}` }
 }
 
+/** 作用域“显示名/别名”的校验:与自定义作用域名同一套规则(保留名也不许用)。 */
+export function normalizeScopeName(raw: string): { ok: true; name: string } | { ok: false; message: string } {
+  return normalizeCustomName(raw)
+}
+
 /**
  * 把模型 / HTTP query 传进来的原始字符串规范化。
  *

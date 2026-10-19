@@ -11,6 +11,7 @@
  * resolveReadScopes/resolveWriteScope —— 这里**不再**有任何"smoothing over"式的静默回退。
  */
 import type { MemoryScope } from 'dsh-memory'
+import { isAbsolute, resolve } from 'node:path'
 import { normalizeScopeInput, resolveScopeRef } from '../../memory-local/src/scope.ts'
 
 /** Shape each tool shares: JSON-schema parameters + canonical output value. */
@@ -144,6 +145,8 @@ function resolveScope(
 export interface SaveArgs {
   content: string
   scope?: string
+  /** 工作区目录路径；给出后写入 project:<路径>，此时 scope 用作该作用域的显示名。 */
+  path?: string
   kind?: string
   tags?: string[]
   importance?: number
@@ -153,7 +156,22 @@ export interface SaveArgs {
 export interface SaveResult {
   id: string
   scope: string
+  /** 作用域别名（这次写入顺带登记的名字）。 */
+  scopeName?: string
   deduped: boolean
+}
+
+/**
+ * `path` → 绝对工作区路径。相对路径按会话 cwd 解析（拿不到就按进程 cwd），
+ * 去掉末尾分隔符 —— 同一个目录必须只有一种写法，否则 project:<路径> 会分叉。
+ */
+function resolveWorkspacePath(raw: string, agent: unknown): string {
+  const value = raw.trim()
+  if (value === '') throw new MemoryToolError('PATH_INVALID', 'path 不能为空')
+  const cwd = (agent as { session?: { header?: { cwd?: unknown } } } | undefined)?.session?.header?.cwd
+  const base = typeof cwd === 'string' && cwd.length > 0 ? cwd : process.cwd()
+  const full = isAbsolute(value) ? value : resolve(base, value)
+  return full.replace(/[\\/]+$/u, '') || full
 }
 
 export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, SaveResult> {
@@ -162,7 +180,8 @@ export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, Sav
     description: 'Save a durable memory (fact, decision, preference, procedure, rule) for future sessions.',
     parameters: {
       content: { type: 'string', description: 'Self-contained declarative sentence, readable without context', required: true },
-      scope: { type: 'string', description: SCOPE_DESCRIPTION },
+      scope: { type: 'string', description: `${SCOPE_DESCRIPTION};配合 path 时表示该工作区作用域的显示名（别名）` },
+      path: { type: 'string', description: '工作区目录路径；给出后写入 project:<路径>，此时 scope 用作该作用域的显示名（别名，可省略 = 用路径本身）' },
       kind: { type: 'string', enum: ['fact', 'decision', 'preference', 'procedure', 'note', 'rule'] },
       tags: { type: 'array', items: { type: 'string' } },
       importance: { type: 'number', description: '0~1, higher = more important' },
@@ -180,16 +199,34 @@ export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, Sav
       // project)。默认值的最终权威是 provider 的 `save` —— 省略时干脆不带 scope 字段,
       // 但要把会话上下文(exec.agent)带过去,否则它没法知道"当前会话"是谁。
       const requested = args.scope?.trim()
-      const explicit = requested === undefined || requested === ''
-        ? undefined
-        : resolveScope(opts, service, exec, requested, 'write').scope
-      if (requested !== undefined && requested !== '' && explicit === undefined) {
-        throw new MemoryToolError('SCOPE_INVALID', 'scope could not be resolved')
-      }
       const agent = agentOf(exec)
+      const pathArg = typeof args.path === 'string' ? args.path.trim() : ''
+
+      let explicit: string | undefined
+      let alias: string | undefined
+      if (pathArg !== '') {
+        // path 给出 = 项目作用域;scope 此时是它的显示名,不再当 scope 选择器用。
+        if (requested !== undefined && requested !== '' && requested !== 'project') {
+          if (requested === 'global' || requested === 'session' || requested === 'all') {
+            throw new MemoryToolError('PATH_SCOPE_CONFLICT', `path 只能配合项目作用域使用,不能再指定 scope="${requested}"`)
+          }
+          alias = requested
+        }
+        explicit = `project:${resolveWorkspacePath(pathArg, agent)}`
+      } else {
+        const resolved = requested === undefined || requested === ''
+          ? undefined
+          : resolveScope(opts, service, exec, requested, 'write').scope
+        if (requested !== undefined && requested !== '' && resolved === undefined) {
+          throw new MemoryToolError('SCOPE_INVALID', 'scope could not be resolved')
+        }
+        explicit = resolved
+      }
+
       try {
         const record = await service.save({
           ...(explicit !== undefined ? { scope: explicit } : {}),
+          ...(alias !== undefined ? { name: alias } : {}),
           ...(agent !== undefined ? { agent } : {}),
           kind: args.kind ?? 'note',
           content: args.content.trim(),
@@ -198,7 +235,7 @@ export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, Sav
           ...(args.supersedes ? { supersedes: args.supersedes } : {}),
           source: { origin: 'explicit' },
         })
-        return { id: record.id, scope: record.scope, deduped: false }
+        return { id: record.id, scope: record.scope, ...(alias !== undefined ? { scopeName: alias } : {}), deduped: false }
       } catch (error) {
         throw toolError(error)
       }

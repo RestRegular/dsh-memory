@@ -24,6 +24,7 @@ import {
   writeScopeForDefault,
   type ScopeKey,
 } from './scope.ts'
+import { ScopeNames } from './scope-names.ts'
 import { mergeInjectSettings, normalizeInjectSettings, type InjectSettings } from './inject-settings.ts'
 import { buildStats, lexicalScore, recordScore, tokenize, cosine, normalizeInPlace, hasStrongHit } from './scoring.ts'
 import { EmbedClient } from './embed.ts'
@@ -489,12 +490,15 @@ export class LocalMemoryService implements MemoryServiceApi {
   private projectScope: MemoryScope | undefined
   /** 上次发现磁盘 scope 的时间(限流用;0 = 还没发现过)。 */
   private discoveredAt = 0
+  /** 作用域别名(project:<路径> → 显示名),落盘 <storeDir>/scopes.json。 */
+  private names: ScopeNames
   /** 注入设置(面板「设置」标签页可改;落盘在 <storeDir>/settings.json)。 */
   private inject: InjectSettings
 
   constructor(config: MemoryLocalConfig = {}) {
     this.cfg = resolveConfig(config)
     this.inject = this.loadInjectSettings((config as { inject?: unknown }).inject)
+    this.names = new ScopeNames(join(this.cfg.storeDir, 'scopes.json'))
     this.rerankBudget = new DailyBudget(this.cfg.llm.dailyBudgetTokens)
     this.store = new MemoryStore(this.cfg.storeDir, { onWarn: (m) => console.warn(`[dsh-memory-local] ${m}`) })
     // Identity BEFORE the eager load (issue #1): ScopeStore skips its sidecar
@@ -1184,8 +1188,17 @@ export class LocalMemoryService implements MemoryServiceApi {
   async save(input: MemorySaveInput): Promise<MemoryRecord> {
     // 省略 scope 时按当前会话落点 —— 会话上下文必须**从调用方带进来**
     // (工具 handler 拿得到 exec.agent,provider 自己看不到)。
-    const scope = input.scope ?? this.resolveWriteScope((input as MemorySaveInput & { agent?: unknown }).agent)
+    const requestedScope = input.scope ?? this.resolveWriteScope((input as MemorySaveInput & { agent?: unknown }).agent)
+    const scope = this.canonicalScope(requestedScope)
     this.assertScopeAllowed(scope)
+    // 0.7.0:项目作用域可以带一个显示名(别名)。同一路径同名幂等,不同路径同名拒绝。
+    const requestedName = (input as MemorySaveInput & { name?: unknown }).name
+    if (requestedName !== undefined && requestedName !== null && String(requestedName).trim() !== '') {
+      if (!scope.startsWith('project:')) {
+        throw memoryError('SCOPE_NAME_UNSUPPORTED', '只有项目作用域支持重命名(需要 path 或 project:<路径>)')
+      }
+      this.names.claim(scope, String(requestedName))
+    }
     // 自定义 scope 的**新建**受 scopes.custom.max 限制;写已存在的 scope 不受限。
     this.assertCustomScopeBudget(scope)
     let content = input.content?.trim()
@@ -1292,11 +1305,11 @@ export class LocalMemoryService implements MemoryServiceApi {
     // 候选 scope:显式 pin(单值)优先;否则用调用方给的合并集合(query.scopes,
     // 工具 / 注入传"会话 + 项目 + global");两者都没有才退回旧的 project + global。
     // `peek` 而不是 `scope`:读路径不创建,不存在的 scope 直接跳过。
-    const wanted: MemoryScope[] = query.scope
+    const wanted: MemoryScope[] = (query.scope
       ? [query.scope]
       : (queryScopes ?? []).length > 0
         ? queryScopes!
-        : [this.defaultProjectScope, 'global']
+        : [this.defaultProjectScope, 'global']).map((scope) => this.canonicalScope(scope))
     const stores: { store: ScopeStore; scope: MemoryScope; isGlobal: boolean }[] = []
     const seen = new Set<MemoryScope>()
     for (const scope of wanted) {
@@ -1429,11 +1442,11 @@ export class LocalMemoryService implements MemoryServiceApi {
     } else if (input.query) {
       // 按 query 删除的默认范围由工具层显式给出(默认只有当前会话);这里不再回退到
       // provider 的默认 scope —— 那正是"以为删了会话记忆、其实删了 global"的来源。
-      const targets = input.scope !== undefined
+      const targets = (input.scope !== undefined
         ? [input.scope]
         : (input.scopes ?? []).length > 0
           ? input.scopes!
-          : [this.defaultProjectScope]
+          : [this.defaultProjectScope]).map((scope) => this.canonicalScope(scope))
       const seen = new Set<MemoryScope>()
       for (const scope of targets) {
         if (seen.has(scope)) continue
@@ -1456,11 +1469,11 @@ export class LocalMemoryService implements MemoryServiceApi {
    * 一律走 `peek`,所以列一个不存在的 scope 只会得到空数组,不会造出文件。
    */
   async list(input: MemoryListInput = {}): Promise<MemoryRecord[]> {
-    const wanted = input.scope !== undefined
+    const wanted = (input.scope !== undefined
       ? [input.scope]
       : (input.scopes ?? []).length > 0
         ? input.scopes!
-        : [this.defaultProjectScope]
+        : [this.defaultProjectScope]).map((scope) => this.canonicalScope(scope))
     const seen = new Set<MemoryScope>()
     let records: MemoryRecord[] = []
     for (const scope of wanted) {
@@ -1619,6 +1632,22 @@ export class LocalMemoryService implements MemoryServiceApi {
     return { total, scopes }
   }
 
+  /** 作用域别名（没有则 undefined，调用方回退到路径/键本身）。 */
+  scopeName(scope: MemoryScope): string | undefined {
+    return this.names.nameOf(scope)
+  }
+
+  /** 名字 → 作用域键：读路径允许直接用别名找作用域。 */
+  scopeKeyForName(name: string): MemoryScope | undefined {
+    return this.names.scopeOf(name) as MemoryScope | undefined
+  }
+
+  /** 自定义名可能是别名：统一转回真实键，读写口径共用。 */
+  private canonicalScope(scope: MemoryScope): MemoryScope {
+    if (scope === 'global' || scope.startsWith('project:') || scope.startsWith('session:')) return scope
+    return (this.names.scopeOf(scope) as MemoryScope | undefined) ?? scope
+  }
+
   /**
    * 作用域清单(名字 + 条数 + 待嵌入 + 最近活跃时间),给面板 /status 与 memory_list 的尾部清单用。
    *
@@ -1626,11 +1655,12 @@ export class LocalMemoryService implements MemoryServiceApi {
    * 漏掉别的进程(上一次会话、另一个 agent)写下的作用域。
    * 排序键是"最近活跃"(`updatedAt`):面板据此只给最近活跃的前 N 个会话 scope 查标题。
    */
-  scopeStats(): Array<{ scope: MemoryScope; records: number; pendingEmbeds: number; updatedAt: number }> {
+  scopeStats(): Array<{ scope: MemoryScope; name?: string; records: number; pendingEmbeds: number; updatedAt: number }> {
     this.discoverScopes()
     return this.store.allScopes()
       .map((s) => ({
         scope: s.scope,
+        ...(this.names.nameOf(s.scope) !== undefined ? { name: this.names.nameOf(s.scope) } : {}),
         records: s.records.size,
         pendingEmbeds: s.embedPending.size,
         updatedAt: [...s.records.values()].reduce((max, r) => Math.max(max, r.updatedAt), 0),

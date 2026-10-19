@@ -248,7 +248,7 @@ async function handle(ctx, routePath, req, res) {
       // 其余直接用「会话 <id 前 8 位>」。列表本身**始终**完整(不受这个上限影响)。
       const scopes = stats.map((s, index) => ({
         ...s,
-        label: index < TITLE_LOOKUP_LIMIT ? scopeLabel(ctx, s.scope) : fallbackScopeLabel(s.scope),
+        label: s.name ?? (index < TITLE_LOOKUP_LIMIT ? scopeLabel(ctx, s.scope) : fallbackScopeLabel(s.scope)),
       }))
       let embedServer = null
       // older providers have no lifecycle API — the panel simply omits the card

@@ -71,8 +71,9 @@ pnpm add @restregular/dsh-memory
 ```jsonc
 memory_save({
   "content": "本仓库用 pnpm 11 安装依赖,PATH 上的 pnpm 10 会踩 ERR_PNPM_UNEXPECTED_STORE",  // 必填,自洽的一句话
-  "scope": "session",        // 可省略 = 当前会话;global(所有项目) / project(当前工作区) / 任意自定义名
-  "kind": "fact",            // fact / decision / preference / procedure / note
+  "path": "D:/repositories/dsh-memory",  // 可选:工作区目录 → 写入 project:<该路径>
+  "scope": "dsh-memory",     // 配合 path 时 = 这个作用域的显示名(别名);不给就用路径本身
+  "kind": "fact",            // fact / decision / preference / procedure / note / rule
   "tags": ["pnpm", "toolchain"],
   "importance": 0.8          // 0~1
 })
@@ -84,10 +85,18 @@ memory_save({
 | --- | --- |
 | 省略 / `session` | **当前会话**(子代理共享父会话;拿不到会话信息时回退到当前项目) |
 | `project` | 当前工作区(键是 `project:<cwd>`) |
+| `path` + 可选 `scope` | **指定工作区目录**:写入 `project:<路径>`,`scope` 变成这个作用域的显示名(别名) |
 | `global` | 所有项目共享 |
 | `handbook`、`项目笔记` … | **自定义作用域**:任意名字,首次 `memory_save` 时自动创建 |
 | `session:<id>` / `project:<path>` | 显式钉住某个会话 / 某个工作区 |
+| `<已登记的别名>` | 读取时可以直接用别名找项目作用域 |
 | `all` / `*` | **只在读取时可用**:跨所有已发现的作用域;写入会明确报错 |
+
+**作用域重命名(别名)**:项目作用域的身份永远是 `project:<绝对路径>`,别名只影响显示与引用,不迁移数据。规则:
+- 同一路径重复用同一个名字 = 幂等;换名字 = 覆盖原别名;
+- **另一个路径抢同一个名字 → 拒绝保存**(`SCOPE_NAME_TAKEN`);
+- 只有项目作用域能起别名(`global` / `session` 不支持,报 `SCOPE_NAME_UNSUPPORTED`);
+- 别名落盘在 `<storeDir>/scopes.json`,面板的作用域筛选项显示别名。
 
 **2. 检索**:`memory_search({ query: "pnpm 装依赖", topK: 5 })` —— 省略 `scope` = 会话 + 项目 + global 合并(按来源标注、按 id 去重);`scope: "all"` 查所有作用域;写具体名字则只查那一个。
 **3. 按 id 取全文**:召回 / 摘要每行开头是 8 位 id 前缀,`memory_get({ ids: ["3f2a9c1d"] })` 直接拿原文,不用再检索。
@@ -111,6 +120,7 @@ memory_save({
 | `<storeDir>/projects/<sha1(scope)>.jsonl` | 其它作用域(会话 / 项目 / 自定义)各一个文件;文件名是 scope 键的 SHA-1,所以名字里带路径分隔符也不可能穿越 |
 | `<storeDir>/projects/<sha1(scope)>.vec` | 向量边车。首行是身份头 `#<model>\t<dims>`,后面每行 `id\t<base64 向量>` |
 | `<storeDir>/settings.json` | 面板「设置」里改过的注入开关(配置里的值是默认值,这里覆盖它) |
+| `<storeDir>/scopes.json` | 项目作用域的别名(显示名 → `project:<路径>`),同一路径同名幂等,不同路径同名拒绝 |
 | `<installRoot>/llamacpp/` | llama-server 运行时(exe + 依赖 dll + `llama-server.log`) |
 | `<installRoot>/models/` | 下载的 GGUF 模型 |
 | `<installRoot>/selected-model.json` | 面板里选过哪一档(比配置优先级低) |
@@ -310,6 +320,11 @@ tools/build-single-package.mjs   构建(产物契约检查 + 可选加载验证)
 
 ## 版本
 
+- **0.7.0** —— 作用域语义:**`path` 指定工作区,`scope` 用作作用域显示名(别名)**。
+  - `memory_save({ path: "D:/proj", scope: "我的项目" })` 写入 `project:D:/proj`;省略 `scope` 时名字就是路径。
+  - 项目作用域的身份仍是 `project:<绝对路径>`,别名只是显示/引用层,不迁移数据;别名支持在读路径直接使用。
+  - 同一路径同名幂等,不同路径同名**拒绝保存**(`SCOPE_NAME_TAKEN`);只有项目作用域可重命名(`global`/`session` 报 `SCOPE_NAME_UNSUPPORTED`);`path` 与 `scope:"global"/"session"` 组合报 `PATH_SCOPE_CONFLICT`。
+  - 相对 `path` 按会话 cwd 解析,末尾分隔符会被归一,别名落盘 `<storeDir>/scopes.json`。
 - **0.6.7** —— 记录卡展开后显示**完整 id**(等宽字体,点击复制)与**标签**;折叠时只保留预览与徽标,列表更安静。
 - **0.6.6** —— 记录卡显示**标签气泡**(之前标签只存不显示,新建后看不到,容易误以为没保存);“修正”关系双向标注:修正版显示「修正自 <旧 id 前 8 位>」,被覆盖的旧记录显示「已被修正」(旧记录仍可检索,只是排序降权 0.3×);面板 `/records` 补齐 `supersededBy` 反查;新建表单的标签输入加了标签名与示例。
 - **0.6.5** —— 统计卡从「服务」移到「**记录**」页顶部(和记忆列表放在一起),滚动容器高度相应扣掉统计卡那一档。
