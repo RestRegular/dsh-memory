@@ -264,7 +264,12 @@ const modelReport = () => ({
 })
 
 /** Stub `fetch` the way the panel's api() uses it and let the mount effect run. */
-async function mountPanel(hooks: ReturnType<typeof makeReact>, state: { scopes: unknown[]; embedServer: unknown }, report = modelReport()) {
+async function mountPanel(
+  hooks: ReturnType<typeof makeReact>,
+  state: { scopes: unknown[]; embedServer: unknown },
+  report = modelReport(),
+  tab = 'data',
+) {
   const globals = globalThis as Record<string, unknown>
   globals.fetch = async (url: string) => ({
     status: 200,
@@ -284,7 +289,32 @@ async function mountPanel(hooks: ReturnType<typeof makeReact>, state: { scopes: 
   // 第二轮:清单/状态请求回来后,才会把选择抛给面板(「当前」那行由它驱动)
   hooks.runEffects()
   for (let i = 0; i < 4; i++) await Promise.resolve()
+  if (tab !== 'data') {
+    const label = ({ records: '记录', data: '数据', settings: '设置' } as Record<string, string>)[tab] ?? tab
+    const button = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === label)
+    assert.ok(button, `找不到「${label}」标签`)
+    ;(button!.props!.onClick as () => void)()
+    hooks.runEffects()
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    hooks.runEffects()
+    for (let i = 0; i < 4; i++) await Promise.resolve()
+  }
   return () => current
+}
+
+/**
+ * 切到指定标签。默认标签是「数据」(记忆列表),概览(统计/向量服务/维护)
+ * 在「记录」里,所以涉及服务卡片/安装器的断言先调这个。
+ */
+async function switchTab(
+  current: () => RenderNode | null,
+  hooks: ReturnType<typeof makeReact>,
+  label: string,
+) {
+  const tab = collect(current()).find((n) => n.tag === 'button' && textOf(n).trim() === label)
+  assert.ok(tab, `找不到「${label}」标签`)
+  ;(tab!.props!.onClick as () => void)()
+  for (let i = 0; i < 4; i++) await Promise.resolve()
 }
 
 /** 树里所有标签气泡的文字(按出现顺序)。 */
@@ -311,8 +341,11 @@ test('作用域下拉用服务端给的 label(会话标题 / project 的 cwd)', 
     ],
     embedServer: null,
   })
-  // 统计卡仍然动态数作用域个数
+  // 统计卡在「记录」页:仍然动态数作用域个数
+  await switchTab(tree, hooks, '记录')
   assert.ok(textOf(tree()).includes('4'), '作用域数来自 /status 的动态枚举')
+  // 作用域下拉在「数据」页
+  await switchTab(tree, hooks, '数据')
   // 打开作用域下拉(结构里第二个 aria-haspopup=listbox;第一个是模型/运行时下拉),
   // 选项文字必须用 label(而不是原始 scope 键)
   const dropdowns = collect(tree()).filter((n) => n.props?.['aria-haspopup'] === 'listbox')
@@ -338,7 +371,7 @@ test('未配置的后端:展开「模型与硬件」给出模型列表与安装�
       spawnConfigured: false, owned: false, pid: null, baseUrl: '', reachable: false, pendingEmbeds: 3,
       install: installIdle(),
     },
-  })
+  }, undefined, 'records')
   const nodes = collect(tree())
   assert.equal(nodes.filter((n) => n.props?.role === 'switch').length, 0, 'no switch before a backend is configured')
   assert.ok(textOf(tree()).includes('向量未启用'), 'the stats card does not pretend there is an embed backlog')
@@ -382,7 +415,7 @@ test('「本机配置」「当前模型」两行:都带标题、都横向滚动,
       enabled: false, configured: false, mode: 'off', endpoint: 'http://127.0.0.1:8078/v1/embeddings', model: 'bge-m3',
       spawnConfigured: false, owned: false, pid: null, baseUrl: '', reachable: false, pendingEmbeds: 0, install: installIdle(),
     },
-  })
+  }, undefined, 'records')
   const all = chipTexts(tree())
   // 本机配置在上面一行,当前模型在下面一行
   assert.deepEqual(all.slice(0, 4), ['12 核', '14GB 内存', '无独立显卡', '磁盘剩余 9GB'], `本机配置气泡:${JSON.stringify(all.slice(0, 4))}`)
@@ -424,14 +457,17 @@ test('「本机配置」「当前模型」两行:都带标题、都横向滚动,
       modelLabel: 'BGE-M3 · Q4_K_M', presetId: 'bge-m3', variantId: 'q4_k_m', dims: 1024, pooling: 'cls', flavor: 'cpu',
       spawnConfigured: true, owned: true, pid: 7, baseUrl: 'http://127.0.0.1:8078', reachable: true, pendingEmbeds: 0, install: installIdle({ installed: true }),
     },
-  })
+  }, undefined, 'records')
   const configured = chipTexts(configuredTree())
   assert.deepEqual(configured.slice(4, 9), ['BGE-M3', 'Q4_K_M', '1024 维', 'cls', 'cpu'], `已配置时的当前模型:${JSON.stringify(configured)}`)
 
-  // 三处下拉(模型 / 运行时 / 作用域)+ 记录卡编辑态的类型,统一都是自绘的
+  // 自绘下拉:记录页是模型 / 运行时,作用域下拉在数据页;全站没有原生 select
   const nodes = collect(configuredTree())
   assert.equal(nodes.filter((n) => n.tag === 'select').length, 0, '不再使用原生 select')
-  assert.equal(nodes.filter((n) => n.props?.['aria-haspopup'] === 'listbox').length, 3, '模型 / 运行时 / 作用域都是自绘下拉')
+  assert.equal(nodes.filter((n) => n.props?.['aria-haspopup'] === 'listbox').length, 2, '记录页有模型 / 运行时两个自绘下拉')
+  await switchTab(configuredTree, hooks, '数据')
+  assert.equal(collect(configuredTree()).filter((n) => n.props?.['aria-haspopup'] === 'listbox').length, 1, '数据页有作用域下拉')
+  await switchTab(configuredTree, hooks, '记录')
 
   // 已装好的那一档:按钮显示「已安装」且不可点(点它只会重复下载)
   const installBtn = nodes.find((n) => String(n.props?.className ?? '') === 'install')
@@ -468,7 +504,7 @@ test('已经装了模型就不许再装:必须先卸载;卸载后按钮恢复可
       install: installIdle({ installed: true }),
     },
   }
-  const tree = await mountPanel(hooks, state, report)
+  const tree = await mountPanel(hooks, state, report, 'records')
   const installBtn = () => collect(tree()).find((n) => String(n.props?.className ?? '') === 'install')
   const label = () => (installBtn()!.children ?? []).map((c) => c.text).join('')
   assert.equal(label(), '已安装', '装好的那一档显示已安装')
@@ -491,12 +527,15 @@ test('已经装了模型就不许再装:必须先卸载;卸载后按钮恢复可
     owned: false, pid: null, baseUrl: '', reachable: false, pendingEmbeds: 0, install: installIdle({ installed: false }),
     maintenance: { usageBytes: 0, records: 0, storeDir: 'D:/stack/store' },
   }
+  await switchTab(tree, hooks, '数据')
   const refresh = collect(tree()).find((n) => n.tag === 'button' && textOf(n).includes('刷新'))!
+  assert.ok(refresh, '刷新按钮在数据页工具栏')
   ;(refresh.props!.onClick as () => void)()
   for (let round = 0; round < 3; round++) {
     for (let i = 0; i < 6; i++) await Promise.resolve()
     hooks.runEffects()
   }
+  await switchTab(tree, hooks, '记录')
   assert.equal(label(), '下载并安装', '卸载之后按钮回到「下载并安装」')
   assert.notEqual(installBtn()!.props?.disabled, true, '卸载之后可以装了')
 })
@@ -589,7 +628,7 @@ test('only a managed backend renders a switch; external and config-disabled do n
   }
 
   hooks.resetAll()
-  const managedTree = await mountPanel(hooks, { scopes: [], embedServer: managed })
+  const managedTree = await mountPanel(hooks, { scopes: [], embedServer: managed }, undefined, 'records')
   const switches = collect(managedTree()).filter((n) => n.props?.role === 'switch')
   assert.equal(switches.length, 1, 'exactly one switch when this app owns the process')
   assert.ok(String(switches[0]!.props?.className).includes('toggle'), 'switch uses the toggle styling')
@@ -600,12 +639,12 @@ test('only a managed backend renders a switch; external and config-disabled do n
   const externalTree = await mountPanel(hooks, {
     scopes: [],
     embedServer: { ...managed, mode: 'external', spawnConfigured: false, owned: false, pid: null, install: installIdle() },
-  })
+  }, undefined, 'records')
   assert.equal(collect(externalTree()).filter((n) => n.props?.role === 'switch').length, 0, 'no switch for an external service')
   assert.ok(textOf(externalTree()).includes('外部服务'), 'labels the service as external')
 
   hooks.resetAll()
-  const offTree = await mountPanel(hooks, { scopes: [], embedServer: { ...managed, enabled: false } })
+  const offTree = await mountPanel(hooks, { scopes: [], embedServer: { ...managed, enabled: false } }, undefined, 'records')
   assert.equal(collect(offTree()).filter((n) => n.props?.role === 'switch').length, 0, 'no switch when the config disables vectors')
   assert.ok(textOf(offTree()).includes('已在配置里关闭'), 'says the config disabled it')
 })
@@ -636,7 +675,7 @@ test('maintenance asks before destroying: two-step confirm, and the right reques
       maintenance: { usageBytes: 507510784, paths: ['D:/stack/llamacpp', 'D:/stack/models'], storeDir: 'D:/store', records: 4 },
     },
   }
-  const tree = await mountPanel(hooks, state)
+  const tree = await mountPanel(hooks, state, undefined, 'records')
 
   const text = textOf(tree())
   assert.ok(text.includes('维护'), 'maintenance section is rendered')
@@ -698,7 +737,7 @@ test('the installer shows progress while downloading and an error with a retry',
       owned: false, pid: null, baseUrl: '', reachable: false, pendingEmbeds: 0,
       install: installIdle({ phase: 'downloading-model', message: '正在下载 bge-m3 模型', receivedBytes: 104857600, totalBytes: 437780480, installed: false }),
     },
-  })
+  }, undefined, 'records')
   const runningText = textOf(runningTree())
   assert.ok(runningText.includes('正在下载 bge-m3 模型'), 'shows the installer message')
   assert.ok(/\d+%/.test(runningText), 'shows a percentage')
@@ -717,7 +756,7 @@ test('the installer shows progress while downloading and an error with a retry',
       owned: false, pid: null, baseUrl: '', reachable: false, pendingEmbeds: 0,
       install: installIdle({ phase: 'error', message: 'GitHub API 限流', error: 'GitHub API 限流', installed: false }),
     },
-  })
+  }, undefined, 'records')
   const failedText = textOf(failedTree())
   assert.ok(failedText.includes('GitHub API 限流'), 'surfaces the failure reason')
   assert.ok(failedText.includes('重试下载'), 'offers a retry')

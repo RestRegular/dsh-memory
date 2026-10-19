@@ -159,6 +159,17 @@ window.__ModuleLoader__.load({
       '.memp .create textarea{width:100%;min-height:64px}',
       '.memp .data{padding-top:4px}',
       '.memp .data .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px}',
+      // 数据页:列表在独立滚动容器里,记忆多也不把面板撑长
+      '.memp .scroll{max-height:min(62vh,560px);overflow-y:auto;overscroll-behavior:contain;padding:2px 8px 2px 2px;margin-right:-2px}',
+      '.memp .scroll.is-empty{max-height:none;overflow:visible;padding-right:0}',
+      // 自定义滚动条:细、圆头、透明轨道,hover 才加深;Firefox 用 scrollbar-width/color
+      '.memp .scroll{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--dsw-alias-label-secondary) 30%, transparent) transparent}',
+      '.memp .scroll::-webkit-scrollbar{width:8px;height:8px}',
+      '.memp .scroll::-webkit-scrollbar-track{background:transparent}',
+      '.memp .scroll::-webkit-scrollbar-thumb{background:rgba(127,127,127,.28);background:color-mix(in srgb, var(--dsw-alias-label-secondary) 30%, transparent);border-radius:999px;border:2px solid transparent;background-clip:padding-box}',
+      '.memp .scroll::-webkit-scrollbar-thumb:hover{background:rgba(127,127,127,.5);background:color-mix(in srgb, var(--dsw-alias-label-secondary) 55%, transparent);border:2px solid transparent;background-clip:padding-box}',
+      '.memp .scroll::-webkit-scrollbar-corner{background:transparent}',
+      '.memp .list{display:flex;flex-direction:column;gap:8px;padding-bottom:4px}',
       // 侧栏入口打开的主界面页面:整块可滚动,内容用面板本体
       '.mem-page{height:100%;overflow:auto;padding:16px 20px 40px}',
       '.mem-page-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}',
@@ -853,7 +864,7 @@ window.__ModuleLoader__.load({
       const [q, setQ] = React.useState('')
       const [loading, setLoading] = React.useState(true)
       const [error, setError] = React.useState('')
-      const [tab, setTab] = React.useState('records')
+      const [tab, setTab] = React.useState('data')
       const [creating, setCreating] = React.useState(false)
 
       const load = async (query, scopeF) => {
@@ -1046,106 +1057,117 @@ window.__ModuleLoader__.load({
 
       const filtering = q.trim() !== '' || scopeFilter !== ''
 
+      // 三个标签的内容分开构建:记录(概览) / 数据(列表) / 设置。
+      const statsCard = h('div', { className: 'stats' },
+        h('div', { className: 'stat' }, h('b', null, String(total)), h('span', null, '条记忆')),
+        h('div', { className: 'stat' }, h('b', null, String(scopes.length)), h('span', null, '个作用域')),
+        configured && vectorEnabled
+          ? h('div', { className: 'stat' }, h('b', null, String(pending)), h('span', null, '待嵌入向量'))
+          : h('div', { className: 'stat' }, h('b', null, '—'), h('span', null, '向量未启用')),
+      )
+      const serverCard = h('div', { className: 'server' },
+        h('div', { className: 'server-head' },
+          h('span', { className: dotClass }),
+          h('b', null, '向量服务'),
+          h('span', { className: 'muted' }, stateText),
+          // 地址紧跟在状态右边(排障要看的就是它),完整信息(pid/模型)进 title。
+          endpointLabel ? h('span', { className: 'mono', title: endpointTitle }, endpointLabel) : null,
+          configured && vectorEnabled ? h('span', { className: 'pill' }, managed ? '由本应用托管' : '外部服务') : null,
+          h('span', { className: 'server-spacer' }),
+          actions,
+        ),
+        notice,
+        embedNotice ? h('div', { className: 'muted' }, embedNotice) : null,
+        h(ModelPicker, {
+          busy: embedBusy,
+          // 下载是后台跑的,`busy`(一次请求)早就结束了;要单独把"正在下载"传给按钮,
+          // 否则下载中还能反复点「下载并安装」。
+          installing: installBusy || installRequested,
+          installedBackend: installed,
+          current: embedServer
+            ? { presetId: embedServer.presetId, variantId: embedServer.variantId, model: embedServer.model, modelLabel: embedServer.modelLabel, dims: embedServer.dims, pooling: embedServer.pooling, flavor: embedServer.flavor }
+            : null,
+          onInstall: (override) => embedAction('install', override),
+        }),
+      )
+      // 维护区：DSH 卸载插件时不会给插件任何提问机会（就是 pnpm remove + 去掉
+      // bundles），所以"要不要留向量服务 / 要不要留记忆数据"只能在这里、卸载之前问。
+      const maintenanceCard = maintenance
+        ? h('div', { className: 'maint' },
+          h('div', { className: 'maint-row' },
+            h('b', null, '维护'),
+            h('span', { className: 'muted' }, '卸载插件不会移除已配置的向量服务与记忆文件'),
+          ),
+          h('div', { className: 'maint-row' },
+            h('span', { className: 'grow' }, `向量服务：${usageMb} MB`),
+            maintenance.usageBytes > 0
+              ? (dangerAsk === 'uninstall'
+                ? [h('button', { key: 'ok', className: 'danger', disabled: embedBusy, onClick: () => maintenanceAction('uninstall') }, `确认卸载（释放 ${usageMb} MB）`),
+                   h('button', { key: 'no', disabled: embedBusy, onClick: () => setDangerAsk('') }, '取消')]
+                : h('button', { key: 'ask', disabled: embedBusy, onClick: () => maintenanceAction('uninstall') }, '卸载向量服务'))
+              : h('span', { className: 'muted' }, '未安装'),
+          ),
+          h('div', { className: 'maint-row' },
+            h('span', { className: 'grow' }, `记忆数据：${maintenance.records} 条`),
+            maintenance.storeDir ? h('span', { className: 'muted path', title: maintenance.storeDir }, maintenance.storeDir) : null,
+            maintenance.records > 0
+              ? (dangerAsk === 'wipe'
+                ? [h('button', { key: 'ok', className: 'danger', disabled: embedBusy, onClick: () => maintenanceAction('wipe') }, `确认清空 ${maintenance.records} 条（不可恢复）`),
+                   h('button', { key: 'no', disabled: embedBusy, onClick: () => setDangerAsk('') }, '取消')]
+                : h('button', { key: 'ask', disabled: embedBusy, onClick: () => maintenanceAction('wipe') }, '清空记忆数据'))
+              : h('span', { className: 'muted' }, '无'),
+          ),
+        )
+        : null
+
+      const toolbar = h('div', { className: 'row toolbar' },
+        h('input', {
+          type: 'text', placeholder: '搜索内容、类型或标签', value: q,
+          onChange: (e) => setQ(e.target.value),
+          onKeyDown: (e) => { if (e.key === 'Enter') load(q, scopeFilter) },
+        }),
+        // 作用域也用同一个自绘下拉(与模型/运行时统一);标签优先用服务端给的 label
+        h(Dropdown, {
+          items: [
+            { value: '', label: '全部作用域' },
+            ...scopes.map((s) => ({ value: s.scope, label: s.label || scopeLabel(s.scope) })),
+          ],
+          value: scopeFilter,
+          disabled: loading,
+          onChange: (next) => { setScopeFilter(next); load(q, next) },
+        }),
+        h('button', { onClick: () => setCreating((v) => !v), disabled: loading }, creating ? '收起' : '新建'),
+        h('button', { onClick: () => load(q, scopeFilter), disabled: loading }, loading ? '刷新中…' : '刷新'),
+        filtering ? h('button', { className: 'linkbtn', onClick: () => { setQ(''); setScopeFilter(''); load('', '') } }, '清空筛选') : null,
+      )
+      const createForm = creating
+        ? h(CreateForm, {
+            scopes,
+            onCancel: () => setCreating(false),
+            onCreated: () => { setCreating(false); load('', '') },
+          })
+        : null
+      const listBody = !loading && !error && records.length === 0
+        ? h('div', { className: 'empty' }, filtering ? '没有匹配的记忆' : '还没有记忆')
+        : h('div', { className: 'list' },
+            records.map((rec) => h(RecordCard, { key: rec.id, rec, vectorOn: configured && vectorEnabled, labels: labels, onSaved: () => load(), onDeleted: () => load() })))
+
+      const overviewBody = h('div', { className: 'memp-body' }, statsCard, serverCard, maintenanceCard)
+      // 数据页:工具栏与新建表单固定在上面,只有列表在滚动容器里 —— 记忆多了也不把面板撑长。
+      const dataBody = h('div', { className: 'memp-body' },
+        toolbar,
+        createForm,
+        error ? h('div', { className: 'err' }, error) : null,
+        h('div', { className: 'scroll' + (records.length > 0 || loading ? '' : ' is-empty') }, listBody),
+      )
+
       return h('div', { className: 'memp' },
         h('div', { className: 'tabs' },
           h('button', { className: 'tab' + (tab === 'records' ? ' on' : ''), onClick: () => setTab('records') }, '记录'),
+          h('button', { className: 'tab' + (tab === 'data' ? ' on' : ''), onClick: () => setTab('data') }, '数据'),
           h('button', { className: 'tab' + (tab === 'settings' ? ' on' : ''), onClick: () => setTab('settings') }, '设置'),
         ),
-        tab === 'settings' ? h(SettingsTab, {}) : h('div', { className: 'memp-body' },
-        h('div', { className: 'stats' },
-          h('div', { className: 'stat' }, h('b', null, String(total)), h('span', null, '条记忆')),
-          h('div', { className: 'stat' }, h('b', null, String(scopes.length)), h('span', null, '个作用域')),
-          configured && vectorEnabled
-            ? h('div', { className: 'stat' }, h('b', null, String(pending)), h('span', null, '待嵌入向量'))
-            : h('div', { className: 'stat' }, h('b', null, '—'), h('span', null, '向量未启用')),
-        ),
-        h('div', { className: 'server' },
-          h('div', { className: 'server-head' },
-            h('span', { className: dotClass }),
-            h('b', null, '向量服务'),
-            h('span', { className: 'muted' }, stateText),
-            // 地址紧跟在状态右边(排障要看的就是它),完整信息(pid/模型)进 title。
-            endpointLabel ? h('span', { className: 'mono', title: endpointTitle }, endpointLabel) : null,
-            configured && vectorEnabled ? h('span', { className: 'pill' }, managed ? '由本应用托管' : '外部服务') : null,
-            h('span', { className: 'server-spacer' }),
-            actions,
-          ),
-          notice,
-          embedNotice ? h('div', { className: 'muted' }, embedNotice) : null,
-          h(ModelPicker, {
-            busy: embedBusy,
-            // 下载是后台跑的,`busy`(一次请求)早就结束了;要单独把"正在下载"传给按钮,
-            // 否则下载中还能反复点「下载并安装」。
-            installing: installBusy || installRequested,
-            installedBackend: installed,
-            current: embedServer
-              ? { presetId: embedServer.presetId, variantId: embedServer.variantId, model: embedServer.model, modelLabel: embedServer.modelLabel, dims: embedServer.dims, pooling: embedServer.pooling, flavor: embedServer.flavor }
-              : null,
-            onInstall: (override) => embedAction('install', override),
-          }),
-        ),
-        // 维护区：DSH 卸载插件时不会给插件任何提问机会（就是 pnpm remove + 去掉
-        // bundles），所以"要不要留向量服务 / 要不要留记忆数据"只能在这里、卸载之前问。
-        maintenance
-          ? h('div', { className: 'maint' },
-            h('div', { className: 'maint-row' },
-              h('b', null, '维护'),
-              h('span', { className: 'muted' }, '卸载插件不会移除已配置的向量服务与记忆文件'),
-            ),
-            h('div', { className: 'maint-row' },
-              h('span', { className: 'grow' }, `向量服务：${usageMb} MB`),
-              maintenance.usageBytes > 0
-                ? (dangerAsk === 'uninstall'
-                  ? [h('button', { key: 'ok', className: 'danger', disabled: embedBusy, onClick: () => maintenanceAction('uninstall') }, `确认卸载（释放 ${usageMb} MB）`),
-                     h('button', { key: 'no', disabled: embedBusy, onClick: () => setDangerAsk('') }, '取消')]
-                  : h('button', { key: 'ask', disabled: embedBusy, onClick: () => maintenanceAction('uninstall') }, '卸载向量服务'))
-                : h('span', { className: 'muted' }, '未安装'),
-            ),
-            h('div', { className: 'maint-row' },
-              h('span', { className: 'grow' }, `记忆数据：${maintenance.records} 条`),
-              maintenance.storeDir ? h('span', { className: 'muted path', title: maintenance.storeDir }, maintenance.storeDir) : null,
-              maintenance.records > 0
-                ? (dangerAsk === 'wipe'
-                  ? [h('button', { key: 'ok', className: 'danger', disabled: embedBusy, onClick: () => maintenanceAction('wipe') }, `确认清空 ${maintenance.records} 条（不可恢复）`),
-                     h('button', { key: 'no', disabled: embedBusy, onClick: () => setDangerAsk('') }, '取消')]
-                  : h('button', { key: 'ask', disabled: embedBusy, onClick: () => maintenanceAction('wipe') }, '清空记忆数据'))
-                : h('span', { className: 'muted' }, '无'),
-            ),
-          )
-          : null,
-        h('div', { className: 'row toolbar' },
-          h('input', {
-            type: 'text', placeholder: '搜索内容、类型或标签', value: q,
-            onChange: (e) => setQ(e.target.value),
-            onKeyDown: (e) => { if (e.key === 'Enter') load(q, scopeFilter) },
-          }),
-          // 作用域也用同一个自绘下拉(与模型/运行时统一);标签优先用服务端给的 label
-          h(Dropdown, {
-            items: [
-              { value: '', label: '全部作用域' },
-              ...scopes.map((s) => ({ value: s.scope, label: s.label || scopeLabel(s.scope) })),
-            ],
-            value: scopeFilter,
-            disabled: loading,
-            onChange: (next) => { setScopeFilter(next); load(q, next) },
-          }),
-          h('button', { onClick: () => setCreating((v) => !v), disabled: loading }, creating ? '收起' : '新建'),
-          h('button', { onClick: () => load(q, scopeFilter), disabled: loading }, loading ? '刷新中…' : '刷新'),
-          filtering ? h('button', { className: 'linkbtn', onClick: () => { setQ(''); setScopeFilter(''); load('', '') } }, '清空筛选') : null,
-        ),
-        creating
-          ? h(CreateForm, {
-              scopes,
-              onCancel: () => setCreating(false),
-              onCreated: () => { setCreating(false); load('', '') },
-            })
-          : null,
-        error ? h('div', { className: 'err' }, error) : null,
-        !loading && !error && records.length === 0
-          ? h('div', { className: 'empty' }, filtering ? '没有匹配的记忆' : '还没有记忆')
-          : h('div', { className: 'list' },
-              records.map((rec) => h(RecordCard, { key: rec.id, rec, vectorOn: configured && vectorEnabled, labels: labels, onSaved: () => load(), onDeleted: () => load() }))),
-        ),
+        tab === 'settings' ? h(SettingsTab, {}) : tab === 'data' ? dataBody : overviewBody,
       )
     }
 
