@@ -154,3 +154,26 @@ test('面板 /update:编辑内容后作废旧向量并立即请求重建', async
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('面板 /embed/reindex:后台触发重建并返回记录数', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-reindex-'))
+  const svc = new LocalMemoryService({ storeDir: dir, scopes: { global: true, project: true } })
+  try {
+    let called = 0
+    const memory = {
+      store: svc.store,
+      scopeStats: () => [{ scope: 'global', records: 7, pendingEmbeds: 0 }],
+      reindexAll: () => { called += 1; return { total: 7, queued: 7 } },
+    }
+    const ctx = { get: (name: string) => (name === 'memory' ? memory : undefined), logger: { warn() {} } }
+    const res = fakeRes()
+    await handleRequest(ctx, ROUTE, post(`${ROUTE}/embed/reindex`, {}), res)
+    assert.equal(res.out.status, 200)
+    assert.equal(res.out.body.value.scheduled, true)
+    assert.equal(res.out.body.value.records, 7)
+    assert.equal(called, 1)
+    svc.flushSync()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

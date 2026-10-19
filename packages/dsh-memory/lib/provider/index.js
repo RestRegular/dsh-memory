@@ -1297,6 +1297,29 @@ export class LocalMemoryService                             {
   }
 
   /**
+   * 作废全部向量并按当前模型重新嵌入。给"换模型残留了旧向量 / 怀疑向量有问题"用:
+   * 同步部分只清空 + 排队,真正的重嵌在后台跑(别让 HTTP 等几分钟)。
+   * 返回排队条数;进度由面板的「待嵌入」计数与自动刷新体现。
+   */
+  reindexAll()                                    {
+    if (!this.cfg.vector.enabled || !this.cfg.vector.configured) return { total: 0, queued: this.pendingEmbedCount }
+    this.discoverScopes()
+    let total = 0
+    for (const s of this.store.allScopes()) {
+      for (const id of s.records.keys()) {
+        s.vectors.delete(id)
+        s.embedPending.add(id)
+        total += 1
+      }
+      s.vectorsDirty = true
+      s.dirty = true
+    }
+    this.store.scheduleFlush()
+    void this.backfillAll({ throttleMs: 50 }).catch(() => { /* 失败留给 60s 重试 */ })
+    return { total, queued: this.pendingEmbedCount }
+  }
+
+  /**
    * First-fill: embed the ENTIRE backlog (unlike backfillEmbeddings' single
    * batch per scope), in throttled batches so a big import does not hammer
    * llama-server or block the caller. Yields to the event loop between

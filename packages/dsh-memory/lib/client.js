@@ -898,8 +898,8 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** 待嵌入自动刷新:最多 30 次 × 2s(后端挂着时不无限轮询)。 */
-    const PENDING_POLL_LIMIT = 30
+    /** 待嵌入自动刷新:最多 300 次 × 1.5s(后端挂着时不无限轮询)。 */
+    const PENDING_POLL_LIMIT = 300
 
     function MemoryPanel() {
       const [records, setRecords] = React.useState([])
@@ -974,8 +974,8 @@ window.__ModuleLoader__.load({
       }
 
       /**
-       * 维护动作：卸载向量服务 / 清空记忆数据。两者都不可撤销，所以都走两步确认
-       * （dangerAsk 记住当前等确认的那一项，第二次点击才真的发请求）。
+       * 维护动作：卸载向量服务 / 清空记忆数据 / 重建全部向量。前两者不可撤销，重建代价高，
+       * 都走两步确认（dangerAsk 记住当前等确认的那一项，第二次点击才真的发请求）。
        */
       const maintenanceAction = async (which) => {
         if (dangerAsk !== which) { setDangerAsk(which); setEmbedNotice(''); return }
@@ -984,8 +984,10 @@ window.__ModuleLoader__.load({
         try {
           const value = which === 'uninstall'
             ? await api('embed/uninstall', {})
-            // 服务端要求显式 confirm:"delete"，避免任何一次误触就清库
-            : await api('data/wipe', { confirm: 'delete' })
+            : which === 'reindex'
+              ? await api('embed/reindex', {})
+              // 服务端要求显式 confirm:"delete"，避免任何一次误触就清库
+              : await api('data/wipe', { confirm: 'delete' })
           setEmbedServer(value.embedServer ? { ...value.embedServer } : value)
           if (which === 'uninstall') {
             setEmbedNotice(value.removed
@@ -993,6 +995,9 @@ window.__ModuleLoader__.load({
               : value.reason === 'EXTERNAL_BACKEND'
                 ? '当前后端不在本插件管理的目录里（是你自己装的），没有删除任何东西。'
                 : '没有找到本插件安装的向量服务文件。')
+          } else if (which === 'reindex') {
+            setPendingTick(0)
+            setEmbedNotice(`已开始重建 ${value.records ?? 0} 条的向量；「待嵌入向量」会逐步下降，期间检索暂时只用词法。`)
           } else {
             setEmbedNotice(`已清空 ${value.removed ?? 0} 条记忆（${(value.scopes ?? []).length} 个作用域）。`)
           }
@@ -1033,7 +1038,7 @@ window.__ModuleLoader__.load({
         const timer = setTimeout(() => {
           setPendingTick((n) => n + 1)
           load()
-        }, 2000)
+        }, 1500)
         return () => clearTimeout(timer)
       }, [pendingTick, pending])
       // 服务端 /status 给的 scope → label 映射(会话标题、project 的 cwd 只有服务端知道)
@@ -1151,6 +1156,8 @@ window.__ModuleLoader__.load({
           onInstall: (override) => embedAction('install', override),
         }),
       )
+      // 重建向量只在"配置了后端且启用"时有意义(maintenanceCard 在 configured 声明之前构建)。
+      const canReindex = Boolean(embedServer && embedServer.enabled && (embedServer.configured === undefined ? Boolean(embedServer.baseUrl) : embedServer.configured))
       // 维护区：DSH 卸载插件时不会给插件任何提问机会（就是 pnpm remove + 去掉
       // bundles），所以"要不要留向量服务 / 要不要留记忆数据"只能在这里、卸载之前问。
       const maintenanceCard = maintenance
@@ -1167,6 +1174,17 @@ window.__ModuleLoader__.load({
                    h('button', { key: 'no', disabled: embedBusy, onClick: () => setDangerAsk('') }, '取消')]
                 : h('button', { key: 'ask', disabled: embedBusy, onClick: () => maintenanceAction('uninstall') }, '卸载向量服务'))
               : h('span', { className: 'muted' }, '未安装'),
+          ),
+          h('div', { className: 'maint-row' },
+            h('span', { className: 'grow' }, `向量索引：${maintenance.records} 条`),
+            canReindex
+              ? (maintenance.records > 0
+                ? (dangerAsk === 'reindex'
+                  ? [h('button', { key: 'ok', className: 'danger', disabled: embedBusy, onClick: () => maintenanceAction('reindex') }, `确认重建 ${maintenance.records} 条的向量`),
+                     h('button', { key: 'no', disabled: embedBusy, onClick: () => setDangerAsk('') }, '取消')]
+                  : h('button', { key: 'ask', disabled: embedBusy, onClick: () => maintenanceAction('reindex') }, '重建全部向量'))
+                : h('span', { className: 'muted' }, '无'))
+              : h('span', { className: 'muted' }, '向量未启用'),
           ),
           h('div', { className: 'maint-row' },
             h('span', { className: 'grow' }, `记忆数据：${maintenance.records} 条`),
@@ -1233,7 +1251,7 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'memp' },
         h('div', { className: 'tabs' },
           h('button', { className: 'tab' + (tab === 'records' ? ' on' : ''), onClick: () => setTab('records') }, '服务'),
-          h('button', { className: 'tab' + (tab === 'data' ? ' on' : ''), onClick: () => setTab('data') }, '记录'),
+          h('button', { className: 'tab' + (tab === 'data' ? ' on' : ''), onClick: () => { if (tab !== 'data') load(); setTab('data') } }, '记录'),
           h('button', { className: 'tab' + (tab === 'settings' ? ' on' : ''), onClick: () => setTab('settings') }, '设置'),
         ),
         tab === 'settings' ? h(SettingsTab, {}) : tab === 'data' ? dataBody : overviewBody,

@@ -155,6 +155,16 @@ export class CordisMemoryService extends Service {
     return this.impl.reindexRecord(scope, id)
   }
 
+  /** 维护:重建全部向量(作废旧向量并重新嵌入)。 */
+  reindexAll(): ReturnType<LocalMemoryService['reindexAll']> {
+    return this.impl.reindexAll()
+  }
+
+  /** 维护:作废全部向量并按当前模型后台重嵌。 */
+  reindexAll(): ReturnType<LocalMemoryService['reindexAll']> {
+    return this.impl.reindexAll()
+  }
+
   /** 作用域别名(没有则 undefined)。 */
   scopeName(scope: MemoryScope): string | undefined {
     return this.impl.scopeName(scope)

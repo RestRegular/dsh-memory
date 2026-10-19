@@ -363,6 +363,15 @@ async function handle(ctx, routePath, req, res) {
       writeJson(res, { ok: true, value: { ...out, ...(await memory.embedServerStatus()) } })
       return
     }
+    if (method === 'POST' && path === '/embed/reindex') {
+      if (typeof memory.reindexAll !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供向量重建接口（请升级 @restregular/dsh-memory）')
+      // 同步部分只作废旧向量 + 排队,真正的重嵌在后台跑,不阻塞请求;进度看 /status 的待嵌入计数。
+      const result = memory.reindexAll() ?? {}
+      const total = typeof result.total === 'number' ? result.total : 0
+      console.log(`[dsh-memory-panel] 开始重建全部向量:${total} 条`)
+      writeJson(res, { ok: true, value: { scheduled: true, records: total } })
+      return
+    }
     if (method === 'POST' && path === '/data/wipe') {
       if (typeof memory.wipeAllRecords !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供数据清理接口（请升级 @restregular/dsh-memory）')
       const body = await readJsonBody(req)

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Render smoke test for the memory panel client bundle.
  *
  * The panel is hand-written plain JS served through the host's ModuleLoader, so
@@ -685,6 +685,7 @@ test('maintenance asks before destroying: two-step confirm, and the right reques
   assert.ok(!text.includes('卸载插件不会删除这里的文件'), '旧的那句已经移除')
   assert.ok(text.includes('向量服务：484.0 MB'), `shows the size an uninstall would free (got: ${text.slice(0, 200)})`)
   assert.ok(text.includes('记忆数据：4 条'), 'shows how much data a wipe would remove')
+  assert.ok(text.includes('重建全部向量'), '维护区有重建全部向量按钮')
 
   // Swap in a capturing stub: the panel's actions go through the global fetch.
   // Status/records keep answering, so the reload that follows an action renders

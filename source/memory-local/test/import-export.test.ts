@@ -137,3 +137,26 @@ test('reindexRecord:未配置向量时是 no-op', async () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('reindexAll:作废全部向量并排队;后端不可达时留在 pending', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-reindex-all-'))
+  const svc = new LocalMemoryService({
+    storeDir: dir,
+    scopes: { global: true, project: true },
+    retrieval: { vector: { enabled: true, endpoint: 'http://127.0.0.1:9/v1/embeddings', model: 'm', dims: 4, writeTimeoutMs: 150, backfillTimeoutMs: 150 } },
+  })
+  try {
+    const rec = await svc.save({ scope: 'global', kind: 'fact', content: '要重建的一条' })
+    const s = svc.store.peek('global')!
+    s.embedPending.delete(rec.id)
+    s.vectors.set(rec.id, new Float32Array([1, 0, 0, 0]))
+    const out = svc.reindexAll()
+    assert.equal(out.total, 1, '同步部分把所有记录排队')
+    assert.equal(s.vectors.has(rec.id), false, '旧向量作废')
+    assert.equal(s.vectorsDirty, true, '磁盘上的旧向量也要作废')
+    assert.equal(s.embedPending.has(rec.id), true, '留在待嵌入队列')
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
