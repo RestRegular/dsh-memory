@@ -193,7 +193,7 @@ function discoverScopes(memory, store) {
   } catch { /* discovery is best-effort */ }
 }
 
-function wireRecord(rec, scopeStore) {
+function wireRecord(rec, scopeStore, supersededBy = null) {
   return {
     id: rec.id,
     scope: rec.scope,
@@ -204,15 +204,20 @@ function wireRecord(rec, scopeStore) {
     createdAt: rec.createdAt,
     updatedAt: rec.updatedAt,
     accessCount: rec.accessCount ?? 0,
-    supersededBy: rec.supersededBy ?? null,
+    supersededBy,
     supersedes: rec.supersedes ?? null,
     embedded: !scopeStore.embedPending.has(rec.id) && scopeStore.vectors.has(rec.id),
   }
 }
 
 function collectScope(scopeStore) {
+  // supersedes 是"新记录 → 旧记录"的指向;反查一次,给旧记录标上"已被修正"。
+  const correctedBy = new Map()
+  for (const rec of scopeStore.records.values()) {
+    if (rec.supersedes) correctedBy.set(rec.supersedes, rec.id)
+  }
   const out = []
-  for (const rec of scopeStore.records.values()) out.push(wireRecord(rec, scopeStore))
+  for (const rec of scopeStore.records.values()) out.push(wireRecord(rec, scopeStore, correctedBy.get(rec.id) ?? null))
   return out.sort((a, b) => b.updatedAt - a.updatedAt)
 }
 

@@ -110,3 +110,20 @@ test('面板 /export + /import:文本往返,重复导入跳过', async () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('面板 /records:旧记录带上 supersededBy,新记录带 supersedes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-supersede-'))
+  const svc = new LocalMemoryService({ storeDir: dir, scopes: { global: true, project: true } })
+  try {
+    const old = await svc.save({ scope: 'global', kind: 'fact', content: '端口是 3000' })
+    const fixed = await svc.save({ scope: 'global', kind: 'fact', content: '端口改为 4000', supersedes: old.id })
+    const res = fakeRes()
+    await handleRequest(ctxWith(svc), ROUTE, get(`${ROUTE}/records?scope=global`), res)
+    const records = res.out.body.value.records
+    assert.equal(records.find((r) => r.id === fixed.id).supersedes, old.id)
+    assert.equal(records.find((r) => r.id === old.id).supersededBy, fixed.id)
+    svc.flushSync()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

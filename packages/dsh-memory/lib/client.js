@@ -79,6 +79,9 @@ window.__ModuleLoader__.load({
       '.memp .chev.open{transform:rotate(90deg)}',
       '.memp .badge{border:1px solid var(--dsw-alias-border-l1);border-radius:5px;padding:0 6px;line-height:1.7;color:var(--dsw-alias-label-secondary);flex:none}',
       '.memp .badge.scope{color:var(--dsw-alias-brand-primary);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.memp .badge.corrected{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary)}',
+      '.memp .tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}',
+      '.memp .tag{font-size:11px;line-height:1.7;padding:0 6px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2)}',
       '.memp .pending{flex:none}',
       '.memp .time{margin-left:auto;flex:none}',
       '.memp .preview{margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dsw-alias-label-secondary);line-height:1.5}',
@@ -267,12 +270,26 @@ window.__ModuleLoader__.load({
           h('span', { className: open ? 'chev open' : 'chev' }, '▶'),
           h('span', { className: 'badge scope', title: rec.scope }, scopeLabel(rec.scope, labels)),
           h('span', { className: 'badge' }, rec.kind),
-          rec.supersedes ? h('span', { className: 'badge', title: `修正 #${rec.supersedes}` }, '修正') : null,
+          rec.supersedes
+            ? h('span', {
+                className: 'badge corrected',
+                title: `修正版:它覆盖了旧记录 #${rec.supersedes}（旧记录仍可检索，只是排序降权）`,
+              }, `修正自 ${rec.supersedes.slice(0, 8)}`)
+            : null,
+          rec.supersededBy
+            ? h('span', {
+                className: 'badge',
+                title: `已被 #${rec.supersededBy} 修正（旧记录仍可检索，只是排序降权）`,
+              }, '已被修正')
+            : null,
           // 只在"待嵌入"时提示:已嵌入是常态,向量没启用时这条也没有行动价值。
           !rec.embedded && vectorOn ? h('span', { className: 'pending', title: '待嵌入:向量服务就绪后会自动补上' }, '待嵌入') : null,
           h('span', { className: 'time', title: `更新于 ${fmtTime(rec.updatedAt)}` }, fmtTime(rec.updatedAt)),
         ),
         !open ? h('div', { className: 'preview' }, rec.content) : null,
+        rec.tags && rec.tags.length > 0
+          ? h('div', { className: 'tags' }, rec.tags.map((tag) => h('span', { className: 'tag', key: tag }, tag)))
+          : null,
         open
           ? h('div', { className: 'rec-body' },
               editing
@@ -844,7 +861,11 @@ window.__ModuleLoader__.load({
           }),
         ),
         h('div', { className: 'row' },
-          h('input', { type: 'text', placeholder: '标签, 逗号分隔', value: tags, onChange: (e) => setTags(e.target.value) }),
+          h('label', { className: 'set-field' }, '标签 ',
+            h('input', {
+              type: 'text', style: { width: 190 }, placeholder: '逗号分隔，例如 pnpm, 工具链',
+              value: tags, onChange: (e) => setTags(e.target.value),
+            })),
           h('label', null, '重要度 ',
             h('input', { type: 'number', min: 0, max: 1, step: 0.1, value: importance, onChange: (e) => setImportance(e.target.value) })),
           h('button', { onClick: submit, disabled: busy || content.trim() === '' || resolvedScope === '' }, busy ? '保存中…' : '保存'),

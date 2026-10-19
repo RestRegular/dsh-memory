@@ -863,3 +863,20 @@ test('记录页:点「新建」出现表单,可选 rule 类型;设置页有导�
   assert.ok(text.includes('导入文件'), '设置页有导入入口')
   assert.ok(text.includes('0 条规则'), '设置页显示规则条数')
 })
+
+test('记录卡:标签渲染成气泡,修正关系两个方向都有明确徽标', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const RecordCard = (exports.__test as { RecordCard: (p: Record<string, unknown>) => unknown }).RecordCard
+
+  let tree: RenderNode | null = null
+  const element = (rec: Record<string, unknown>) => hooks.React.createElement(RecordCard, { rec, onSaved: () => {}, onDeleted: () => {} })
+  hooks.setRerender(() => {})
+  tree = render(element(makeRecord({ tags: ['pnpm', '工具链'], supersedes: 'abcdef1234567890' })), hooks)
+  const text = textOf(tree)
+  assert.ok(text.includes('pnpm') && text.includes('工具链'), `标签要显示在卡片上(${text})`)
+  assert.ok(text.includes('修正自 abcdef12'), '修正版徽标带旧记录 id 前缀')
+
+  tree = render(element(makeRecord({ tags: [], supersededBy: 'ffff000011112222' })), hooks)
+  assert.ok(textOf(tree).includes('已被修正'), '被修正的记录有「已被修正」徽标')
+})
