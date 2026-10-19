@@ -890,3 +890,15 @@ test('记录卡:标签渲染成气泡,修正关系两个方向都有明确徽标
   tree = render(element(), hooks)
   assert.ok(textOf(tree).includes('已被修正'), '被修正的记录有「已被修正」徽标')
 })
+
+test('服务页底部:Star 与 issue 链接', async () => {
+  const { hooks } = await loadBundle()
+  hooks.resetAll()
+  const tree = await mountPanel(hooks, { scopes: [], embedServer: null }, undefined, 'records')
+  const text = textOf(tree())
+  assert.ok(text.includes('去 GitHub 点个 Star'), `底部有 Star 文案(${text.slice(-80)})`)
+  assert.ok(text.includes('反馈建议 / 提 issue'), '底部有 issue 文案')
+  const links = collect(tree()).filter((n) => n.tag === 'a').map((n) => String(n.props?.href))
+  assert.ok(links.includes('https://github.com/RestRegular/dsh-memory'), `Star 链接正确(${JSON.stringify(links)})`)
+  assert.ok(links.includes('https://github.com/RestRegular/dsh-memory/issues/new'), 'issue 链接正确')
+})

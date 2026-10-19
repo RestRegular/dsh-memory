@@ -86,6 +86,9 @@ window.__ModuleLoader__.load({
       '.memp .meta-id{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11.5px;padding:1px 6px;border-radius:5px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);cursor:pointer;user-select:all}',
       '.memp .meta-id:hover{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary)}',
       '.memp .meta-done{color:var(--dsw-alias-brand-primary);font-size:11.5px}',
+      '.memp .footer{display:flex;flex-wrap:wrap;align-items:center;gap:2px;margin-top:18px;padding-top:12px;border-top:1px solid var(--dsw-alias-border-l1);font-size:12px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .footer a{color:var(--dsw-alias-brand-primary);text-decoration:none}',
+      '.memp .footer a:hover{text-decoration:underline}',
       '.memp .pending{flex:none}',
       '.memp .time{margin-left:auto;flex:none}',
       '.memp .preview{margin-top:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dsw-alias-label-secondary);line-height:1.5}',
@@ -1195,7 +1198,14 @@ window.__ModuleLoader__.load({
         : h('div', { className: 'list' },
             records.map((rec) => h(RecordCard, { key: rec.id, rec, vectorOn: configured && vectorEnabled, labels: labels, onSaved: () => load(), onDeleted: () => load() })))
 
-      const overviewBody = h('div', { className: 'memp-body' }, serverCard, maintenanceCard)
+      // 服务页底部:一句号召 + 两个外链(Star / issue)。放在内容最后,不打扰上面的状态卡。
+      const footer = h('div', { className: 'footer' },
+        '觉得好用？',
+        h('a', { href: 'https://github.com/RestRegular/dsh-memory', target: '_blank', rel: 'noreferrer' }, '⭐ 去 GitHub 点个 Star'),
+        ' · ',
+        h('a', { href: 'https://github.com/RestRegular/dsh-memory/issues/new', target: '_blank', rel: 'noreferrer' }, '💬 反馈建议 / 提 issue'),
+      )
+      const overviewBody = h('div', { className: 'memp-body' }, serverCard, maintenanceCard, footer)
       // 记录页:统计 + 工具栏 + 新建表单固定在上面,只有列表在滚动容器里 —— 记忆多了也不把面板撑长。
       const dataBody = h('div', { className: 'memp-body' },
         statsCard,
