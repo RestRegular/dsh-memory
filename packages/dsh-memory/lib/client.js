@@ -172,6 +172,8 @@ window.__ModuleLoader__.load({
       '.memp .list{display:flex;flex-direction:column;gap:8px;padding-bottom:4px}',
       // 侧栏入口打开的主界面页面:整块可滚动,内容用面板本体
       '.mem-page{height:100%;overflow:auto;padding:16px 20px 40px}',
+      // 主界面里空间更大:列表容器跟着视口长高,别停在设置面板那档 62vh
+      '.mem-page .memp .scroll{max-height:calc(100vh - 240px)}',
       '.mem-page-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}',
       '.mem-page-head h2{font-size:15px;font-weight:600;margin:0}',
     ].join('')
@@ -1163,8 +1165,8 @@ window.__ModuleLoader__.load({
 
       return h('div', { className: 'memp' },
         h('div', { className: 'tabs' },
-          h('button', { className: 'tab' + (tab === 'records' ? ' on' : ''), onClick: () => setTab('records') }, '记录'),
-          h('button', { className: 'tab' + (tab === 'data' ? ' on' : ''), onClick: () => setTab('data') }, '数据'),
+          h('button', { className: 'tab' + (tab === 'records' ? ' on' : ''), onClick: () => setTab('records') }, '服务'),
+          h('button', { className: 'tab' + (tab === 'data' ? ' on' : ''), onClick: () => setTab('data') }, '记录'),
           h('button', { className: 'tab' + (tab === 'settings' ? ' on' : ''), onClick: () => setTab('settings') }, '设置'),
         ),
         tab === 'settings' ? h(SettingsTab, {}) : tab === 'data' ? dataBody : overviewBody,

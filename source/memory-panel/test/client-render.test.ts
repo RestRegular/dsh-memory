@@ -290,7 +290,7 @@ async function mountPanel(
   hooks.runEffects()
   for (let i = 0; i < 4; i++) await Promise.resolve()
   if (tab !== 'data') {
-    const label = ({ records: '记录', data: '数据', settings: '设置' } as Record<string, string>)[tab] ?? tab
+    const label = ({ records: '服务', data: '记录', settings: '设置' } as Record<string, string>)[tab] ?? tab
     const button = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === label)
     assert.ok(button, `找不到「${label}」标签`)
     ;(button!.props!.onClick as () => void)()
@@ -342,10 +342,10 @@ test('作用域下拉用服务端给的 label(会话标题 / project 的 cwd)', 
     embedServer: null,
   })
   // 统计卡在「记录」页:仍然动态数作用域个数
-  await switchTab(tree, hooks, '记录')
+  await switchTab(tree, hooks, '服务')
   assert.ok(textOf(tree()).includes('4'), '作用域数来自 /status 的动态枚举')
   // 作用域下拉在「数据」页
-  await switchTab(tree, hooks, '数据')
+  await switchTab(tree, hooks, '记录')
   // 打开作用域下拉(结构里第二个 aria-haspopup=listbox;第一个是模型/运行时下拉),
   // 选项文字必须用 label(而不是原始 scope 键)
   const dropdowns = collect(tree()).filter((n) => n.props?.['aria-haspopup'] === 'listbox')
@@ -461,13 +461,13 @@ test('「本机配置」「当前模型」两行:都带标题、都横向滚动,
   const configured = chipTexts(configuredTree())
   assert.deepEqual(configured.slice(4, 9), ['BGE-M3', 'Q4_K_M', '1024 维', 'cls', 'cpu'], `已配置时的当前模型:${JSON.stringify(configured)}`)
 
-  // 自绘下拉:记录页是模型 / 运行时,作用域下拉在数据页;全站没有原生 select
+  // 自绘下拉:服务页是模型 / 运行时,作用域下拉在记录页;全站没有原生 select
   const nodes = collect(configuredTree())
   assert.equal(nodes.filter((n) => n.tag === 'select').length, 0, '不再使用原生 select')
-  assert.equal(nodes.filter((n) => n.props?.['aria-haspopup'] === 'listbox').length, 2, '记录页有模型 / 运行时两个自绘下拉')
-  await switchTab(configuredTree, hooks, '数据')
-  assert.equal(collect(configuredTree()).filter((n) => n.props?.['aria-haspopup'] === 'listbox').length, 1, '数据页有作用域下拉')
+  assert.equal(nodes.filter((n) => n.props?.['aria-haspopup'] === 'listbox').length, 2, '服务页有模型 / 运行时两个自绘下拉')
   await switchTab(configuredTree, hooks, '记录')
+  assert.equal(collect(configuredTree()).filter((n) => n.props?.['aria-haspopup'] === 'listbox').length, 1, '记录页有作用域下拉')
+  await switchTab(configuredTree, hooks, '服务')
 
   // 已装好的那一档:按钮显示「已安装」且不可点(点它只会重复下载)
   const installBtn = nodes.find((n) => String(n.props?.className ?? '') === 'install')
@@ -527,7 +527,7 @@ test('已经装了模型就不许再装:必须先卸载;卸载后按钮恢复可
     owned: false, pid: null, baseUrl: '', reachable: false, pendingEmbeds: 0, install: installIdle({ installed: false }),
     maintenance: { usageBytes: 0, records: 0, storeDir: 'D:/stack/store' },
   }
-  await switchTab(tree, hooks, '数据')
+  await switchTab(tree, hooks, '记录')
   const refresh = collect(tree()).find((n) => n.tag === 'button' && textOf(n).includes('刷新'))!
   assert.ok(refresh, '刷新按钮在数据页工具栏')
   ;(refresh.props!.onClick as () => void)()
@@ -535,7 +535,7 @@ test('已经装了模型就不许再装:必须先卸载;卸载后按钮恢复可
     for (let i = 0; i < 6; i++) await Promise.resolve()
     hooks.runEffects()
   }
-  await switchTab(tree, hooks, '记录')
+  await switchTab(tree, hooks, '服务')
   assert.equal(label(), '下载并安装', '卸载之后按钮回到「下载并安装」')
   assert.notEqual(installBtn()!.props?.disabled, true, '卸载之后可以装了')
 })
