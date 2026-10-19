@@ -341,11 +341,8 @@ test('作用域下拉用服务端给的 label(会话标题 / project 的 cwd)', 
     ],
     embedServer: null,
   })
-  // 统计卡在「记录」页:仍然动态数作用域个数
-  await switchTab(tree, hooks, '服务')
+  // 统计卡与作用域下拉都在「记录」页(默认标签)
   assert.ok(textOf(tree()).includes('4'), '作用域数来自 /status 的动态枚举')
-  // 作用域下拉在「数据」页
-  await switchTab(tree, hooks, '记录')
   // 打开作用域下拉(结构里第二个 aria-haspopup=listbox;第一个是模型/运行时下拉),
   // 选项文字必须用 label(而不是原始 scope 键)
   const dropdowns = collect(tree()).filter((n) => n.props?.['aria-haspopup'] === 'listbox')
@@ -364,17 +361,22 @@ test('作用域下拉用服务端给的 label(会话标题 / project 的 cwd)', 
 test('未配置的后端:展开「模型与硬件」给出模型列表与安装按钮,而不是一个死开关', async () => {
   const { hooks } = await loadBundle()
   hooks.resetAll()
-  const tree = await mountPanel(hooks, {
+  const state = {
     scopes: [{ scope: 'global', records: 3, pendingEmbeds: 3 }],
     embedServer: {
       enabled: false, configured: false, mode: 'off', endpoint: 'http://127.0.0.1:8078/v1/embeddings', model: 'bge-m3',
       spawnConfigured: false, owned: false, pid: null, baseUrl: '', reachable: false, pendingEmbeds: 3,
       install: installIdle(),
     },
-  }, undefined, 'records')
+  }
+  // 统计卡在「记录」页:没有向量后端时不能假装有嵌入积压
+  const dataTree = await mountPanel(hooks, state, undefined, '记录')
+  assert.ok(textOf(dataTree()).includes('向量未启用'), 'the stats card does not pretend there is an embed backlog')
+  hooks.resetAll()
+
+  const tree = await mountPanel(hooks, state, undefined, '服务')
   const nodes = collect(tree())
   assert.equal(nodes.filter((n) => n.props?.role === 'switch').length, 0, 'no switch before a backend is configured')
-  assert.ok(textOf(tree()).includes('向量未启用'), 'the stats card does not pretend there is an embed backlog')
   assert.ok(textOf(tree()).includes('向量检索为可选功能'), '可选说明紧跟在「模型与硬件」旁边')
 
   // 展开「模型与硬件」→ 才会去拉清单(硬件探测要等这一次请求)

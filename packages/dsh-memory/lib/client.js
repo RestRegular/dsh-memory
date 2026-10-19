@@ -160,7 +160,7 @@ window.__ModuleLoader__.load({
       '.memp .data{padding-top:4px}',
       '.memp .data .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px}',
       // 数据页:列表在独立滚动容器里,记忆多也不把面板撑长
-      '.memp .scroll{max-height:min(62vh,560px);overflow-y:auto;overscroll-behavior:contain;padding:2px 8px 2px 2px;margin-right:-2px}',
+      '.memp .scroll{max-height:min(52vh,460px);overflow-y:auto;overscroll-behavior:contain;padding:2px 8px 2px 2px;margin-right:-2px}',
       '.memp .scroll.is-empty{max-height:none;overflow:visible;padding-right:0}',
       // 自定义滚动条:细、圆头、透明轨道,hover 才加深;Firefox 用 scrollbar-width/color
       '.memp .scroll{scrollbar-width:thin;scrollbar-color:color-mix(in srgb, var(--dsw-alias-label-secondary) 30%, transparent) transparent}',
@@ -173,7 +173,7 @@ window.__ModuleLoader__.load({
       // 侧栏入口打开的主界面页面:整块可滚动,内容用面板本体
       '.mem-page{height:100%;overflow:auto;padding:16px 20px 40px}',
       // 主界面里空间更大:列表容器跟着视口长高,别停在设置面板那档 62vh
-      '.mem-page .memp .scroll{max-height:calc(100vh - 240px)}',
+      '.mem-page .memp .scroll{max-height:calc(100vh - 340px)}',
       '.mem-page-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}',
       '.mem-page-head h2{font-size:15px;font-weight:600;margin:0}',
     ].join('')
@@ -1154,9 +1154,10 @@ window.__ModuleLoader__.load({
         : h('div', { className: 'list' },
             records.map((rec) => h(RecordCard, { key: rec.id, rec, vectorOn: configured && vectorEnabled, labels: labels, onSaved: () => load(), onDeleted: () => load() })))
 
-      const overviewBody = h('div', { className: 'memp-body' }, statsCard, serverCard, maintenanceCard)
-      // 数据页:工具栏与新建表单固定在上面,只有列表在滚动容器里 —— 记忆多了也不把面板撑长。
+      const overviewBody = h('div', { className: 'memp-body' }, serverCard, maintenanceCard)
+      // 记录页:统计 + 工具栏 + 新建表单固定在上面,只有列表在滚动容器里 —— 记忆多了也不把面板撑长。
       const dataBody = h('div', { className: 'memp-body' },
+        statsCard,
         toolbar,
         createForm,
         error ? h('div', { className: 'err' }, error) : null,
