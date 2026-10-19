@@ -422,14 +422,18 @@ async function handle(ctx, routePath, req, res) {
       }
       if (!target) throw new ApiError(404, 'RECORD_NOT_FOUND', `no record ${id}`)
       const { s, rec } = target
+      let reindex = false
       if (body.content !== undefined) {
         const content = String(body.content)
         if (!content.trim()) throw new ApiError(400, 'CONTENT_EMPTY', 'content 不能为空')
         if (content !== rec.content) {
           rec.content = content
-          // 旧向量作废,排队重新嵌入(provider 的维护循环负责回填)
+          // 旧向量作废:内存 + 磁盘一起丢掉(vectorsDirty),再排队重建。
+          // 只删内存不标 dirty 的话,重启后 load 会看到旧向量、把它当成"已嵌入"。
           s.vectors.delete(id)
+          s.vectorsDirty = true
           s.embedPending.add(id)
+          reindex = true
         }
       }
       if (body.kind !== undefined) rec.kind = String(body.kind)
@@ -439,6 +443,10 @@ async function handle(ctx, routePath, req, res) {
       rec.updatedAt = Date.now()
       s.dirty = true
       store.scheduleFlush()
+      // 立即重建向量(不等 60s 的定时回填);失败就留在 pending 里由重试兜底。
+      if (reindex && typeof memory.reindexRecord === 'function') {
+        void memory.reindexRecord(rec.scope, id).catch(() => {})
+      }
       writeJson(res, { ok: true, value: { record: wireRecord(rec, s) } })
       return
     }

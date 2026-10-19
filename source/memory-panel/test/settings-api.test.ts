@@ -127,3 +127,30 @@ test('面板 /records:旧记录带上 supersededBy,新记录带 supersedes', asy
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('面板 /update:编辑内容后作废旧向量并立即请求重建', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-update-'))
+  const svc = new LocalMemoryService({ storeDir: dir, scopes: { global: true, project: true } })
+  try {
+    const rec = await svc.save({ scope: 'global', kind: 'fact', content: '旧内容' })
+    const scopeStore = svc.store.peek('global')!
+    scopeStore.vectors.set(rec.id, new Float32Array([1, 0, 0, 0]))
+    const calls: Array<[string, string]> = []
+    const memory = {
+      store: svc.store,
+      scopeStats: () => svc.scopeStats(),
+      reindexRecord: (scope: string, id: string) => { calls.push([scope, id]); return Promise.resolve(true) },
+    }
+    const ctx = { get: (name: string) => (name === 'memory' ? memory : undefined), logger: { warn() {} } }
+    const res = fakeRes()
+    await handleRequest(ctx, ROUTE, post(`${ROUTE}/update`, { id: rec.id, content: '新内容' }), res)
+    assert.equal(res.out.status, 200)
+    assert.equal(scopeStore.vectors.has(rec.id), false, '旧向量从内存删掉')
+    assert.equal(scopeStore.vectorsDirty, true, '旧向量要从磁盘作废')
+    for (let i = 0; i < 4; i++) await Promise.resolve()
+    assert.deepEqual(calls, [['global', rec.id]], '立即请求重建这一条')
+    svc.flushSync()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

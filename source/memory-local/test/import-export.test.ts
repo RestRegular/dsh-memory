@@ -1,4 +1,4 @@
-import { test } from 'node:test'
+﻿import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -99,6 +99,41 @@ test('memory_get: 完整 id 与 8 位前缀都能取到,找不到的进 missing'
     assert.deepEqual(svc.getByIds(['deadbeef']), [])
     svc.flushSync()
   } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('reindexRecord:后端不可达时保留 pending,并把旧向量标脏(重启不会误判为已嵌入)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-reindex-'))
+  const svc = new LocalMemoryService({
+    storeDir: dir,
+    scopes: { global: true, project: true },
+    retrieval: { vector: { enabled: true, endpoint: 'http://127.0.0.1:9/v1/embeddings', model: 'm', dims: 4, writeTimeoutMs: 150, backfillTimeoutMs: 150 } },
+  })
+  try {
+    const rec = await svc.save({ scope: 'global', kind: 'fact', content: '旧内容' })
+    const s = svc.store.peek('global')!
+    s.vectors.set(rec.id, new Float32Array([1, 0, 0, 0]))
+    const ok = await svc.reindexRecord('global', rec.id)
+    assert.equal(ok, false, '后端不可达 → 重建失败')
+    assert.equal(s.vectors.has(rec.id), false, '旧向量必须从内存删掉')
+    assert.equal(s.vectorsDirty, true, '旧向量必须从磁盘作废')
+    assert.equal(s.embedPending.has(rec.id), true, '留在待嵌入队列里等重试')
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('reindexRecord:未配置向量时是 no-op', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-reindex-'))
+  const svc = new LocalMemoryService({ storeDir: dir, scopes: { global: true, project: true } })
+  try {
+    const rec = await svc.save({ scope: 'global', kind: 'fact', content: 'x' })
+    assert.equal(await svc.reindexRecord('global', rec.id), false)
+    assert.equal(svc.store.peek('global')!.embedPending.size, 0)
+  } finally {
+    svc.flushSync()
     rmSync(dir, { recursive: true, force: true })
   }
 })

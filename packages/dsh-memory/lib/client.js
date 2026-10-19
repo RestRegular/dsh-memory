@@ -898,6 +898,9 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** 待嵌入自动刷新:最多 30 次 × 2s(后端挂着时不无限轮询)。 */
+    const PENDING_POLL_LIMIT = 30
+
     function MemoryPanel() {
       const [records, setRecords] = React.useState([])
       const [scopes, setScopes] = React.useState([])
@@ -911,6 +914,7 @@ window.__ModuleLoader__.load({
       const [loading, setLoading] = React.useState(true)
       const [error, setError] = React.useState('')
       const [tab, setTab] = React.useState('data')
+      const [pendingTick, setPendingTick] = React.useState(0)
       const [creating, setCreating] = React.useState(false)
 
       const load = async (query, scopeF) => {
@@ -1021,6 +1025,17 @@ window.__ModuleLoader__.load({
 
       const total = scopes.reduce((n, s) => n + s.records, 0)
       const pending = scopes.reduce((n, s) => n + s.pendingEmbeds, 0)
+      // 有"待嵌入"时自动刷新:编辑后向量重建需要一两秒,列表与统计不能一直停在旧状态,
+      // 等用户切标签/重进面板才知道好了。(有上限,后端挂着时不会无限轮询。)
+      React.useEffect(() => {
+        if (pending === 0 || pendingTick >= PENDING_POLL_LIMIT) return undefined
+        if (!configured || !vectorEnabled) return undefined
+        const timer = setTimeout(() => {
+          setPendingTick((n) => n + 1)
+          load()
+        }, 2000)
+        return () => clearTimeout(timer)
+      }, [pendingTick, pending])
       // 服务端 /status 给的 scope → label 映射(会话标题、project 的 cwd 只有服务端知道)
       const labels = {}
       for (const s of scopes) if (s && s.scope && typeof s.label === 'string') labels[s.scope] = s.label
@@ -1190,13 +1205,13 @@ window.__ModuleLoader__.load({
         ? h(CreateForm, {
             scopes,
             onCancel: () => setCreating(false),
-            onCreated: () => { setCreating(false); load('', '') },
+            onCreated: () => { setCreating(false); setPendingTick(0); load('', '') },
           })
         : null
       const listBody = !loading && !error && records.length === 0
         ? h('div', { className: 'empty' }, filtering ? '没有匹配的记忆' : '还没有记忆')
         : h('div', { className: 'list' },
-            records.map((rec) => h(RecordCard, { key: rec.id, rec, vectorOn: configured && vectorEnabled, labels: labels, onSaved: () => load(), onDeleted: () => load() })))
+            records.map((rec) => h(RecordCard, { key: rec.id, rec, vectorOn: configured && vectorEnabled, labels: labels, onSaved: () => { setPendingTick(0); load() }, onDeleted: () => { setPendingTick(0); load() } })))
 
       // 服务页底部:一句号召 + 两个外链(Star / issue)。放在内容最后,不打扰上面的状态卡。
       const footer = h('div', { className: 'footer' },

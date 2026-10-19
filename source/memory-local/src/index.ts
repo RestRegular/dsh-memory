@@ -1275,6 +1275,28 @@ export class LocalMemoryService implements MemoryServiceApi {
   }
 
   /**
+   * 编辑之后立即重建**这一条**的向量，不等 60s 的回填窗口。
+   * 旧向量同时从内存与磁盘作废（vectorsDirty），失败则留在 pending 里由重试兜底 ——
+   * 绝不能让"新内容 + 旧向量"在重启后被当成已嵌入。
+   */
+  async reindexRecord(scope: MemoryScope, id: string): Promise<boolean> {
+    if (!this.cfg.vector.enabled || !this.cfg.vector.configured) return false
+    const s = this.store.peek(scope)
+    const record = s?.records.get(id)
+    if (!s || !record) return false
+    s.vectors.delete(id)
+    s.vectorsDirty = true
+    s.embedPending.add(id)
+    try {
+      await this.embedRecord(record)
+    } catch { /* 失败留给重试定时器 */ }
+    if (!s.vectors.has(id)) return false
+    s.embedPending.delete(id)
+    this.store.scheduleFlush()
+    return true
+  }
+
+  /**
    * First-fill: embed the ENTIRE backlog (unlike backfillEmbeddings' single
    * batch per scope), in throttled batches so a big import does not hammer
    * llama-server or block the caller. Yields to the event loop between

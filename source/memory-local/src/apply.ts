@@ -150,6 +150,16 @@ export class CordisMemoryService extends Service {
     return this.impl.listSync(input)
   }
 
+  /** 面板编辑后立即重建这一条的向量。 */
+  reindexRecord(scope: MemoryScope, id: string): Promise<boolean> {
+    return this.impl.reindexRecord(scope, id)
+  }
+
+  /** 作用域别名(没有则 undefined)。 */
+  scopeName(scope: MemoryScope): string | undefined {
+    return this.impl.scopeName(scope)
+  }
+
   /** 注入设置(面板「设置」标签页读它)。 */
   injectSettings(): ReturnType<LocalMemoryService['injectSettings']> {
     return this.impl.injectSettings()
