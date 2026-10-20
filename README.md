@@ -17,6 +17,10 @@ English: Local, durable memory for DeepSeek Harness — one npm package, one loa
 
 ![记忆树](./preview/memory-tree.png)
 
+设置页「记忆 → 设置」的卡片式布局:每个开关都有可见 label、说明和状态,自动召回标签在同卡编辑。
+
+![设置页卡片](./preview/memory-settings.png)
+
 模型在对话里查记忆 —— `memory_search` 的入参与召回结果:
 
 ![memory_search 工具调用](./preview/memory-search.png)
@@ -345,6 +349,11 @@ tools/build-single-package.mjs   构建(产物契约检查 + 可选加载验证)
 
 ## 版本
 
+- **0.9.8** —— 设置页重写为卡片式:
+  - 每个开关都有可见 label、说明和「已开启 / 已关闭」状态,不再只靠 tooltip;数值项也有独立 label 与提示。
+  - 分组改成卡片:每轮召回 / 印象形态 / 会话摘要 / 记忆使用策略 / 硬性规则 / 自动召回 / 轮末提醒 / 侧栏入口;规则卡显示当前规则条数与作用域数。
+  - 自动召回标签编辑器并入「自动召回」卡,保存按钮与说明同屏;数据导出 / 导入独立成卡。
+  - 窄面板自动单列;新增回归测试,断言每个开关都有可见 label、hint 和状态文案。
 - **0.9.7** —— 行为召回从“固定发布/部署模式”改成**标签匹配**:
   - `autoRecall.tags` 是可编辑标签列表,不再要求写正则;默认并入记忆库里已有的标签(`useMemoryTags`),所以不需要把每个标签抄进设置。
   - 匹配源扩到可见 `assistant/message` text 块、`todo/write` 任务清单、`command/run`、`goal/change`、`tool/call` 的 name/description/参数,以及 `tool/result` 失败描述;不读取 hidden reasoning。

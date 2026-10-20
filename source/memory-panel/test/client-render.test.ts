@@ -826,6 +826,26 @@ test('设置标签页:读取注入设置、渲染各组开关并能保存', asyn
   assert.ok(posted, '改动即自动保存')
   assert.equal((posted as Record<string, unknown>).recall && ((posted as Record<string, unknown>).recall as { enabled?: boolean }).enabled, false)
   assert.ok(calls.some((c) => c.method === 'POST' && c.url.includes('/settings')))
+
+  // 每个开关必须有可见的 label 与状态，不能只靠 tooltip。
+  const groupSwitches = collect(current).filter((n) => String(n.props?.className ?? '') === 'setcard-enable')
+  assert.ok(groupSwitches.length >= 5, `卡片头应有显式启用开关，实际 ${groupSwitches.length}`)
+  for (const node of groupSwitches) {
+    const label = textOf(node)
+    assert.ok(label.includes('启用'), `卡片开关缺少可见「启用」: ${label}`)
+    assert.ok(label.includes('已开启') || label.includes('已关闭'), `卡片开关缺少状态文案: ${label}`)
+  }
+  const fieldSwitches = collect(current)
+    .filter((n) => String(n.props?.className ?? '') === 'setfield')
+    .filter((n) => collect(n).some((child) => child.props?.role === 'switch'))
+  assert.ok(fieldSwitches.length >= 2, '字段级开关也应存在')
+  for (const field of fieldSwitches) {
+    const label = collect(field).find((n) => String(n.props?.className ?? '') === 'setfield-label')
+    assert.ok(label && textOf(label).trim().length > 0, '字段级开关缺少 label')
+    assert.ok(collect(field).some((n) => String(n.props?.className ?? '') === 'setfield-hint'), '字段级开关缺少 hint')
+    const text = textOf(field)
+    assert.ok(text.includes('已开启') || text.includes('已关闭'), `字段级开关缺少状态文案: ${text}`)
+  }
 })
 
 test('记录页:点「新建」出现表单,可选 rule 类型;设置页有导入/导出', async () => {

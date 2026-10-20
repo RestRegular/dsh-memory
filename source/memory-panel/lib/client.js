@@ -164,6 +164,37 @@ window.__ModuleLoader__.load({
       '.memp .switch .knob{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .12s ease;box-shadow:0 1px 2px rgba(0,0,0,.25)}',
       '.memp .switch.on .knob{left:16px}',
       '.memp .setfoot{display:flex;align-items:center;gap:10px;padding-top:12px}',
+      // 新版设置页:卡片 + 可见 label + 状态文案 + 字段说明
+      '.memp .setp{display:flex;flex-direction:column;gap:10px}',
+      '.memp .sethead{display:flex;align-items:flex-end;gap:12px;padding:0 2px 2px}',
+      '.memp .sethead-text{flex:1;min-width:0}',
+      '.memp .sethead-title{font-size:14px;font-weight:600;line-height:1.35}',
+      '.memp .sethead-sub{font-size:11.5px;color:var(--dsw-alias-label-secondary);line-height:1.5;margin-top:2px}',
+      '.memp .sethead-saved{flex:none;font-size:11.5px;color:var(--dsw-alias-brand-primary);padding-bottom:2px}',
+      '.memp .setcards{display:flex;flex-direction:column;gap:9px}',
+      '.memp .setcard{border:1px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-layer-1);overflow:hidden}',
+      '.memp .setcard-head{display:flex;align-items:flex-start;gap:14px;padding:11px 13px;background:linear-gradient(120deg,color-mix(in srgb,var(--dsw-alias-brand-primary) 5%,var(--dsw-alias-bg-layer-1)),var(--dsw-alias-bg-layer-1) 62%)}',
+      '.memp .setcard-heading{flex:1;min-width:0}',
+      '.memp .setcard-title{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;line-height:1.4}',
+      '.memp .setcard-desc{font-size:11.5px;color:var(--dsw-alias-label-secondary);line-height:1.55;margin-top:3px}',
+      '.memp .setcard-pill{font-size:10px;font-weight:400;line-height:1.7;padding:0 7px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);white-space:nowrap}',
+      '.memp .setcard-enable{display:flex;align-items:center;gap:6px;flex:none;padding-top:1px}',
+      '.memp .setcard-enable-label{font-size:11.5px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .setcard-enable-state{font-size:10px;color:var(--dsw-alias-label-secondary);min-width:42px;text-align:right}',
+      '.memp .setcard-body{display:grid;grid-template-columns:repeat(auto-fit,minmax(245px,1fr));gap:8px;padding:11px 13px;border-top:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1)}',
+      '.memp .setcard-body.data-body{display:block}',
+      '.memp .setcard-note{padding:0 13px 11px;font-size:11px;color:var(--dsw-alias-label-secondary);line-height:1.5}',
+      '.memp .setfield{display:flex;align-items:center;gap:10px;min-width:0;padding:7px 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-alias-bg-layer-2)}',
+      '.memp .setfield-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}',
+      '.memp .setfield-label{font-size:12px;font-weight:500;line-height:1.45;color:var(--dsw-alias-label-primary)}',
+      '.memp .setfield-hint{font-size:10.5px;line-height:1.45;color:var(--dsw-alias-label-secondary)}',
+      '.memp .setfield-control{display:flex;align-items:center;gap:5px;flex:none}',
+      '.memp .setfield-state{font-size:10px;color:var(--dsw-alias-label-secondary);min-width:38px;text-align:right}',
+      '.memp .setfield input[type=number]{width:82px;padding:4px 7px;background:var(--dsw-alias-bg-layer-1)}',
+      '.memp .setcard-body .autorecall{grid-column:1/-1}',
+      '.memp .setcard-body .autorecall textarea{min-height:132px;background:var(--dsw-alias-bg-layer-1)}',
+      '.memp .setcard.datacard .setcard-head{background:var(--dsw-alias-bg-layer-1)}',
+      '@media (max-width:560px){.memp .setcard-head{flex-wrap:wrap}.memp .setcard-enable{margin-left:auto}.memp .setcard-body{grid-template-columns:1fr}}',
       '.memp .autorecall{flex:1 1 100%;display:flex;flex-direction:column;gap:6px;margin-top:6px}',
       '.memp .autorecall textarea{min-height:150px;font-family:var(--ds-font-family-code, ui-monospace, monospace);font-size:11px;line-height:1.5}',
       '.memp .autorecall .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}',
@@ -1511,7 +1542,8 @@ window.__ModuleLoader__.load({
     }
 
     /** 设置项开关:轨道 + 圆点,与向量服务的 toggle 同一套视觉。 */
-    function Switch({ checked, disabled, onChange, title }) {
+    function Switch({ checked, disabled, onChange, title, label }) {
+      const aria = title || label
       return h('button', {
         type: 'button',
         className: 'switch' + (checked ? ' on' : ''),
@@ -1519,6 +1551,7 @@ window.__ModuleLoader__.load({
         'aria-checked': Boolean(checked),
         disabled: Boolean(disabled),
         ...(title ? { title } : {}),
+        ...(aria ? { 'aria-label': aria } : {}),
         onClick: () => onChange(!checked),
       }, h('span', { className: 'knob' }))
     }
@@ -1533,67 +1566,73 @@ window.__ModuleLoader__.load({
     const SETTINGS_GROUPS = [
       {
         key: 'recall', title: '每轮召回',
-        desc: '按本轮问题检索记忆并插入上下文，内容没变不重复注入。',
+        desc: '按本轮用户消息检索记忆并插入上下文；内容没变不会重复注入。',
         fields: [
-          { k: 'enabled', label: '启用', type: 'bool' },
-          { k: 'topK', label: '最多条数', type: 'num', min: 1, max: 20, step: 1 },
-          { k: 'tokenBudget', label: 'token 预算', type: 'num', min: 50, max: 4000, step: 50 },
+          { k: 'enabled', label: '启用', type: 'bool', hint: '关闭后每轮不再按问题检索记忆。' },
+          { k: 'topK', label: '最多条数', type: 'num', min: 1, max: 20, step: 1, hint: '每次最多注入几条相关记忆。' },
+          { k: 'tokenBudget', label: 'token 预算', type: 'num', min: 50, max: 4000, step: 50, hint: '召回块允许占用的最大 token 数。' },
         ],
       },
       {
         key: 'impression', title: '印象形态',
-        desc: '每条只给摘要，细节由模型用 memory_get 取。',
+        desc: '召回时只给每条记忆的开头，模型需要细节时再用 memory_get 取全文。',
         fields: [
-          { k: 'enabled', label: '启用', type: 'bool' },
-          { k: 'chars', label: '每条字数', type: 'num', min: 40, max: 800, step: 20 },
+          { k: 'enabled', label: '启用', type: 'bool', hint: '关闭后召回直接给长文摘要。' },
+          { k: 'chars', label: '每条字数', type: 'num', min: 40, max: 800, step: 20, hint: '每条记忆在召回块里保留多少字。' },
         ],
       },
       {
         key: 'digest', title: '会话摘要',
-        desc: '会话第一步给一次项目 / 全局的记忆概览；正文被截断时附一条标签索引。',
+        desc: '新会话第一步给一次项目 / 全局记忆概览；正文被截断时附一条可检索的标签索引。',
         fields: [
-          { k: 'enabled', label: '启用', type: 'bool' },
-          { k: 'topK', label: '最多条数', type: 'num', min: 1, max: 30, step: 1 },
-          { k: 'tokenBudget', label: 'token 预算', type: 'num', min: 50, max: 4000, step: 50 },
-          { k: 'hintBudget', label: '标签预算', type: 'num', min: 30, max: 1000, step: 10 },
-          { k: 'hintMaxItems', label: '标签条数', type: 'num', min: 1, max: 30, step: 1 },
+          { k: 'enabled', label: '启用', type: 'bool', hint: '关闭后新会话不再收到记忆摘要。' },
+          { k: 'topK', label: '最多条数', type: 'num', min: 1, max: 30, step: 1, hint: '摘要正文最多列几条。' },
+          { k: 'tokenBudget', label: '正文预算', type: 'num', min: 50, max: 4000, step: 50, hint: '正文摘要的 token 预算；超出部分转成标签索引。' },
+          { k: 'hintBudget', label: '标签预算', type: 'num', min: 30, max: 1000, step: 10, hint: '标签索引独立预算，不占正文。' },
+          { k: 'hintMaxItems', label: '标签条数', type: 'num', min: 1, max: 30, step: 1, hint: '标签索引最多列几条。' },
         ],
       },
       {
         key: 'policy', title: '记忆使用策略',
-        desc: '系统提示常驻段：何时查、查到怎么用、查不到怎么办。',
-        fields: [{ k: 'enabled', label: '启用', type: 'bool' }],
+        desc: '系统提示常驻段：什么时候该查记忆、查到后怎么用、查不到怎么办。',
+        fields: [
+          { k: 'enabled', label: '启用', type: 'bool', hint: '关闭只移除这段提示，不影响记忆检索。' },
+        ],
       },
       {
         key: 'rules', title: '硬性规则',
-        desc: '把 kind=rule 的记忆放进系统提示常驻段；旧会话下一轮补一条新增/变更的规则。',
-        hint: '关闭只影响系统提示常驻段，记忆本身仍可被检索',
+        desc: '把 kind=rule 的记忆放进系统提示常驻段；旧会话下一轮补一条新增 / 变更的规则。',
+        hint: '关闭只影响系统提示常驻段，规则本身仍可被 memory_search 检索。',
         fields: [
-          { k: 'enabled', label: '启用', type: 'bool' },
-          { k: 'maxItems', label: '最多条数', type: 'num', min: 1, max: 40, step: 1 },
-          { k: 'tokenBudget', label: 'token 预算', type: 'num', min: 50, max: 4000, step: 50 },
-          { k: 'delta', label: '变更提醒', type: 'bool', hint: '旧会话在下一轮第一步补一条新增/编辑过的规则；没变化的不重复' },
+          { k: 'enabled', label: '启用', type: 'bool', hint: '关闭后规则不再进入系统提示常驻段。' },
+          { k: 'maxItems', label: '最多条数', type: 'num', min: 1, max: 40, step: 1, hint: '规则段最多列几条。' },
+          { k: 'tokenBudget', label: 'token 预算', type: 'num', min: 50, max: 4000, step: 50, hint: '规则段的 token 上限；mandatory 溢出会额外警告。' },
+          { k: 'delta', label: '变更提醒', type: 'bool', hint: '旧会话在下一轮第一步补一条新增 / 编辑过的规则；没变化不重复。' },
         ],
       },
       {
         key: 'autoRecall', title: '自动召回',
-        desc: '从可见文本（assistant 输出、任务清单、命令/工具描述、失败信息）匹配记忆标签，命中即检索。',
+        desc: '从可见文本（assistant 输出、任务清单、命令 / 工具描述、失败信息）匹配记忆标签，命中即检索。',
         fields: [
-          { k: 'enabled', label: '启用', type: 'bool' },
-          { k: 'useToolDescription', label: '用工具 description', type: 'bool', hint: '失败/命中时优先用工具调用自己写的 description 做检索' },
-          { k: 'useMemoryTags', label: '用记忆标签', type: 'bool', hint: '自动把记忆库里已有的标签并入触发词' },
-          { k: 'maxQueryChars', label: '查询字数', type: 'num', min: 40, max: 500, step: 10 },
+          { k: 'enabled', label: '启用', type: 'bool', hint: '关闭后只保留普通每轮召回与工具失败召回。' },
+          { k: 'useToolDescription', label: '使用工具 description', type: 'bool', hint: '失败或命中时优先用工具调用自己写的 description 做检索。' },
+          { k: 'useMemoryTags', label: '使用记忆标签', type: 'bool', hint: '自动把记忆库里已有的标签并入触发词。' },
+          { k: 'maxQueryChars', label: '查询字数上限', type: 'num', min: 40, max: 500, step: 10, hint: '单次自动召回查询最多多少字，避免把整段命令塞进检索。' },
         ],
       },
       {
         key: 'turnEnd', title: '轮末提醒',
-        desc: '下一轮开头提醒把本轮结论落盘，默认关闭。',
-        fields: [{ k: 'enabled', label: '启用', type: 'bool' }],
+        desc: '下一轮开头提醒把本轮结论落盘；默认关闭，避免打断连续对话。',
+        fields: [
+          { k: 'enabled', label: '启用', type: 'bool', hint: '开启后每轮结束会给一条“有结论就记一条”的提醒。' },
+        ],
       },
       {
         key: 'sidebar', title: '侧栏入口',
-        desc: '在左侧栏「插件」下方显示记忆入口，点击打开面板。',
-        fields: [{ k: 'enabled', label: '启用', type: 'bool' }],
+        desc: '在左侧栏「插件」下方显示「记忆」入口，点击在主界面打开面板。',
+        fields: [
+          { k: 'enabled', label: '启用', type: 'bool', hint: '关闭只隐藏侧栏入口，设置页仍然可用。' },
+        ],
       },
     ]
 
@@ -1620,6 +1659,87 @@ window.__ModuleLoader__.load({
           }, '保存标签'),
           h('span', { className: 'muted' }, '额外标签为空时仍会使用记忆库标签和失败召回'),
         ),
+      )
+    }
+
+    /** 单个数值 / 开关字段:label 和 hint 都必须是可见文本,不能只放在 title 里。 */
+    function SettingField({ field, value, onPatch }) {
+      if (field.type === 'bool') {
+        const checked = Boolean(value)
+        return h('div', { className: 'setfield' },
+          h('div', { className: 'setfield-main' },
+            h('span', { className: 'setfield-label' }, field.label),
+            field.hint ? h('span', { className: 'setfield-hint' }, field.hint) : null,
+          ),
+          h('div', { className: 'setfield-control' },
+            h(Switch, {
+              checked,
+              label: field.label,
+              title: field.hint || field.label,
+              onChange: onPatch,
+            }),
+            h('span', { className: 'setfield-state' }, checked ? '已开启' : '已关闭'),
+          ),
+        )
+      }
+      return h('label', { className: 'setfield' },
+        h('span', { className: 'setfield-main' },
+          h('span', { className: 'setfield-label' }, field.label),
+          field.hint ? h('span', { className: 'setfield-hint' }, field.hint) : null,
+        ),
+        h('input', {
+          type: 'number', min: field.min, max: field.max, step: field.step, value: value,
+          onChange: (e) => onPatch(Number(e.target.value)),
+        }),
+      )
+    }
+
+    /** 一张设置卡:标题 + 描述 + 显式的「启用」开关 + 字段网格。 */
+    function SettingsCard({ group, value, rulesCount, patch, tags }) {
+      const enabledField = group.fields.find((field) => field.k === 'enabled' && field.type === 'bool')
+      const fields = group.fields.filter((field) => field !== enabledField)
+      const enabled = enabledField ? Boolean(value[enabledField.k]) : true
+      return h('section', { className: 'setcard' },
+        h('div', { className: 'setcard-head' },
+          h('div', { className: 'setcard-heading' },
+            h('div', { className: 'setcard-title' },
+              group.title,
+              group.key === 'rules' && rulesCount !== null
+                ? h('span', { className: 'setcard-pill' }, `${rulesCount.total} 条规则 / ${rulesCount.scopes} 个作用域`)
+                : null,
+            ),
+            h('div', { className: 'setcard-desc' }, group.desc),
+          ),
+          enabledField
+            ? h('div', { className: 'setcard-enable' },
+                h('span', { className: 'setcard-enable-label' }, enabledField.label || '启用'),
+                h(Switch, {
+                  checked: enabled,
+                  label: enabledField.label,
+                  title: enabledField.hint || `${group.title}：${enabledField.label}`,
+                  onChange: (next) => patch(group.key, enabledField.k, next),
+                }),
+                h('span', { className: 'setcard-enable-state' }, enabled ? '已开启' : '已关闭'),
+              )
+            : null,
+        ),
+        fields.length > 0 || group.key === 'autoRecall'
+          ? h('div', { className: 'setcard-body' },
+              fields.map((field) => h(SettingField, {
+                key: field.k,
+                field,
+                value: value[field.k],
+                onPatch: (next) => patch(group.key, field.k, next),
+              })),
+              group.key === 'autoRecall'
+                ? h(AutoRecallTagsEditor, {
+                    tags,
+                    onSave: (next) => patch('autoRecall', 'tags', next),
+                  })
+                : null,
+            )
+          : null,
+        group.hint ? h('div', { className: 'setcard-note' }, group.hint) : null,
       )
     }
 
@@ -1705,49 +1825,40 @@ window.__ModuleLoader__.load({
       if (!settings) return h('div', { className: 'empty' }, error || '加载设置…')
 
       return h('div', { className: 'setp' },
-        h('div', { className: 'hint' }, '设置保存在记忆数据目录的 settings.json。'),
-        SETTINGS_GROUPS.map((group) => {
-          const value = settings[group.key] || {}
-          return h('div', { className: 'setrow', key: group.key },
-            h('span', { className: 'set-title' }, group.title),
-            group.fields.map((field) => field.type === 'bool'
-              ? h(Switch, {
-                  key: field.k,
-                  checked: Boolean(value[field.k]),
-                  title: field.hint || group.hint || field.label,
-                  onChange: (next) => patch(group.key, field.k, next),
-                })
-              : h('label', { className: 'set-field', key: field.k }, field.label, ' ',
-                  h('input', {
-                    type: 'number', min: field.min, max: field.max, step: field.step, value: value[field.k],
-                    onChange: (e) => patch(group.key, field.k, Number(e.target.value)),
-                  }))),
-            h('span', { className: 'set-desc' }, group.desc),
-            group.key === 'rules' && rulesCount !== null
-              ? h('span', { className: 'set-field' }, `${rulesCount.total} 条规则 / ${rulesCount.scopes} 个作用域（在「记录 → 新建」里选 kind=rule 添加）`)
-              : null,
-          )
-        }),
-        h('div', { className: 'setrow' },
-          h('span', { className: 'set-title' }, '召回标签'),
-          h('span', { className: 'set-desc' }, '工具调用命中标签，或工具失败时，用操作/失败描述检索记忆。'),
-          h(AutoRecallTagsEditor, {
-            tags: settings.autoRecall && Array.isArray(settings.autoRecall.tags) ? settings.autoRecall.tags : [],
-            onSave: (tags) => patch('autoRecall', 'tags', tags),
-          }),
+        h('div', { className: 'sethead' },
+          h('div', { className: 'sethead-text' },
+            h('div', { className: 'sethead-title' }, '注入设置'),
+            h('div', { className: 'sethead-sub' }, '修改后立即保存到 settings.json；开关旁显示当前状态，字段下方是说明。'),
+          ),
+          notice ? h('span', { className: 'sethead-saved' }, notice) : null,
         ),
-        h('div', { className: 'setrow data' },
-          h('span', { className: 'set-title' }, '数据'),
-          h('span', { className: 'set-desc' }, '导出文本（不含向量），导入按当前模型重新嵌入并按内容去重。'),
-          h('div', { className: 'row' },
-            h('button', { onClick: exportAll }, '导出全部'),
-            h('label', { className: 'set-field' }, '导入文件',
-              h('input', { type: 'file', accept: '.json,application/json', onChange: importFile })),
-            dataNotice ? h('span', { className: 'muted' }, dataNotice) : null,
+        h('div', { className: 'setcards' },
+          SETTINGS_GROUPS.map((group) => h(SettingsCard, {
+            key: group.key,
+            group,
+            value: settings[group.key] || {},
+            rulesCount,
+            patch,
+            tags: settings.autoRecall && Array.isArray(settings.autoRecall.tags) ? settings.autoRecall.tags : [],
+          })),
+        ),
+        h('section', { className: 'setcard datacard' },
+          h('div', { className: 'setcard-head' },
+            h('div', { className: 'setcard-heading' },
+              h('div', { className: 'setcard-title' }, '数据'),
+              h('div', { className: 'setcard-desc' }, '导出文本不含向量；导入按当前模型重新嵌入，并按「作用域 + 内容」去重。'),
+            ),
+          ),
+          h('div', { className: 'setcard-body data-body' },
+            h('div', { className: 'row' },
+              h('button', { onClick: exportAll }, '导出全部'),
+              h('label', { className: 'set-field' }, '导入文件',
+                h('input', { type: 'file', accept: '.json,application/json', onChange: importFile })),
+              dataNotice ? h('span', { className: 'muted' }, dataNotice) : null,
+            ),
           ),
         ),
         error ? h('div', { className: 'err' }, error) : null,
-        notice ? h('div', { className: 'muted' }, notice) : null,
       )
     }
 
@@ -2412,6 +2523,7 @@ window.__ModuleLoader__.load({
       RecordCard: RecordCard,
       MemoryPanel: MemoryPanel,
       MemoryTreeTab: MemoryTreeTab,
+      SettingsTab: SettingsTab,
       buildMemoryTree: buildMemoryTree,
       KIND_META: KIND_META,
       CSS: CSS,
