@@ -1,4 +1,4 @@
-/**
+﻿/**
  * dsh-memory — 客户端半边(设置页「记忆」区块)。
  *
  * 合并后本 bundle 与 provider / 工具 / 注入同属一个 npm 包
@@ -684,7 +684,7 @@ window.__ModuleLoader__.load({
           { k: 'enabled', label: '启用', type: 'bool' },
           { k: 'maxItems', label: '最多条数', type: 'num', min: 1, max: 40, step: 1 },
           { k: 'tokenBudget', label: 'token 预算', type: 'num', min: 50, max: 4000, step: 50 },
-          { k: 'delta', label: '变更提醒', type: 'bool', hint: '旧会话在下一轮第一步补一条「新增/变更的规则」，同一条只提醒一次' },
+          { k: 'delta', label: '变更提醒', type: 'bool', hint: '旧会话在下一轮第一步补一条新增/编辑过的规则；没变化的不重复' },
         ],
       },
       {

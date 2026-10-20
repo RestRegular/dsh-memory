@@ -11,11 +11,10 @@ import {
   renderRulesDeltaBlock,
   ruleLine,
   seenRuleLines,
-  unseenRules,
   type HistoryMessageView,
 } from '../src/rules.ts'
+import { RulesDeltaInjector, derivedHistoryOf } from '../src/rules-delta.ts'
 import { defaultInjectSettings, type RulesSettings } from '../../memory-local/src/inject-settings.ts'
-import { derivedHistoryOf, ruleDeltaText } from '../src/rules-delta.ts'
 
 const rulesCfg: RulesSettings = defaultInjectSettings.rules
 
@@ -47,6 +46,8 @@ const userMessage = (text: string, kind = 'user'): HistoryMessageView => ({
 function promptWith(rules: MemoryRecord[], extra = '后续段'): string {
   return `${RULES_HEADER}\n${rules.map(ruleLine).join('\n')}\n\n${extra}`
 }
+
+// ---------------------------------------------------------------- 纯函数
 
 test('extractSection 取到段尾就停,没有这一段返回 undefined', () => {
   const text = `前置段\n\n${RULES_HEADER}\n- 规则甲\n- 规则乙\n\n后续段`
@@ -83,23 +84,6 @@ test('seenRuleLines 只认 memory 来源的增量消息', () => {
   assert.equal(seenRuleLines(history).has(ruleLine(added)), false)
 })
 
-test('unseenRules + renderRulesDeltaBlock 只提醒这个会话没见过的规则', () => {
-  const old = rec('旧规则', { id: 'old', importance: 0.9 })
-  const added = rec('新规则', { id: 'new', importance: 0.4 })
-  const history = [systemMessage(promptWith([old]))]
-  const added2 = unseenRules([old, added], seenRuleLines(history))
-  assert.deepEqual(added2.map((r) => r.id), ['new'])
-
-  const block = renderRulesDeltaBlock(added2, rulesCfg)!
-  assert.ok(block.startsWith(RULES_DELTA_HEADER))
-  assert.ok(block.includes('新规则'))
-  assert.ok(!block.includes('旧规则'))
-
-  // 增量块本身也算"看见过" —— 下一轮不再重复
-  const nextSeen = seenRuleLines([...history, userMessage(block, 'memory')])
-  assert.deepEqual(unseenRules([old, added], nextSeen).map((r) => r.id), [])
-})
-
 test('常驻段与增量块用同一种行格式,截断也一致', () => {
   const long = rec(`${'很长'.repeat(200)}`)
   const block = renderRulesBlock([long], { ...rulesCfg, tokenBudget: 4000 })!
@@ -132,10 +116,11 @@ test('messageText 只拼 text 块', () => {
   assert.equal(messageText(msg), '甲\n乙')
 })
 
-// ---------------------------------------------------------------- 宿主胶水
+// ---------------------------------------------------------------- 注入器
 
-const agentWith = (history: HistoryMessageView[] | undefined): unknown =>
-  history === undefined ? {} : { session: { deriveMessages: () => history } }
+let sessionSeq = 0
+const agentWith = (history: HistoryMessageView[] | undefined, id = `s${++sessionSeq}`): unknown =>
+  history === undefined ? {} : { session: { id, deriveMessages: () => history } }
 
 const memoryWith = (records: MemoryRecord[], scopes: string[] = ['global']) => ({
   resolveReadScopes: () => scopes,
@@ -143,49 +128,95 @@ const memoryWith = (records: MemoryRecord[], scopes: string[] = ['global']) => (
     records.filter((r) => input.kind === undefined || r.kind === input.kind),
 })
 
-test('ruleDeltaText:旧会话只补系统提示里还没有的规则', () => {
+test('新会话(还没有系统提示)不补,系统提示会带上全部规则', () => {
+  const injector = new RulesDeltaInjector()
+  assert.equal(injector.maybeInject(agentWith([]), memoryWith([rec('新规则')]), rulesCfg), undefined)
+})
+
+test('新增规则补一次,下一轮没变就不再补', () => {
+  const injector = new RulesDeltaInjector()
   const old = rec('旧规则', { id: 'old' })
   const added = rec('新规则', { id: 'new' })
-  const history = [systemMessage(promptWith([old])), userMessage('继续')]
-  const delta = ruleDeltaText(agentWith(history), memoryWith([old, added]), rulesCfg)!
+  const id = 'add-session'
+  const delta = injector.maybeInject(agentWith([systemMessage(promptWith([old]))], id), memoryWith([old, added]), rulesCfg)!
   assert.ok(delta.includes('新规则'))
   assert.ok(!delta.includes('旧规则'))
+  // 宿主把系统提示刷新成新的之后,同一批规则不再提醒
+  const after = [systemMessage(promptWith([old, added]))]
+  assert.equal(injector.maybeInject(agentWith(after, id), memoryWith([old, added]), rulesCfg), undefined)
 })
 
-test('ruleDeltaText:新会话(还没有系统提示)不补,系统提示会带上全部规则', () => {
-  const added = rec('新规则')
-  assert.equal(ruleDeltaText(agentWith([]), memoryWith([added]), rulesCfg), undefined)
+test('编辑规则:即使系统提示已经刷新成新文本,也要补一次', () => {
+  const injector = new RulesDeltaInjector()
+  const agentId = 'edit-session'
+  const old = rec('旧文本', { id: 'r1' })
+  // 第一轮:快照里是旧文本
+  assert.equal(injector.maybeInject(agentWith([systemMessage(promptWith([old]))], agentId), memoryWith([old]), rulesCfg), undefined)
+  // 用户在会话运行中改了规则 → 系统提示在同一步里刷新成新文本
+  const edited = rec('新文本', { id: 'r1' })
+  const delta = injector.maybeInject(
+    agentWith([systemMessage(promptWith([edited]))], agentId),
+    memoryWith([edited]),
+    rulesCfg,
+  )!
+  assert.ok(delta.includes('新文本'))
+  assert.ok(!delta.includes('旧文本'))
+  // 下一轮已经是新文本,不再重复
+  assert.equal(
+    injector.maybeInject(agentWith([systemMessage(promptWith([edited]))], agentId), memoryWith([edited]), rulesCfg),
+    undefined,
+  )
 })
 
-test('ruleDeltaText:同一批规则补过一次就不重复', () => {
+test('编辑规则:空闲时改(系统提示还是旧文本)同样补一次', () => {
+  const injector = new RulesDeltaInjector()
+  const old = rec('旧文本', { id: 'r1' })
+  const edited = rec('新文本', { id: 'r1' })
+  const delta = injector.maybeInject(agentWith([systemMessage(promptWith([old]))]), memoryWith([edited]), rulesCfg)!
+  assert.ok(delta.includes('新文本'))
+})
+
+test('会话运行中新加的规则(系统提示已经带上)不重复提醒', () => {
+  const injector = new RulesDeltaInjector()
+  const id = 'midturn-session'
   const old = rec('旧规则', { id: 'old' })
+  injector.maybeInject(agentWith([systemMessage(promptWith([old]))], id), memoryWith([old]), rulesCfg)
+  // 规则是 agent 自己在当前这一步里加的 → 系统提示同一步已刷新,模型已经看见
   const added = rec('新规则', { id: 'new' })
-  const first = ruleDeltaText(agentWith([systemMessage(promptWith([old]))]), memoryWith([old, added]), rulesCfg)!
-  const history = [systemMessage(promptWith([old])), userMessage(first, 'memory')]
-  assert.equal(ruleDeltaText(agentWith(history), memoryWith([old, added]), rulesCfg), undefined)
+  assert.equal(
+    injector.maybeInject(agentWith([systemMessage(promptWith([old, added]))], id), memoryWith([old, added]), rulesCfg),
+    undefined,
+  )
 })
 
-test('ruleDeltaText:规则已经进了系统提示之后不再提醒', () => {
-  const added = rec('新规则')
-  const history = [systemMessage(promptWith([added]))]
-  assert.equal(ruleDeltaText(agentWith(history), memoryWith([added]), rulesCfg), undefined)
+test('宿主重启后不会整批重提醒,只补历史里没有的', () => {
+  const injector = new RulesDeltaInjector()
+  const a = rec('规则甲', { id: 'a' })
+  const b = rec('规则乙', { id: 'b' })
+  const c = rec('规则丙', { id: 'c' })
+  const history = [systemMessage(promptWith([a, b]))]
+  const delta = injector.maybeInject(agentWith(history), memoryWith([a, b, c]), rulesCfg)!
+  assert.ok(delta.includes('规则丙'))
+  assert.ok(!delta.includes('规则甲'))
+  assert.ok(!delta.includes('规则乙'))
 })
 
-test('ruleDeltaText:拿不到派生历史 / 会话 / listSync 时静默跳过', () => {
+test('拿不到派生历史 / 会话 / listSync 时静默跳过', () => {
+  const injector = new RulesDeltaInjector()
   const added = rec('新规则')
   assert.equal(derivedHistoryOf({}), undefined)
   assert.equal(derivedHistoryOf({ session: { deriveMessages: () => 'nope' } }), undefined)
   assert.equal(derivedHistoryOf({ session: { deriveMessages: () => { throw new Error('boom') } } }), undefined)
-  assert.equal(ruleDeltaText({}, memoryWith([added]), rulesCfg), undefined)
-  assert.equal(ruleDeltaText(agentWith([systemMessage(promptWith([]))]), {}, rulesCfg), undefined)
+  assert.equal(injector.maybeInject({}, memoryWith([added]), rulesCfg), undefined)
+  assert.equal(injector.maybeInject(agentWith([systemMessage(promptWith([]))]), {}, rulesCfg), undefined)
   const throwing = {
     resolveReadScopes: () => { throw new Error('boom') },
     listSync: () => { throw new Error('boom') },
   }
-  assert.equal(ruleDeltaText(agentWith([systemMessage(promptWith([]))]), throwing, rulesCfg), undefined)
+  assert.equal(injector.maybeInject(agentWith([systemMessage(promptWith([]))]), throwing, rulesCfg), undefined)
 })
 
-test('ruleDeltaText:读取范围用 provider 的解析结果', () => {
+test('读取范围用 provider 的解析结果', () => {
   const global = rec('全局规则', { id: 'g' })
   const project = rec('项目规则', { id: 'p' })
   const history = [systemMessage(promptWith([]))]
@@ -197,7 +228,7 @@ test('ruleDeltaText:读取范围用 provider 的解析结果', () => {
       return [global, project]
     },
   }
-  const delta = ruleDeltaText(agentWith(history), memory, rulesCfg)!
+  const delta = new RulesDeltaInjector().maybeInject(agentWith(history), memory, rulesCfg)!
   assert.deepEqual(asked, ['project:x', 'global'])
   assert.ok(delta.includes('项目规则'))
   assert.ok(delta.includes('全局规则'))

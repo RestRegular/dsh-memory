@@ -5,11 +5,11 @@
  * 注意力;系统提示是每步都会看见的位置,且文本稳定时可以跟着前缀缓存。
  * 只放"不可机械校验"的规则 —— 能写成检查的规则应该进钩子(代码强制)。
  *
- * 增量提醒(0.9.0):系统提示段每步都会按内存快照重渲染,但"规则是别的会话里
- * 新加的"这件事只改文本、不产生任何对话消息;模型在旧会话里继续聊时未必会
+ * 增量提醒(0.9.0 起):系统提示段每步都会按内存快照重渲染,但"规则是别的会话里
+ * 新加/改过的"这件事只改文本、不产生任何对话消息;模型在旧会话里继续聊时未必会
  * 重新读一遍系统提示,而且规则段有 token 预算,新规则可能被旧规则挤出常驻段。
- * 所以 apply.ts 在每轮第一步把「这个会话还没见过的规则行」补成一条消息。
- * 这里只放纯函数:渲染、从系统提示/历史消息里抽取规则行、算差集。
+ * 所以 apply.ts 在每轮第一步把「新加/编辑过的规则」补成一条消息;这里只放纯函数:
+ * 渲染、从系统提示/历史消息里抽取规则行、判断哪些行已经出现过。
  */
 import type { MemoryRecord } from 'dsh-memory'
 import { estimateTokens } from '../../memory-local/src/rerank.ts'
@@ -128,9 +128,4 @@ export function seenRuleLines(history: readonly HistoryMessageView[]): Set<strin
     for (const line of sectionLines(extractSection(messageText(message), RULES_DELTA_HEADER))) seen.add(line)
   }
   return seen
-}
-
-/** 还没在这个会话里出现过的规则(按常驻段同一套行格式比对)。 */
-export function unseenRules(records: readonly MemoryRecord[], seen: ReadonlySet<string>): MemoryRecord[] {
-  return records.filter((record) => !seen.has(ruleLine(record)))
 }

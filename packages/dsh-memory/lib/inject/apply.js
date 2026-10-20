@@ -34,7 +34,7 @@ import {
 } from './inject.js'
 import { renderDigestBlock } from './digest.js'
 import { renderRulesBlock } from './rules.js'
-import { ruleDeltaText } from './rules-delta.js'
+import { RulesDeltaInjector } from './rules-delta.js'
 import { POLICY_TEXT } from './policy.js'
 import { normalizeInjectSettings,                     } from '../provider/inject-settings.js'
 
@@ -114,6 +114,9 @@ export function apply(ctx         , config                     = {}) {
     })
   })
 
+  // 规则增量:一个激活一个实例,跨轮记住每条规则上一轮的样子(编辑后才补提醒)。
+  const rulesDelta = new RulesDeltaInjector()
+
   // 系统提示:记忆使用策略(常驻) + 硬性规则(kind='rule')。
   // 两者都用函数形式,面板开关/规则改动下一步就生效;文本稳定时可随前缀缓存。
   ctx.inject(['systemPrompt'], (scoped         ) => {
@@ -182,7 +185,7 @@ export function apply(ctx         , config                     = {}) {
     // `delta !== false` 而不是 `=== true`:老 provider 的 settings 快照没有这个
     // 字段时要按"开"处理,否则升级当天等于静默关掉。
     if (settings && step === 1 && settings.rules.enabled && settings.rules.delta !== false) {
-      const delta = ruleDeltaText(agent, memory, settings.rules)
+      const delta = rulesDelta.maybeInject(agent, memory, settings.rules)
       if (delta) parts.push(delta)
     }
     if (pendingNudge && step === 1) {
