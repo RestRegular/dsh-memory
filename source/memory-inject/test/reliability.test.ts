@@ -243,3 +243,21 @@ test('自动召回链路:标签命中后补正文,正文已注入则去重', asy
   const other = await injector.maybeInjectDetailed({ ...input, sessionId: 's2' }, input, { sessionId: 's2', query: 'release' })
   assert.ok(other?.text, '另一个会话不能沿用旧会话的去重状态')
 })
+
+test('标签触发的自动召回只接受带该标签的记忆', async () => {
+  const tagged = hit(rec('发布前检查凭据', { id: 'tagged', tags: ['release', 'credentials'], updatedAt: 1 }))
+  const unrelated = hit(rec('dsh-memory digest 预算', { id: 'unrelated', tags: ['dsh-memory', 'digest'], updatedAt: 1 }))
+  const injector = new MemoryInjector(async () => [unrelated, tagged], { ...defaultInjectConfig, tokenBudget: 500 }, {})
+  const input = { messages: [msg('user', '准备发布')] }
+  const result = await injector.maybeInjectDetailed(input, input, {
+    query: 'release', tag: 'release', requireTag: true, sessionId: 's1',
+  })
+  assert.deepEqual(result?.ids, ['tagged'])
+
+  const noTag = new MemoryInjector(async () => [unrelated], { ...defaultInjectConfig, tokenBudget: 500 }, {})
+  const blocked = await noTag.maybeInjectDetailed(input, input, {
+    query: 'release', tag: 'release', requireTag: true, sessionId: 's2',
+  })
+  assert.equal(blocked?.text, undefined)
+  assert.equal(blocked?.candidates, 0)
+})

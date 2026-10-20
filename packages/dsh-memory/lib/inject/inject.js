@@ -8,6 +8,7 @@
                                                          
 import { estimateTokens } from '../provider/rerank.js'
 import { normalizeScopeInput } from '../provider/scope.js'
+import { textHasTag } from './signals.js'
 import { InjectionState } from './state.js'
 
                                
@@ -60,6 +61,20 @@ export function normalizeExtraScopes(raw                   , warn               
 }
 
 /**
+ * 自动召回的作用域:global + 当前会话 + 当前工作区。
+ *
+ * 普通每轮召回仍按用户配置使用 session + project + global(可额外加 extraScopes
+ * 或 fork 父会话);但行为信号触发的自动召回只认这三个标准范围,不把额外自定义
+ * 作用域 / 父会话一起搜进来。没有可用范围时返回 undefined,调用方跳过自动召回。
+ */
+export function autoRecallScopes(scopes                               )                       {
+  if (scopes === undefined) return undefined
+  const out = scopes.filter((scope) =>
+    scope === 'global' || scope.startsWith('session:') || scope.startsWith('project:'))
+  return out.length > 0 ? out : undefined
+}
+
+/**
  * 无显式 scope 时的召回范围:当前会话 + 当前项目 + global(provider 解析)
  * + inject.extraScopes + 父会话(fork 时,只读召回)。
  * 任何一步拿不到都只降级,绝不抛(注入路径抛错会打断整个 agent 循环)。
@@ -95,6 +110,8 @@ export function resolveInjectScopes(
                                    
               
                                                          
+                                                   
+                            
  
 
                               
@@ -115,14 +132,21 @@ export function resolveInjectScopes(
  
 
 /**
- * Extract the retrieval query: the text of the LAST user message. Synthetic
- * context injections (file notices etc.) are user-role too, so scanning from
- * the end finds the freshest human-visible input; empty text → no injection.
+ * Extract the retrieval query: the text of the LAST **human** user message.
+ *
+ * Synthetic context messages are also role=user (memory recall, runtime/time
+ * context, skill catalog, file notices...). Taking the last user-role message
+ * blindly makes the next recall query the previous recall block itself — a
+ * cross-project self-recall loop (observed in a dsh-pocket session pulling a
+ * dsh-memory global record). Skip every known synthetic source; messages with
+ * no source (unit-test scaffolds / older hosts) are treated as human.
  */
 export function pickQueryText(messages                             )         {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i] 
     if (m.role !== 'user') continue
+    const kind = m.source?.kind
+    if (kind !== undefined && kind !== '' && kind !== 'user') continue
     const text = (m.content ?? [])
       .filter((b) => b.type === 'text' && typeof b.text === 'string')
       .map((b) => b.text )
@@ -239,6 +263,9 @@ export function recallText(text        )         {
                                   
                                       
                  
+                                             
+              
+                      
  
 
                                
@@ -316,8 +343,17 @@ export class MemoryInjector {
     // 成功检索后记住查询(即使没有新正文):同一 query 的后续 step 不再重复全量检索。
     this.state.setLastQuery(sessionId, query)
 
+    // 标签触发的自动召回:只接受真正带该标签(或同义词)的记录。
+    // 否则一个泛标签(如 git)会把向量上勉强相关、但完全没有该标签的全局记忆
+    // 带进当前项目 —— 实测 dsh-pocket 会话因此注入过 dsh-memory 的 digest 记忆。
+    const requiredTag = options.requireTag === true && typeof options.tag === 'string' && options.tag.trim() !== ''
+      ? options.tag.trim()
+      : ''
+    const taggedHits = requiredTag === ''
+      ? hits
+      : hits.filter((hit) => (hit.record.tags ?? []).some((tag) => textHasTag(String(tag), requiredTag)))
     const seenIds = options.excludeIds
-    const candidates = seenIds === undefined ? hits : hits.filter((hit) => !seenIds.has(hit.record.id))
+    const candidates = seenIds === undefined ? taggedHits : taggedHits.filter((hit) => !seenIds.has(hit.record.id))
     const { fresh, deduplicated, updated } = this.state.filterNewContent(
       sessionId,
       candidates.map((hit) => hit.record),

@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  autoRecallScopes,
   pickQueryText,
   renderRecallBlock,
   hasRecallMessage,
@@ -111,4 +112,21 @@ test('hasRecallMessage catches a duplicate recall block from a second activation
   assert.equal(hasRecallMessage([sourced('user', '别的块', 'memory')], text), false)
   assert.equal(hasRecallMessage([sourced('assistant', text, 'memory')], text), false)
   assert.equal(hasRecallMessage([], text), false)
+})
+
+test('autoRecallScopes 只保留 global + 当前会话 + 当前工作区,排除自定义作用域', () => {
+  assert.deepEqual(
+    autoRecallScopes(['session:s1', 'project:D:/repo', 'global', 'handbook', 'team']),
+    ['session:s1', 'project:D:/repo', 'global'],
+  )
+  assert.equal(autoRecallScopes(['handbook']), undefined)
+  assert.equal(autoRecallScopes(undefined), undefined)
+})
+
+test('pickQueryText ignores synthetic memory/runtime user messages', () => {
+  const human = { role: 'user', content: [{ type: 'text', text: '真正的人类问题' }], source: { kind: 'user' } }
+  const memory = { role: 'user', content: [{ type: 'text', text: '以下是与你这次请求可能相关的记忆摘要：...' }], source: { kind: 'memory' } }
+  const time = { role: 'user', content: [{ type: 'text', text: 'Time sampled while preparing...' }], source: { kind: 'time-context' } }
+  assert.equal(pickQueryText([human, memory, time]), '真正的人类问题')
+  assert.equal(pickQueryText([memory, time]), '')
 })

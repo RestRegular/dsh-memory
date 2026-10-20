@@ -28,6 +28,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import {
   MemoryDigester,
   MemoryInjector,
+  autoRecallScopes,
   hasRecallMessage,
   normalizeExtraScopes,
   pickQueryText,
@@ -116,6 +117,7 @@ export function apply(ctx         , config                     = {}) {
   const signals = new BehaviorSignalStore()
   const callMeta = new Map                                                ()
   const sessionScopes = new Map                  ()
+  const sessionAutoScopes = new Map                  ()
   const tagCache = new Map                                        ()
   let attachedMemory          = null
 
@@ -162,6 +164,24 @@ export function apply(ctx         , config                     = {}) {
       }
     } catch { /* 拿不到就用空集合;下次 pre-step 会补 */ }
     return []
+  }
+
+  /** 自动召回专用范围:只保留 global + 当前会话 + 当前工作区。 */
+  const autoScopesForSession = (
+    sessionId        ,
+    memory                                 ,
+    session         ,
+    fallback                   ,
+  )                       => {
+    const known = sessionAutoScopes.get(sessionId)
+    if (known !== undefined) return known
+    let resolved                      
+    try {
+      resolved = memory?.resolveReadScopes?.({ session })                        
+    } catch { resolved = undefined }
+    const scopes = autoRecallScopes(resolved ?? fallback)
+    if (scopes !== undefined) sessionAutoScopes.set(sessionId, scopes)
+    return scopes
   }
 
   /**
@@ -272,6 +292,7 @@ export function apply(ctx         , config                     = {}) {
           signals.clear(sessionId)
           digester.reset(sessionId)
           sessionScopes.delete(sessionId)
+          sessionAutoScopes.delete(sessionId)
           for (const key of tagCache.keys()) if (key.startsWith(`${sessionId}|`)) tagCache.delete(key)
           callMeta.clear()
           return
@@ -279,7 +300,9 @@ export function apply(ctx         , config                     = {}) {
         const settings = enabled ? settingsOf() : undefined
         const auto = settings?.autoRecall
         if (!auto?.enabled) return
-        const scopes = scopesForSession(sessionId, memory                       , session)
+        const allScopes = scopesForSession(sessionId, memory                       , session)
+        const scopes = autoScopesForSession(sessionId, memory, session, allScopes)
+        if (scopes === undefined) return
         const tags = triggerTags(memory                                   , sessionId, scopes, auto)
 
         if (type === 'tool/call') {
@@ -391,8 +414,14 @@ export function apply(ctx         , config                     = {}) {
     const sessionId = sessionIdOf(agent)
     const scopes = readScopesFor(memory, agent)
     if (sessionId !== undefined && scopes !== undefined) sessionScopes.set(sessionId, [...scopes])
+    let autoScopes                      
+    try { autoScopes = autoRecallScopes(memory.resolveReadScopes?.(agent)                        ) } catch { autoScopes = undefined }
+    if (autoScopes === undefined) autoScopes = autoRecallScopes(scopes)
+    if (sessionId !== undefined && autoScopes !== undefined) sessionAutoScopes.set(sessionId, [...autoScopes])
     const exclude = excludedIds(memory, scopes)
+    const excludeAuto = excludedIds(memory, autoScopes)
     const signal = sessionId === undefined ? undefined : signals.take(sessionId)
+    const usableSignal = autoScopes === undefined ? undefined : signal
     const userQuery = pickQueryText(input.messages         )
 
     // 摘要(每个会话一次)、召回(每轮有新内容时)、轮末提醒(下一轮首步)合成
@@ -470,24 +499,27 @@ export function apply(ctx         , config                     = {}) {
 
       // 行为信号优先:发布/推送/失败事件触发定向查询;没有信号才走普通用户消息召回。
       // 同一轮普通 query 已处理过时跳过重复检索(去重状态仍会兜底)。
-      const skipNormalRecall = signal === undefined && step > 1 && sessionId !== undefined
+      const skipNormalRecall = usableSignal === undefined && step > 1 && sessionId !== undefined
         && userQuery !== '' && injectionState.lastQueryOf(sessionId) === userQuery
       if (!skipNormalRecall) {
+        const recallScopes = usableSignal === undefined ? scopes : autoScopes
+        const recallExclude = usableSignal === undefined ? exclude : excludeAuto
         const recall = await injector.maybeInjectDetailed(
-          { messages: input.messages         , signal: input.signal, ...(scopes !== undefined ? { scopes } : {}), ...(sessionId !== undefined ? { sessionId } : {}) },
+          { messages: input.messages         , signal: input.signal, ...(recallScopes !== undefined ? { scopes: recallScopes } : {}), ...(sessionId !== undefined ? { sessionId } : {}) },
           { messages: decision.messages          },
           {
             ...(sessionId !== undefined ? { sessionId } : {}),
-            ...(signal !== undefined ? { query: signal.query, trigger: signal.reason, force: true } : { trigger: 'turn_start' }),
-            excludeIds: exclude,
+            ...(usableSignal !== undefined ? { query: usableSignal.query, trigger: usableSignal.reason, force: true } : { trigger: 'turn_start' }),
+            ...(usableSignal?.tag ? { tag: usableSignal.tag, requireTag: true } : {}),
+            excludeIds: recallExclude,
           },
         )
         if (recall?.text) parts.push(recall.text)
         if (recall) {
           recordAudit({
             ...(sessionId !== undefined ? { sessionId } : {}),
-            trigger: signal?.reason ?? 'turn_start',
-            phase: signal?.phase ?? detectPhase(userQuery),
+            trigger: usableSignal?.reason ?? 'turn_start',
+            phase: usableSignal?.phase ?? detectPhase(userQuery),
             ...(auditQuery(recall.query) !== undefined ? { query: auditQuery(recall.query) } : {}),
             candidates: recall.candidates,
             contentIds: recall.ids,
@@ -496,8 +528,8 @@ export function apply(ctx         , config                     = {}) {
             dedupSkipped: recall.dedupSkipped,
             budgets: { recall: auditBudget(settings.recall.tokenBudget, recall.tokens) },
             retrieval: recall.retrieval,
-            ...(signal !== undefined
-              ? { signal: { reason: signal.reason, ...(signal.errorClass ? { errorClass: signal.errorClass } : {}), ...(signal.tool ? { tool: signal.tool } : {}) } }
+            ...(usableSignal !== undefined
+              ? { signal: { reason: usableSignal.reason, ...(usableSignal.errorClass ? { errorClass: usableSignal.errorClass } : {}), ...(usableSignal.tool ? { tool: usableSignal.tool } : {}), ...(usableSignal.tag ? { tag: usableSignal.tag } : {}), ...(usableSignal.source ? { source: usableSignal.source } : {}) } }
               : {}),
           })
         }

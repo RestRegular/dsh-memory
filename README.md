@@ -129,7 +129,7 @@ memory_save({
 - **截断标签**:正文因 `topK` / 预算没注入时,附一条独立的「相关记忆索引」——每条只给 8 位 id、标签/主题、类型、作用域,以及 `memory_search` 检索指引;标签有 `digest.hintBudget` / `digest.hintMaxItems` 独立预算。标签也溢出时报告省略数量与原因。
 - **退役规则**:被 `supersedes` 指向的旧记录不再进入摘要、规则段和自动召回;`memory_search` / `memory_get` 仍可查历史。
 - **mandatory / pinned**:规则标签里写 `mandatory` / `pinned`(或 `必含` / `强制`)的条目排在规则段最前;超预算时输出明确警告,不静默丢弃。
-- **标签触发的行为召回(0.9.7)**:设置里的 `autoRecall.tags` 是**标签**,不是正则;默认还会并入记忆库里已有的标签(`useMemoryTags`)。匹配源包括 `tool/call` 的 name / description / 参数、`tool/result` 的失败描述、可见 `assistant/message` 文本、`todo/write` 任务清单、`command/run`、`goal/change`。命中标签后,在下一个 `agent/pre-step` 用标签 + 命中片段检索;工具失败则始终用该工具调用自己的 `description`(取不到才退回错误类别)。中英标签有最小同义词映射(如 `deploy` ↔ 部署、`database` ↔ 数据库)。
+- **标签触发的行为召回(0.9.7)**:设置里的 `autoRecall.tags` 是**标签**,不是正则;默认还会并入记忆库里已有的标签(`useMemoryTags`)。自动召回只检索 **global + 当前会话 + 当前工作区**,不含自定义作用域 / fork 父会话;普通每轮召回仍按原配置。匹配源包括 `tool/call` 的 name / description / 参数、`tool/result` 的失败描述、可见 `assistant/message` 文本、`todo/write` 任务清单、`command/run`、`goal/change`。命中标签后,在下一个 `agent/pre-step` 用标签 + 命中片段检索;工具失败则始终用该工具调用自己的 `description`(取不到才退回错误类别)。中英标签有最小同义词映射(如 `deploy` ↔ 部署、`database` ↔ 数据库)。
 - **去重**:已注入正文按 **sessionId + 记忆 id/版本** 跳过;只给过标签的会补正文;内容更新会重新评估;compaction 后重置摘要与去重状态。
 - **标签可检索**:`search` 的词法通道把记录标签也并入检索文本,所以中文正文 + 英文标签也能被标签查询命中。
 - **审计**:每次摘要/召回/规则评估写入内存审计环,`GET /memory/api/audit?session=<id>` 可查触发原因、阶段、候选、正文、标签、去重、省略原因与各通道预算;不记录凭据。
@@ -349,6 +349,12 @@ tools/build-single-package.mjs   构建(产物契约检查 + 可选加载验证)
 
 ## 版本
 
+- **0.9.9** —— 收敛自动召回作用域与相关性:
+  - 自动召回只检索 **global + 当前会话 + 当前工作区** 三个标准作用域。
+  - 不再把 `inject.extraScopes` 的自定义作用域或 fork 父会话带进自动召回;普通每轮召回仍按原配置。
+  - 标签触发的召回要求命中记录真的带该标签(或同义词);一个泛标签不会再靠向量相似度把完全无关的全局记忆带进来。
+  - `pickQueryText` 只取**人类 user 消息**,跳过 memory / runtime / time / skill 等合成上下文,避免把上一块召回摘要当成下一轮查询。
+  - `autoRecallScopes()`、合成消息过滤、标签过滤都有单元测试。
 - **0.9.8** —— 设置页重写为卡片式:
   - 每个开关都有可见 label、说明和「已开启 / 已关闭」状态,不再只靠 tooltip;数值项也有独立 label 与提示。
   - 分组改成卡片:每轮召回 / 印象形态 / 会话摘要 / 记忆使用策略 / 硬性规则 / 自动召回 / 轮末提醒 / 侧栏入口;规则卡显示当前规则条数与作用域数。
