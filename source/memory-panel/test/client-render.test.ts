@@ -64,6 +64,13 @@ function makeReact() {
       return [slots[i], set] as const
     },
     useEffect(fn: () => unknown) { effects.push(fn) },
+    useRef(initial: unknown) {
+      const slots = store.get(key) ?? []
+      const i = cursor++
+      if (!(i in slots)) slots[i] = { current: initial }
+      store.set(key, slots)
+      return slots[i] as { current: unknown }
+    },
   }
 
   return {
@@ -290,7 +297,7 @@ async function mountPanel(
   hooks.runEffects()
   for (let i = 0; i < 4; i++) await Promise.resolve()
   if (tab !== 'data') {
-    const label = ({ records: '服务', data: '记录', settings: '设置' } as Record<string, string>)[tab] ?? tab
+    const label = ({ records: '服务', data: '记录', tree: '记忆树', settings: '设置' } as Record<string, string>)[tab] ?? tab
     const button = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === label)
     assert.ok(button, `找不到「${label}」标签`)
     ;(button!.props!.onClick as () => void)()
@@ -941,4 +948,109 @@ test('侧栏图标是单色线稿:16 网格、1.3 描边、currentColor,不带�
     assert.equal(String(shape.attrs.stroke), 'currentColor')
     assert.equal(String(shape.attrs['stroke-width']), '1.3')
   }
+})
+
+test('记忆树布局:按作用域 / 类型分层,并连出修正与被修正的关系', async () => {
+  const { exports } = await loadBundle()
+  const build = (exports.__test as {
+    buildMemoryTree: (records: unknown[], options?: Record<string, unknown>) => {
+      nodes: Array<Record<string, unknown>>
+      edges: Array<Record<string, unknown>>
+      corrections: Array<Record<string, unknown>>
+      counts: Record<string, number>
+      width: number
+      height: number
+    }
+  }).buildMemoryTree
+
+  const records = [
+    makeRecord({ id: 'old', scope: 'project:/w', kind: 'fact', content: '旧事实', updatedAt: 1, supersedes: null, supersededBy: 'new' }),
+    makeRecord({ id: 'new', scope: 'project:/w', kind: 'fact', content: '新事实', updatedAt: 2, supersedes: 'old', supersededBy: null }),
+    makeRecord({ id: 'rule', scope: 'global', kind: 'rule', content: '硬性规则', updatedAt: 3, supersedes: null, supersededBy: null }),
+  ]
+
+  const layout = build(records, { labels: { 'project:/w': '演示项目', global: '全局' } })
+  assert.equal(layout.counts.records, 3)
+  assert.equal(layout.counts.scopes, 2)
+  assert.equal(layout.counts.kinds, 2)
+  assert.equal(layout.corrections.length, 1, '新记录 supersedes 旧记录 → 一条修正连线')
+
+  const scopes = layout.nodes.filter((n) => n.type === 'scope')
+  assert.deepEqual(scopes.map((n) => n.scope), ['global', 'project:/w'], 'global 排在最前')
+  assert.equal(scopes.find((n) => n.scope === 'global')?.label, '全局')
+  assert.equal(scopes.find((n) => n.scope === 'project:/w')?.label, '演示项目')
+
+  const kinds = layout.nodes.filter((n) => n.type === 'kind')
+  assert.deepEqual(
+    kinds.filter((n) => n.scope === 'project:/w').map((n) => n.kind),
+    ['fact'],
+    '同一作用域下按固定类型顺序分组',
+  )
+
+  const correction = layout.corrections[0]!
+  assert.equal(correction.fromId, 'new')
+  assert.equal(correction.toId, 'old')
+  assert.equal(layout.nodes.find((n) => n.key === correction.fromKey)?.type, 'record')
+  assert.equal(layout.nodes.find((n) => n.key === correction.toKey)?.type, 'record')
+
+  // 父节点在自己子树高度里居中:作用域节点的中心应落在它所含记录块的中心
+  const scope = scopes.find((n) => n.scope === 'project:/w')!
+  const recordNodes = layout.nodes.filter((n) => n.type === 'record' && n.scope === 'project:/w')
+  const minY = Math.min(...recordNodes.map((n) => Number(n.y)))
+  const maxY = Math.max(...recordNodes.map((n) => Number(n.y) + Number(n.h)))
+  assert.ok(Math.abs((Number(scope.y) + Number(scope.h) / 2) - (minY + maxY) / 2) < 0.01, '作用域节点垂直居中')
+  assert.ok(layout.width > 0 && layout.height > 0)
+})
+
+test('记忆树布局:折叠作用域 / 按类型筛选都会重排,并丢掉不可见的修正边', async () => {
+  const { exports } = await loadBundle()
+  const build = (exports.__test as {
+    buildMemoryTree: (records: unknown[], options?: Record<string, unknown>) => {
+      nodes: Array<Record<string, unknown>>
+      corrections: unknown[]
+      counts: Record<string, number>
+    }
+  }).buildMemoryTree
+
+  const records = [
+    makeRecord({ id: 'old', scope: 'project:/w', kind: 'fact', content: '旧事实', updatedAt: 1, supersedes: null, supersededBy: 'new' }),
+    makeRecord({ id: 'new', scope: 'project:/w', kind: 'fact', content: '新事实', updatedAt: 2, supersedes: 'old', supersededBy: null }),
+    makeRecord({ id: 'rule', scope: 'global', kind: 'rule', content: '硬性规则', updatedAt: 3 }),
+  ]
+
+  const collapsed = build(records, { collapsed: new Set(['scope:project:/w']) })
+  assert.equal(collapsed.nodes.filter((n) => n.type === 'scope').length, 2)
+  assert.equal(collapsed.nodes.filter((n) => n.type === 'record').length, 1, '折叠的作用域下不渲染记录')
+  assert.equal(collapsed.corrections.length, 0, '被折叠的记录不能留下悬空修正边')
+
+  const onlyRule = build(records, { activeKinds: new Set(['rule']) })
+  assert.deepEqual(onlyRule.nodes.filter((n) => n.type === 'record').map((n) => n.rec?.id), ['rule'])
+  assert.equal(onlyRule.counts.scopes, 1)
+
+  // 修正边只有在**两端都可见**时才存在:只留 fact 时 old/new 都可见,只留 rule 时两端都不可见
+  const onlyFact = build(records, { activeKinds: new Set(['fact']) })
+  assert.equal(onlyFact.corrections.length, 1)
+})
+
+test('记忆树标签页:从面板能切过去,空数据也有统计、类型图例与空状态', async () => {
+  const { hooks } = await loadBundle()
+  hooks.resetAll()
+  const tree = await mountPanel(hooks, {
+    scopes: [{ scope: 'global', records: 0, pendingEmbeds: 0, label: '全局' }],
+    embedServer: null,
+  }, undefined, 'tree')
+
+  const text = textOf(tree())
+  assert.ok(text.includes('记忆树'), '标签栏里有「记忆树」')
+  assert.ok(text.includes('条记忆'), '统计卡显示记忆总数')
+  assert.ok(text.includes('个作用域'), '统计卡显示作用域数')
+  assert.ok(text.includes('种类型'), '统计卡显示类型数')
+  assert.ok(text.includes('处修正'), '统计卡显示修正关系数')
+  assert.ok(text.includes('类型'), '类型图例存在')
+  assert.ok(text.includes('还没有记忆'), '没有记录时给出空状态引导')
+
+  const classNames = collect(tree()).map((n) => String(n.props?.className ?? ''))
+  assert.ok(classNames.includes('tree-tab'), '渲染的是记忆树标签页')
+  assert.ok(classNames.includes('tree-wrap'), '树画布存在')
+  assert.ok(classNames.includes('tree-stats'), '统计区存在')
 })

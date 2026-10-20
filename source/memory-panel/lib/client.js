@@ -186,6 +186,115 @@ window.__ModuleLoader__.load({
       '.mem-page .memp .scroll{max-height:calc(100vh - 340px)}',
       '.mem-page-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}',
       '.mem-page-head h2{font-size:15px;font-weight:600;margin:0}',
+      // ===== 记忆树 =====
+      // 结构:统计 → 工具条/类型图例 → 画布(HTML 节点 + SVG 连线) → 右侧详情抽屉。
+      // 节点用 HTML 而不是 SVG <text>:内容换行、省略号、悬停过渡都由浏览器排版,
+      // SVG 只负责画连接线,缩放时整体 transform。
+      '.memp .tree-tab{display:flex;flex-direction:column;gap:12px}',
+      '.memp .tree-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}',
+      '.memp .tree-stats .stat{position:relative;overflow:hidden;padding:8px 12px 7px;border-radius:11px;background:linear-gradient(160deg,color-mix(in srgb,var(--dsw-alias-brand-primary) 8%,var(--dsw-alias-bg-layer-1)),var(--dsw-alias-bg-layer-1) 72%)}',
+      '.memp .tree-stats .stat::after{content:"";position:absolute;right:-14px;top:-20px;width:56px;height:56px;border-radius:50%;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 9%,transparent);pointer-events:none}',
+      '.memp .tree-stats .stat b{font-size:18px}',
+      '.memp .tree-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}',
+      '.memp .tree-toolbar input[type=text]{flex:1 1 190px;min-width:150px;max-width:300px}',
+      '.memp .tree-toolbar .spacer{flex:1}',
+      '.memp .tree-toolbar button{padding:5px 10px;font-size:12px}',
+      // 工具条里的类型胶囊沿用 kchip 的圆角与内边距,不被上面的通用 button 规则撑高。
+      '.memp .tree-toolbar .kchip{padding:1px 9px 1px 7px;line-height:1.8;border-radius:999px;font-size:11.5px}',
+      '.memp .tree-toolbar .linkbtn{padding:2px 4px;border:0;background:none}',
+      '.memp .kindbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0}',
+      '.memp .kindbar-label{font-size:11.5px;color:var(--dsw-alias-label-secondary);flex:none}',
+      '.memp .kchip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);border-radius:999px;padding:1px 9px 1px 7px;font-size:11.5px;line-height:1.8;cursor:pointer;transition:opacity .12s ease,border-color .12s ease,color .12s ease,background .12s ease}',
+      '.memp .kchip .tdot{width:7px;height:7px;border-radius:50%;background:var(--k);box-shadow:0 0 0 3px color-mix(in srgb,var(--k) 15%,transparent)}',
+      '.memp .kchip b{font-weight:600;color:var(--dsw-alias-label-primary)}',
+      '.memp .kchip.off{opacity:.42;background:transparent}',
+      '.memp .kchip.on{color:var(--dsw-alias-label-primary);border-color:color-mix(in srgb,#D9A441 45%,var(--dsw-alias-border-l1));background:color-mix(in srgb,#D9A441 8%,var(--dsw-alias-bg-layer-1))}',
+      '.memp .kchip:hover{border-color:var(--k);color:var(--dsw-alias-label-primary)}',
+      '.memp .kchip .corr-swatch{width:14px;border-top:1.5px dashed #D9A441}',
+      '.memp .tree-matchinfo{font-size:11px;color:var(--dsw-alias-label-secondary);flex:none}',
+      '.memp .tree-wrap{position:relative;height:min(56vh,560px);min-height:320px;border:1px solid var(--dsw-alias-border-l1);border-radius:14px;overflow:hidden;background:radial-gradient(circle at 16% 8%,color-mix(in srgb,var(--dsw-alias-brand-primary) 9%,transparent),transparent 44%),radial-gradient(circle at 1px 1px,color-mix(in srgb,var(--dsw-alias-label-secondary) 15%,transparent) 1px,transparent 0) 0 0/22px 22px,var(--dsw-alias-bg-layer-1)}',
+      '.mem-page .memp .tree-wrap{height:calc(100vh - 360px);min-height:420px}',
+      '.memp .tree-scroll{height:100%;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dsw-alias-label-secondary) 30%,transparent) transparent}',
+      '.memp .tree-scroll::-webkit-scrollbar{width:9px;height:9px}',
+      '.memp .tree-scroll::-webkit-scrollbar-track{background:transparent}',
+      '.memp .tree-scroll::-webkit-scrollbar-thumb{background:rgba(127,127,127,.28);background:color-mix(in srgb,var(--dsw-alias-label-secondary) 30%,transparent);border-radius:999px;border:2px solid transparent;background-clip:padding-box}',
+      '.memp .tree-scroll::-webkit-scrollbar-thumb:hover{background:rgba(127,127,127,.5);background:color-mix(in srgb,var(--dsw-alias-label-secondary) 55%,transparent);border:2px solid transparent;background-clip:padding-box}',
+      '.memp .tree-scroll::-webkit-scrollbar-corner{background:transparent}',
+      '.memp .tree-zoomspace{position:relative;margin:0 auto}',
+      '.memp .tree-canvas{position:relative;transform-origin:0 0;transition:transform .16s ease}',
+      '.memp .tree-edges{position:absolute;inset:0;overflow:visible;pointer-events:none}',
+      '.memp .edge{fill:none;stroke:color-mix(in srgb,var(--dsw-alias-label-secondary) 40%,transparent);stroke-width:1.2;transition:opacity .15s ease,stroke .15s ease,stroke-width .15s ease}',
+      '.memp .edge.active{stroke:var(--dsw-alias-brand-primary);stroke-width:1.8;opacity:.95}',
+      '.memp .tree-canvas.focused .edge:not(.active){opacity:.28}',
+      '.memp .corr-edge{fill:none;stroke:#D9A441;stroke-width:1.25;stroke-dasharray:4 3;opacity:.5;transition:opacity .15s ease,stroke-width .15s ease}',
+      '.memp .corr-edge.active{opacity:1;stroke-width:2;stroke-dasharray:none}',
+      '.memp .tree-canvas.focused .corr-edge:not(.active){opacity:.14}',
+      '.memp .corr-dot{fill:#D9A441;opacity:.6;transition:opacity .15s ease}',
+      '.memp .corr-dot.active{opacity:1}',
+      '.memp .tree-node{position:absolute;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1);border-radius:11px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);cursor:pointer;user-select:none;transition:border-color .14s ease,box-shadow .14s ease,opacity .14s ease,background .14s ease;animation:memNodeIn .2s ease both}',
+      '@keyframes memNodeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}',
+      '.memp .tree-node.root{display:flex;align-items:center;gap:7px;padding:0 10px;border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 55%,var(--dsw-alias-border-l1));background:linear-gradient(145deg,color-mix(in srgb,var(--dsw-alias-brand-primary) 16%,var(--dsw-alias-bg-layer-1)),var(--dsw-alias-bg-layer-1) 72%);box-shadow:0 6px 18px color-mix(in srgb,var(--dsw-alias-brand-primary) 13%,transparent);cursor:default}',
+      '.memp .tree-node.root .root-icon{display:inline-flex;color:var(--dsw-alias-brand-primary);flex:none}',
+      '.memp .tree-node.root b{display:block;font-size:13px;line-height:1.2}',
+      '.memp .tree-node.root span{display:block;font-size:10.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap}',
+      '.memp .tree-node.scope{display:flex;align-items:center;gap:7px;padding:0 10px;background:linear-gradient(120deg,var(--dsw-alias-bg-layer-1),color-mix(in srgb,var(--dsw-alias-brand-primary) 5%,var(--dsw-alias-bg-layer-1)))}',
+      '.memp .tree-node.scope:hover,.memp .tree-node.kind:hover{border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 60%,var(--dsw-alias-border-l1))}',
+      '.memp .tn-ico{flex:none;width:20px;height:20px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:600;background:color-mix(in srgb,var(--dsw-alias-brand-primary) 14%,var(--dsw-alias-bg-layer-2));color:var(--dsw-alias-brand-primary)}',
+      '.memp .tn-scope{flex:1;min-width:0;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      '.memp .tn-count{flex:none;font-size:10.5px;color:var(--dsw-alias-label-secondary);border:1px solid var(--dsw-alias-border-l1);border-radius:999px;padding:0 6px;line-height:1.6;background:var(--dsw-alias-bg-layer-2)}',
+      '.memp .tn-caret{flex:none;font-size:9px;color:var(--dsw-alias-label-secondary);opacity:.8}',
+      '.memp .tree-node.collapsed{border-style:dashed}',
+      '.memp .tree-node.kind{display:flex;align-items:center;gap:6px;padding:0 9px;border-radius:9px;border-left:3px solid var(--k)}',
+      '.memp .tree-node.kind .tn-name{flex:1;min-width:0;font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      '.memp .tree-node.kind .tdot{width:6px;height:6px;border-radius:50%;background:var(--k);flex:none}',
+      '.memp .tree-node.record{padding:6px 9px 6px 12px;display:flex;flex-direction:column;gap:4px;box-shadow:0 1px 2px rgba(0,0,0,.04)}',
+      '.memp .tree-node.record::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:3px;border-radius:999px;background:var(--k);opacity:.85}',
+      '.memp .tree-node.record:hover{border-color:var(--k);box-shadow:0 6px 16px color-mix(in srgb,var(--k) 16%,transparent)}',
+      '.memp .tree-node.record.selected{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 2px color-mix(in srgb,var(--dsw-alias-brand-primary) 22%,transparent),0 8px 20px rgba(0,0,0,.10)}',
+      '.memp .tree-node.record.related{border-color:color-mix(in srgb,var(--k) 70%,var(--dsw-alias-border-l1))}',
+      '.memp .tree-node.record.miss{opacity:.28}',
+      '.memp .tree-node.record.match{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 1px color-mix(in srgb,var(--dsw-alias-brand-primary) 32%,transparent)}',
+      '.memp .tree-canvas.focused .tree-node.record:not(.related){opacity:.55}',
+      '.memp .tn-head{display:flex;align-items:center;gap:5px;min-width:0;font-size:10.5px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .tn-head .tdot{width:6px;height:6px;border-radius:50%;background:var(--k);flex:none}',
+      '.memp .tn-kind{font-weight:600;color:var(--dsw-alias-label-primary);letter-spacing:.02em;flex:none}',
+      '.memp .tn-badge{border-radius:999px;padding:0 5px;line-height:1.55;font-size:9.5px;border:1px solid transparent;flex:none}',
+      '.memp .tn-badge.corr{color:color-mix(in srgb,#D9A441 62%,var(--dsw-alias-label-primary));background:color-mix(in srgb,#D9A441 14%,transparent);border-color:color-mix(in srgb,#D9A441 35%,transparent)}',
+      '.memp .tn-badge.old{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l1)}',
+      '.memp .tn-time{margin-left:auto;flex:none;font-size:9.5px;opacity:.75}',
+      '.memp .tn-content{font-size:11.5px;line-height:1.45;color:var(--dsw-alias-label-secondary);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}',
+      '.memp .tree-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;color:var(--dsw-alias-label-secondary);font-size:12.5px;line-height:1.6;text-align:center;padding:24px;z-index:1}',
+      '.memp .tree-empty .big{font-size:22px;opacity:.65}',
+      '.memp .tree-empty button{padding:4px 12px;font-size:12px}',
+      '.memp .tree-zoom{position:absolute;right:10px;bottom:10px;display:flex;align-items:center;gap:1px;padding:3px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 88%,transparent);backdrop-filter:blur(6px);box-shadow:0 4px 14px rgba(0,0,0,.12);z-index:3}',
+      '.memp .tree-zoom button{background:none;border:0;padding:2px 8px;border-radius:6px;font-size:12px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .tree-zoom button:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-brand-primary)}',
+      '.memp .tree-zoom .zoomval{font-size:10.5px;min-width:38px;text-align:center;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}',
+      '.memp .tree-legend{position:absolute;left:10px;bottom:10px;display:flex;gap:10px;align-items:center;font-size:10.5px;color:var(--dsw-alias-label-secondary);padding:3px 9px;border-radius:999px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 88%,transparent);border:1px solid var(--dsw-alias-border-l1);backdrop-filter:blur(6px);z-index:2;pointer-events:none}',
+      '.memp .tree-legend .line{display:inline-block;width:18px;height:0;border-top:1.5px dashed #D9A441;margin-right:4px;vertical-align:middle}',
+      '.memp .tree-detail{position:absolute;z-index:4;top:10px;left:10px;bottom:10px;width:min(322px,calc(100% - 20px));display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid var(--dsw-alias-border-l1);border-radius:12px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 96%,transparent);backdrop-filter:blur(10px);box-shadow:0 16px 42px rgba(0,0,0,.22);overflow:auto;font-size:11.5px;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dsw-alias-label-secondary) 30%,transparent) transparent}',
+      '.memp .tree-detail::-webkit-scrollbar{width:8px}',
+      '.memp .tree-detail::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dsw-alias-label-secondary) 30%,transparent);border-radius:999px;border:2px solid transparent;background-clip:padding-box}',
+      '.memp .td-head{display:flex;align-items:center;gap:6px}',
+      '.memp .td-head .td-title{font-weight:600;font-size:12px}',
+      '.memp .td-close{margin-left:auto;background:none;border:0;font-size:15px;line-height:1;padding:2px 4px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .td-close:hover{color:var(--dsw-alias-brand-primary)}',
+      '.memp .td-scope{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dsw-alias-label-secondary);padding-bottom:8px;border-bottom:1px solid var(--dsw-alias-border-l1);min-width:0}',
+      '.memp .td-scope .tn-scope{font-size:11px;font-weight:500}',
+      '.memp .td-content{font-size:12.5px;line-height:1.62;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-primary)}',
+      '.memp .td-tags{display:flex;flex-wrap:wrap;gap:4px}',
+      '.memp .td-meta{display:flex;flex-direction:column;gap:5px;font-size:10.5px;color:var(--dsw-alias-label-secondary);padding-top:8px;border-top:1px solid var(--dsw-alias-border-l1)}',
+      '.memp .td-meta .rowline{display:flex;align-items:center;gap:6px;min-width:0}',
+      '.memp .td-meta .rowline b{font-weight:500;color:var(--dsw-alias-label-primary);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.memp .td-impbar{flex:1;height:4px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}',
+      '.memp .td-impbar i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,transparent),var(--dsw-alias-brand-primary))}',
+      '.memp .td-id{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:9.5px;padding:1px 5px;border-radius:5px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);cursor:pointer;user-select:all;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.memp .td-rel{display:flex;flex-direction:column;gap:5px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l1)}',
+      '.memp .td-rel-label{font-size:10px;color:var(--dsw-alias-label-secondary);letter-spacing:.04em}',
+      '.memp .td-rel-btn{display:flex;align-items:flex-start;gap:6px;text-align:left;padding:6px 8px;border-radius:8px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);font-size:10.5px;line-height:1.45}',
+      '.memp .td-rel-dir{flex:none;color:color-mix(in srgb,#D9A441 62%,var(--dsw-alias-label-primary));font-weight:600}',
+      '.memp .td-rel-text{color:var(--dsw-alias-label-secondary);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}',
+      '@media (max-width:620px){.memp .tree-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.memp .tree-toolbar input[type=text]{max-width:none}}',
     ].join('')
 
     async function api(method, body) {
@@ -218,6 +327,272 @@ window.__ModuleLoader__.load({
       if (scope.startsWith('project:')) return scope.slice(8)
       if (scope.startsWith('session:')) return `会话 ${scope.slice(8, 16)}`
       return scope
+    }
+
+    /** 记忆类型 → 中文名 + 树里的强调色(与宿主主题无关的固定色相,底色用 color-mix 自适应)。 */
+    const KIND_ORDER = ['fact', 'decision', 'preference', 'procedure', 'note', 'rule']
+    const KIND_META = {
+      fact: { label: '事实', color: '#5B8DEF' },
+      decision: { label: '决策', color: '#D99A2B' },
+      preference: { label: '偏好', color: '#D868A8' },
+      procedure: { label: '流程', color: '#3FAE7A' },
+      note: { label: '笔记', color: '#7C8AA0' },
+      rule: { label: '规则', color: '#9B6BE0' },
+    }
+
+    function kindMeta(kind) {
+      return KIND_META[kind] || { label: String(kind), color: '#8B93A7' }
+    }
+
+    function kindRank(kind) {
+      const index = KIND_ORDER.indexOf(kind)
+      return index < 0 ? KIND_ORDER.length : index
+    }
+
+    function scopeRank(scope) {
+      if (scope === 'global') return 0
+      if (scope.startsWith('project:')) return 1
+      if (scope.startsWith('session:')) return 2
+      return 3
+    }
+
+    /** 作用域类型的一字记号(全 / 项 / 会 / 自),比抽象图标更好认。 */
+    function scopeGlyph(scope) {
+      if (scope === 'global') return '全'
+      if (scope.startsWith('project:')) return '项'
+      if (scope.startsWith('session:')) return '会'
+      return '自'
+    }
+
+    /** 紧凑时间:今天只给时分,其它日期给月/日。 */
+    function shortTime(ts) {
+      if (!ts) return ''
+      const date = new Date(ts)
+      const pad = (n) => String(n).padStart(2, '0')
+      const now = new Date()
+      if (date.toDateString() === now.toDateString()) return `${pad(date.getHours())}:${pad(date.getMinutes())}`
+      return `${date.getMonth() + 1}/${date.getDate()}`
+    }
+
+    function excerpt(text, limit = 64) {
+      const flat = String(text ?? '').replace(/\s+/g, ' ').trim()
+      return flat.length > limit ? `${flat.slice(0, limit)}…` : flat
+    }
+
+    /**
+     * 记忆树的**纯布局**:输入记录,输出节点的绝对坐标、层级连线与修正连线。
+     *
+     * 层级固定为 root → scope → kind → record,列间平推、叶子纵向堆叠;父节点在自己
+     * 子树的高度里居中。折叠一个 scope/kind 只是不展开它下面的节点,布局仍然成立。
+     * 修正关系不改变层级(一条记录只会修正同一个作用域里的旧记录),所以单独作为
+     * 曲线叠在右侧,避免把树本身拧成图。
+     *
+     * 这个函数不碰 DOM,测试可以直接断言节点与连线。
+     */
+    const TREE_METRICS = {
+      rootW: 100, rootH: 48,
+      scopeW: 202, scopeH: 42,
+      kindW: 128, kindH: 30,
+      recordW: 236, recordH: 56,
+      padX: 26, padY: 24,
+      colGap: 54, leafGap: 8, groupGap: 16,
+      arcRoom: 104,
+    }
+
+    function buildMemoryTree(records, options = {}) {
+      const M = TREE_METRICS
+      const labels = options.labels || {}
+      const collapsed = options.collapsed instanceof Set ? options.collapsed : new Set(options.collapsed || [])
+      const activeKinds = options.activeKinds instanceof Set ? options.activeKinds : new Set(KIND_ORDER)
+      const scopeFilter = typeof options.scopeFilter === 'string' ? options.scopeFilter : ''
+      const query = String(options.query ?? '').trim().toLowerCase()
+
+      const byScope = new Map()
+      for (const rec of records) {
+        if (!activeKinds.has(rec.kind)) continue
+        if (scopeFilter !== '' && rec.scope !== scopeFilter) continue
+        let kinds = byScope.get(rec.scope)
+        if (kinds === undefined) { kinds = new Map(); byScope.set(rec.scope, kinds) }
+        let list = kinds.get(rec.kind)
+        if (list === undefined) { list = []; kinds.set(rec.kind, list) }
+        list.push(rec)
+      }
+
+      const scopeGroups = []
+      for (const [scope, kindMap] of byScope) {
+        const kinds = []
+        for (const [kind, list] of kindMap) {
+          kinds.push({ kind, records: list.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)) })
+        }
+        kinds.sort((a, b) => kindRank(a.kind) - kindRank(b.kind) || String(a.kind).localeCompare(String(b.kind)))
+        let count = 0
+        for (const entry of kinds) count += entry.records.length
+        scopeGroups.push({ scope, label: scopeLabel(scope, labels), kinds, count })
+      }
+      scopeGroups.sort((a, b) => scopeRank(a.scope) - scopeRank(b.scope) || a.label.localeCompare(b.label, 'zh'))
+
+      const scopeKey = (scope) => `scope:${scope}`
+      const kindKey = (scope, kind) => `kind:${scope}|${kind}`
+      const recordKey = (id) => `record:${id}`
+
+      const scopeBlocks = scopeGroups.map((group) => {
+        const collapsedScope = collapsed.has(scopeKey(group.scope))
+        const kindBlocks = collapsedScope ? [] : group.kinds.map((entry) => {
+          const collapsedKind = collapsed.has(kindKey(group.scope, entry.kind))
+          const recordsHeight = entry.records.length * M.recordH
+            + Math.max(0, entry.records.length - 1) * M.leafGap
+          return {
+            ...entry,
+            collapsed: collapsedKind,
+            height: collapsedKind ? M.kindH : Math.max(M.kindH, recordsHeight),
+          }
+        })
+        let body = 0
+        for (const entry of kindBlocks) body += entry.height
+        const height = collapsedScope
+          ? M.scopeH
+          : Math.max(M.scopeH, body + Math.max(0, kindBlocks.length - 1) * M.groupGap)
+        return { ...group, collapsed: collapsedScope, kindBlocks, height }
+      })
+
+      let scopesHeight = 0
+      for (const block of scopeBlocks) scopesHeight += block.height
+      if (scopeBlocks.length > 1) scopesHeight += (scopeBlocks.length - 1) * M.groupGap
+      const contentHeight = Math.max(M.rootH, scopesHeight)
+
+      const nodes = []
+      const nodeByKey = new Map()
+      const recordNode = new Map()
+      const edges = []
+      const corrections = []
+      const addNode = (node) => { nodes.push(node); nodeByKey.set(node.key, node) }
+
+      const rootX = M.padX
+      const rootY = M.padY + (contentHeight - M.rootH) / 2
+      const scopeX = rootX + M.rootW + M.colGap
+      const kindX = scopeX + M.scopeW + M.colGap
+      const recordX = kindX + M.kindW + M.colGap
+      let visibleRecords = 0
+
+      addNode({
+        key: 'root', type: 'root',
+        x: rootX, y: rootY, w: M.rootW, h: M.rootH,
+        count: scopeGroups.reduce((sum, group) => sum + group.count, 0),
+      })
+
+      let top = M.padY
+      for (const scope of scopeBlocks) {
+        const sKey = scopeKey(scope.scope)
+        addNode({
+          key: sKey, type: 'scope',
+          x: scopeX, y: top + (scope.height - M.scopeH) / 2, w: M.scopeW, h: M.scopeH,
+          scope: scope.scope, label: scope.label, count: scope.count, collapsed: scope.collapsed,
+        })
+        edges.push({ key: `root>${sKey}`, type: 'tree', fromKey: 'root', toKey: sKey, toType: 'scope', toId: scope.scope })
+
+        let kindTop = top
+        for (const entry of scope.kindBlocks) {
+          const kKey = kindKey(scope.scope, entry.kind)
+          addNode({
+            key: kKey, type: 'kind',
+            x: kindX, y: kindTop + (entry.height - M.kindH) / 2, w: M.kindW, h: M.kindH,
+            scope: scope.scope, kind: entry.kind, count: entry.records.length, collapsed: entry.collapsed,
+          })
+          edges.push({
+            key: `${sKey}>${kKey}`, type: 'tree',
+            fromKey: sKey, toKey: kKey, toType: 'kind', toId: `${scope.scope}|${entry.kind}`,
+          })
+          if (!entry.collapsed) {
+            const recordsHeight = entry.records.length * M.recordH
+              + Math.max(0, entry.records.length - 1) * M.leafGap
+            const recordTop = kindTop + (entry.height - recordsHeight) / 2
+            entry.records.forEach((rec, index) => {
+              const rKey = recordKey(rec.id)
+              const y = recordTop + index * (M.recordH + M.leafGap)
+              addNode({
+                key: rKey, type: 'record',
+                x: recordX, y, w: M.recordW, h: M.recordH,
+                scope: rec.scope, kind: rec.kind, rec,
+              })
+              recordNode.set(rec.id, rKey)
+              edges.push({ key: `${kKey}>${rKey}`, type: 'tree', fromKey: kKey, toKey: rKey, toType: 'record', toId: rec.id })
+              visibleRecords += 1
+            })
+          }
+          kindTop += entry.height + M.groupGap
+        }
+        top += scope.height + M.groupGap
+      }
+
+      // 修正连线要等**所有**节点都落位后再算:新记录排在旧记录前面(按 updatedAt 倒序),
+      // 单遍循环时还看不到被修正的旧记录。
+      for (const node of nodes) {
+        if (node.type !== 'record') continue
+        const rec = node.rec
+        const oldKey = rec.supersedes ? recordNode.get(rec.supersedes) : undefined
+        if (oldKey === undefined) continue
+        corrections.push({
+          key: `corr:${rec.id}>${rec.supersedes}`,
+          fromKey: node.key, toKey: oldKey, fromId: rec.id, toId: rec.supersedes,
+        })
+      }
+
+      const matches = new Set()
+      if (query !== '') {
+        for (const node of nodes) {
+          if (node.type !== 'record') continue
+          const rec = node.rec
+          const haystack = [
+            rec.content, rec.kind, kindMeta(rec.kind).label,
+            (rec.tags || []).join(' '), node.scope, scopeLabel(node.scope, labels),
+          ].join(' ').toLowerCase()
+          if (haystack.includes(query)) matches.add(rec.id)
+        }
+      }
+
+      const visibleKinds = new Set()
+      for (const group of scopeGroups) for (const entry of group.kinds) visibleKinds.add(entry.kind)
+      const width = recordX + M.recordW + M.padX + M.arcRoom
+      const height = M.padY * 2 + contentHeight
+
+      return {
+        nodes, edges, corrections, nodeByKey, recordNode, matches,
+        width, height,
+        counts: {
+          records: visibleRecords,
+          scopes: scopeGroups.length,
+          kinds: visibleKinds.size,
+          corrections: corrections.length,
+        },
+      }
+    }
+
+    /** 层级连线:从父节点右缘到子节点左缘,水平方向用三次贝塞尔。 */
+    function treeEdgePath(from, to) {
+      const x1 = from.x + from.w
+      const y1 = from.y + from.h / 2
+      const x2 = to.x
+      const y2 = to.y + to.h / 2
+      const bend = Math.max(18, Math.abs(x2 - x1) * 0.48)
+      return `M${x1},${y1} C${x1 + bend},${y1} ${x2 - bend},${y2} ${x2},${y2}`
+    }
+
+    /** 修正连线:两端都从卡片右缘出,向右侧鼓出一条弧,不穿过叶子文本。 */
+    function treeCorrectionPath(from, to) {
+      const x1 = from.x + from.w
+      const y1 = from.y + from.h / 2
+      const x2 = to.x + to.w
+      const y2 = to.y + to.h / 2
+      const bend = 34 + Math.min(66, Math.abs(y2 - y1) * 0.09)
+      return `M${x1},${y1} C${x1 + bend},${y1} ${x2 + bend},${y2} ${x2},${y2}`
+    }
+
+    function KindDot({ kind }) {
+      return h('span', {
+        className: 'tdot',
+        style: { '--k': kindMeta(kind).color },
+        'aria-hidden': 'true',
+      })
     }
 
     function RecordCard({ rec, vectorOn, labels, onSaved, onDeleted }) {
@@ -345,6 +720,514 @@ window.__ModuleLoader__.load({
               h('button', { disabled: busy, onClick: del }, busy ? '…' : '删除'),
             )
           : null,
+      )
+    }
+
+    /** 树上的一条记忆:内容两行封顶,类型/修正/时间放在头行。 */
+    function TreeRecordNode({ node, selected, related, miss, match, onSelect, onHover }) {
+      const rec = node.rec
+      const meta = kindMeta(rec.kind)
+      const classes = ['tree-node', 'record']
+      if (selected) classes.push('selected')
+      if (related) classes.push('related')
+      if (miss) classes.push('miss')
+      if (match) classes.push('match')
+      const pick = () => onSelect(rec.id)
+      return h('div', {
+        className: classes.join(' '),
+        style: { left: node.x, top: node.y, width: node.w, height: node.h, '--k': meta.color },
+        title: rec.content,
+        role: 'button',
+        tabIndex: 0,
+        'aria-pressed': Boolean(selected),
+        onClick: pick,
+        onKeyDown: (event) => {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); pick() }
+        },
+        onMouseEnter: () => onHover(rec.id),
+        onMouseLeave: () => onHover(null),
+        onFocus: () => onHover(rec.id),
+        onBlur: () => onHover(null),
+      },
+        h('div', { className: 'tn-head' },
+          h(KindDot, { kind: rec.kind }),
+          h('span', { className: 'tn-kind' }, meta.label),
+          rec.supersedes
+            ? h('span', { className: 'tn-badge corr', title: `这条记录修正了旧记录 #${rec.supersedes}` }, '修正版')
+            : null,
+          rec.supersededBy
+            ? h('span', { className: 'tn-badge old', title: `已被 #${rec.supersededBy} 修正` }, '已修正')
+            : null,
+          h('span', { className: 'tn-time' }, shortTime(rec.updatedAt)),
+        ),
+        h('div', { className: 'tn-content' }, rec.content),
+      )
+    }
+
+    /** 树上的一个作用域:点击折叠/展开。 */
+    function TreeScopeNode({ node, onToggle }) {
+      return h('div', {
+        className: 'tree-node scope' + (node.collapsed ? ' collapsed' : ''),
+        style: { left: node.x, top: node.y, width: node.w, height: node.h },
+        role: 'button',
+        tabIndex: 0,
+        'aria-expanded': !node.collapsed,
+        title: `${node.scope} · 点击${node.collapsed ? '展开' : '折叠'}`,
+        onClick: () => onToggle(node.scope),
+        onKeyDown: (event) => {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onToggle(node.scope) }
+        },
+      },
+        h('span', { className: 'tn-ico' }, scopeGlyph(node.scope)),
+        h('span', { className: 'tn-scope' }, node.label),
+        h('span', { className: 'tn-count' }, String(node.count)),
+        h('span', { className: 'tn-caret' }, node.collapsed ? '▸' : '▾'),
+      )
+    }
+
+    /** 树上的一个类型分组:点击折叠/展开。 */
+    function TreeKindNode({ node, onToggle }) {
+      const meta = kindMeta(node.kind)
+      return h('div', {
+        className: 'tree-node kind' + (node.collapsed ? ' collapsed' : ''),
+        style: { left: node.x, top: node.y, width: node.w, height: node.h, '--k': meta.color },
+        role: 'button',
+        tabIndex: 0,
+        'aria-expanded': !node.collapsed,
+        title: `${node.kind} · ${meta.label} · 点击${node.collapsed ? '展开' : '折叠'}`,
+        onClick: () => onToggle(node.scope, node.kind),
+        onKeyDown: (event) => {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onToggle(node.scope, node.kind) }
+        },
+      },
+        h('span', { className: 'tdot' }),
+        h('span', { className: 'tn-name' }, meta.label),
+        h('span', { className: 'tn-count' }, String(node.count)),
+        h('span', { className: 'tn-caret' }, node.collapsed ? '▸' : '▾'),
+      )
+    }
+
+    function TreeRootNode({ node }) {
+      return h('div', {
+        className: 'tree-node root',
+        style: { left: node.x, top: node.y, width: node.w, height: node.h },
+        title: '所有作用域的记忆',
+      },
+        h('span', { className: 'root-icon' }, h(NavLineIcon, { size: 19 })),
+        h('span', null,
+          h('b', null, '记忆'),
+          h('span', null, `${node.count} 条`),
+        ),
+      )
+    }
+
+    /** 右侧详情抽屉:全文、标签、重要度、id,以及修正关系的双向入口。 */
+    function TreeDetail({ rec, labels, byId, onClose, onJump }) {
+      const [copied, setCopied] = React.useState(false)
+      const meta = kindMeta(rec.kind)
+      const older = rec.supersedes ? byId.get(rec.supersedes) : undefined
+      const newer = rec.supersededBy ? byId.get(rec.supersededBy) : undefined
+      const copyId = () => {
+        try {
+          if (navigator?.clipboard?.writeText) void navigator.clipboard.writeText(rec.id)
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1200)
+        } catch { /* 剪贴板不可用时忽略 */ }
+      }
+      return h('aside', { className: 'tree-detail', 'aria-label': '记忆详情' },
+        h('div', { className: 'td-head' },
+          h(KindDot, { kind: rec.kind }),
+          h('span', { className: 'td-title' }, meta.label),
+          h('span', { className: 'tn-count' }, rec.kind),
+          h('button', { className: 'td-close', title: '关闭详情', onClick: onClose }, '×'),
+        ),
+        h('div', { className: 'td-scope' },
+          h('span', { className: 'tn-ico' }, scopeGlyph(rec.scope)),
+          h('span', { className: 'tn-scope' }, scopeLabel(rec.scope, labels)),
+        ),
+        h('div', { className: 'td-content' }, rec.content),
+        rec.tags && rec.tags.length > 0
+          ? h('div', { className: 'td-tags' }, rec.tags.map((tag) => h('span', { className: 'tag', key: tag }, tag)))
+          : null,
+        h('div', { className: 'td-meta' },
+          h('div', { className: 'rowline' },
+            h('span', null, '重要度'),
+            h('span', { className: 'td-impbar' }, h('i', { style: { width: `${Math.round((Number(rec.importance) || 0) * 100)}%` } })),
+            h('span', null, `${Math.round((Number(rec.importance) || 0) * 100)}%`),
+          ),
+          h('div', { className: 'rowline' }, h('span', null, '创建'), h('b', null, fmtTime(rec.createdAt))),
+          h('div', { className: 'rowline' }, h('span', null, '更新'), h('b', null, fmtTime(rec.updatedAt))),
+          h('div', { className: 'rowline' },
+            h('span', null, 'id'),
+            h('code', { className: 'td-id', title: '点击复制完整 id', onClick: copyId }, rec.id),
+            copied ? h('span', { className: 'meta-done' }, '已复制') : null,
+          ),
+        ),
+        h('div', { className: 'td-rel' },
+          h('span', { className: 'td-rel-label' }, '修正关系'),
+          older
+            ? h('button', { className: 'td-rel-btn', title: `跳转到被修正的旧记录 #${older.id}`, onClick: () => onJump(older.id) },
+                h('span', { className: 'td-rel-dir' }, '修正自'),
+                h('span', { className: 'td-rel-text' }, excerpt(older.content)),
+              )
+            : null,
+          newer
+            ? h('button', { className: 'td-rel-btn', title: `跳转到修正它的新记录 #${newer.id}`, onClick: () => onJump(newer.id) },
+                h('span', { className: 'td-rel-dir' }, '已被修正为'),
+                h('span', { className: 'td-rel-text' }, excerpt(newer.content)),
+              )
+            : null,
+          !older && !newer ? h('span', { className: 'muted' }, '这条记忆没有修正关系。') : null,
+          older && newer
+            ? h('span', { className: 'muted' }, '这条记录处在一条修正链的中间。')
+            : null,
+        ),
+      )
+    }
+
+    /**
+     * 「记忆树」标签页。
+     *
+     * 层级:记忆 → 作用域 → 类型 → 记录。三个维度正好对应记忆的归属(scope)、
+     * 语义(kind)与内容;修正关系是跨记录的点对点关系,用金色虚线单独画在树的右侧,
+     * 悬停/选中任意一端时两端与整条链一起点亮。
+     */
+    function MemoryTreeTab({ records, scopes, loading, error, onRefresh }) {
+      const [query, setQuery] = React.useState('')
+      const [scopeFilter, setScopeFilter] = React.useState('')
+      const [kindFilter, setKindFilter] = React.useState(null)
+      const [collapsed, setCollapsed] = React.useState(new Set())
+      const [selectedId, setSelectedId] = React.useState(null)
+      const [hoverId, setHoverId] = React.useState(null)
+      const [showCorrections, setShowCorrections] = React.useState(true)
+      const [zoom, setZoom] = React.useState(1)
+      const [autoFitDone, setAutoFitDone] = React.useState(false)
+      const wrapRef = React.useRef(null)
+
+      const labels = {}
+      for (const entry of scopes) {
+        if (entry && typeof entry.scope === 'string' && typeof entry.label === 'string') labels[entry.scope] = entry.label
+      }
+      const recordById = new Map()
+      const kindCounts = new Map()
+      const presentKinds = []
+      const presentScopes = []
+      for (const rec of records) {
+        recordById.set(rec.id, rec)
+        kindCounts.set(rec.kind, (kindCounts.get(rec.kind) || 0) + 1)
+        if (!presentKinds.includes(rec.kind)) presentKinds.push(rec.kind)
+        if (!presentScopes.includes(rec.scope)) presentScopes.push(rec.scope)
+      }
+      presentKinds.sort((a, b) => kindRank(a) - kindRank(b) || String(a).localeCompare(String(b)))
+      presentScopes.sort((a, b) => scopeRank(a) - scopeRank(b) || scopeLabel(a, labels).localeCompare(scopeLabel(b, labels), 'zh'))
+
+      const allKinds = new Set(presentKinds)
+      const activeKinds = kindFilter === null
+        ? allKinds
+        : new Set(presentKinds.filter((kind) => kindFilter.has(kind)))
+
+      const layout = buildMemoryTree(records, {
+        labels, collapsed, activeKinds, scopeFilter, query,
+      })
+
+      // 第一次拿到记录时把宽度缩到画布内:右侧的记录列默认不该被横向截断。
+      // 高度方向仍可滚动 —— 记忆很多时把整棵树压到一屏里会小到看不清。
+      React.useEffect(() => {
+        if (autoFitDone || layout.counts.records === 0) return
+        const wrap = wrapRef.current
+        const scroll = wrap && typeof wrap.querySelector === 'function' ? wrap.querySelector('.tree-scroll') : null
+        if (!scroll || scroll.clientWidth <= 0 || layout.width <= 0) return
+        const widthFit = (scroll.clientWidth - 28) / layout.width
+        if (widthFit < 0.99) setZoom(Math.max(0.62, Math.round(widthFit * 100) / 100))
+        setAutoFitDone(true)
+      }, [autoFitDone, layout.counts.records, layout.width])
+
+      // 根节点在整棵树的高度里居中;树比视口高时,首屏应该正好看到它,
+      // 而不是从最上面的作用域往下翻。
+      React.useEffect(() => {
+        if (!autoFitDone) return
+        const wrap = wrapRef.current
+        const scroll = wrap && typeof wrap.querySelector === 'function' ? wrap.querySelector('.tree-scroll') : null
+        const root = layout.nodeByKey.get('root')
+        if (!scroll || !root) return
+        const max = Math.max(0, scroll.scrollHeight - scroll.clientHeight)
+        const target = (root.y + root.h / 2) * zoom - scroll.clientHeight / 2
+        scroll.scrollTop = Math.max(0, Math.min(target, max))
+      }, [autoFitDone, zoom])
+
+      // 选中一条记忆时把它滚进视口:右侧详情是从「修正关系」里跳过来的,
+      // 目标可能在当前滚动范围之外。
+      React.useEffect(() => {
+        if (selectedId === null) return
+        const wrap = wrapRef.current
+        const scroll = wrap && typeof wrap.querySelector === 'function' ? wrap.querySelector('.tree-scroll') : null
+        const node = scroll ? scroll.querySelector('.tree-node.record.selected') : null
+        if (!scroll || !node) return
+        const top = node.offsetTop * zoom
+        const bottom = top + node.offsetHeight * zoom
+        const viewTop = scroll.scrollTop
+        const viewBottom = viewTop + scroll.clientHeight
+        if (top < viewTop + 12) scroll.scrollTop = Math.max(0, top - 12)
+        else if (bottom > viewBottom - 12) scroll.scrollTop = bottom - scroll.clientHeight + 12
+      }, [selectedId])
+
+      const focusId = hoverId || selectedId
+      const related = new Set()
+      if (focusId) {
+        related.add(focusId)
+        for (const correction of layout.corrections) {
+          if (correction.fromId === focusId) related.add(correction.toId)
+          if (correction.toId === focusId) related.add(correction.fromId)
+        }
+      }
+      const pathKeys = new Set()
+      for (const id of related) {
+        const rec = recordById.get(id)
+        if (rec) {
+          pathKeys.add(`scope:${rec.scope}`)
+          pathKeys.add(`kind:${rec.scope}|${rec.kind}`)
+        }
+      }
+      const edgeActive = (edge) => {
+        if (focusId === null) return false
+        if (edge.type === 'correction') return related.has(edge.fromId) || related.has(edge.toId)
+        if (edge.toType === 'record') return related.has(edge.toId)
+        if (edge.toType === 'kind' || edge.toType === 'scope') return pathKeys.has(edge.toKey)
+        return false
+      }
+
+      const toggleScope = (scope) => {
+        const key = `scope:${scope}`
+        setCollapsed((previous) => {
+          const next = new Set(previous)
+          if (next.has(key)) next.delete(key); else next.add(key)
+          return next
+        })
+      }
+      const toggleKind = (scope, kind) => {
+        const key = `kind:${scope}|${kind}`
+        setCollapsed((previous) => {
+          const next = new Set(previous)
+          if (next.has(key)) next.delete(key); else next.add(key)
+          return next
+        })
+      }
+      const toggleKindFilter = (kind) => {
+        setKindFilter((previous) => {
+          const next = previous === null ? new Set(presentKinds) : new Set(previous)
+          if (next.has(kind)) next.delete(kind); else next.add(kind)
+          return next
+        })
+      }
+      const resetFilters = () => {
+        setQuery('')
+        setScopeFilter('')
+        setKindFilter(null)
+        setCollapsed(new Set())
+      }
+      const jumpTo = (id) => {
+        // 从详情里跳修正链:清掉筛选并展开全部,否则目标可能正好被折叠/筛掉。
+        setKindFilter(null)
+        setScopeFilter('')
+        setQuery('')
+        setCollapsed(new Set())
+        setSelectedId(id)
+        setHoverId(null)
+        setShowCorrections(true)
+      }
+      const stepZoom = (delta) => {
+        setZoom((value) => Math.max(0.45, Math.min(1.6, Math.round((value + delta) * 100) / 100)))
+      }
+      const fitView = () => {
+        try {
+          const wrap = wrapRef.current
+          const scroll = wrap && typeof wrap.querySelector === 'function' ? wrap.querySelector('.tree-scroll') : null
+          if (!scroll || layout.width <= 0 || layout.height <= 0) { setZoom(1); return }
+          const next = Math.min(
+            (scroll.clientWidth - 28) / layout.width,
+            Math.max((scroll.clientHeight - 28) / layout.height, 0.72),
+            1.15,
+          )
+          setZoom(Math.max(0.5, Math.min(1.6, Math.round(next * 100) / 100)))
+        } catch { setZoom(1) }
+      }
+
+      const selected = selectedId === null ? undefined : recordById.get(selectedId)
+      const scopeItems = [{ value: '', label: '全部作用域' }]
+      for (const scope of presentScopes) scopeItems.push({ value: scope, label: scopeLabel(scope, labels) })
+      const correctionsTotal = records.reduce((sum, rec) => sum + (rec.supersedes ? 1 : 0), 0)
+      const scopeTotal = new Set(records.map((rec) => rec.scope)).size
+      const emptyText = records.length === 0
+        ? (loading ? '正在加载记忆…' : '还没有记忆。去「记录」里新建一条，或让 Agent 用 memory_save 写一条。')
+        : layout.counts.records === 0
+          ? '当前筛选下没有记忆。'
+          : ''
+      const showEmpty = emptyText !== '' || (Boolean(error) && records.length === 0)
+
+      const stats = h('div', { className: 'tree-stats' },
+        h('div', { className: 'stat' }, h('b', null, String(records.length)), h('span', null, '条记忆')),
+        h('div', { className: 'stat' }, h('b', null, String(scopeTotal)), h('span', null, '个作用域')),
+        h('div', { className: 'stat' }, h('b', null, String(presentKinds.length)), h('span', null, '种类型')),
+        h('div', { className: 'stat' }, h('b', null, String(correctionsTotal)), h('span', null, '处修正')),
+      )
+
+      const toolbar = h('div', { className: 'tree-toolbar' },
+        h('input', {
+          type: 'text',
+          placeholder: '搜索内容、类型、标签或作用域',
+          value: query,
+          onChange: (event) => setQuery(event.target.value),
+        }),
+        h(Dropdown, {
+          items: scopeItems,
+          value: scopeFilter,
+          disabled: loading,
+          onChange: setScopeFilter,
+        }),
+        h('button', {
+          className: 'kchip' + (showCorrections ? ' on' : ' off'),
+          title: '显示 / 隐藏修正关系连线',
+          onClick: () => setShowCorrections((value) => !value),
+        }, h('span', { className: 'corr-swatch' }), '修正连线'),
+        query.trim() !== ''
+          ? h('span', { className: 'tree-matchinfo' }, `匹配 ${layout.matches.size} 条`)
+          : null,
+        h('span', { className: 'spacer' }),
+        h('button', { onClick: () => setCollapsed(new Set()) }, '全部展开'),
+        h('button', { onClick: () => setCollapsed(new Set(presentScopes.map((scope) => `scope:${scope}`))) }, '只看作用域'),
+        h('button', { disabled: loading, onClick: onRefresh }, loading ? '刷新中…' : '刷新'),
+      )
+
+      const kindbar = h('div', { className: 'kindbar' },
+        h('span', { className: 'kindbar-label' }, '类型'),
+        presentKinds.map((kind) => h('button', {
+          key: kind,
+          className: 'kchip' + (activeKinds.has(kind) ? '' : ' off'),
+          style: { '--k': kindMeta(kind).color },
+          title: `${kind} · ${kindMeta(kind).label}`,
+          onClick: () => toggleKindFilter(kind),
+        },
+          h('span', { className: 'tdot' }),
+          kindMeta(kind).label,
+          h('b', null, String(kindCounts.get(kind) || 0)),
+        )),
+        presentKinds.length > 0 && presentKinds.every((kind) => activeKinds.has(kind))
+          ? null
+          : h('button', { className: 'linkbtn', onClick: () => setKindFilter(null) }, '恢复全部类型'),
+      )
+
+      const nodes = []
+      const add = (child) => { if (child !== null) nodes.push(child) }
+      for (const node of layout.nodes) {
+        if (node.type === 'root') {
+          add(h(TreeRootNode, { key: node.key, node }))
+        } else if (node.type === 'scope') {
+          add(h(TreeScopeNode, { key: node.key, node, onToggle: toggleScope }))
+        } else if (node.type === 'kind') {
+          add(h(TreeKindNode, { key: node.key, node, onToggle: toggleKind }))
+        } else {
+          const rec = node.rec
+          add(h(TreeRecordNode, {
+            key: node.key,
+            node,
+            selected: rec.id === selectedId,
+            related: related.has(rec.id),
+            miss: query.trim() !== '' && !layout.matches.has(rec.id),
+            match: query.trim() !== '' && layout.matches.has(rec.id),
+            onSelect: (id) => setSelectedId((current) => current === id ? null : id),
+            onHover: setHoverId,
+          }))
+        }
+      }
+
+      const edgePaths = []
+      for (const edge of layout.edges) {
+        const from = layout.nodeByKey.get(edge.fromKey)
+        const to = layout.nodeByKey.get(edge.toKey)
+        if (!from || !to) continue
+        edgePaths.push(h('path', {
+          key: edge.key,
+          className: 'edge' + (edgeActive(edge) ? ' active' : ''),
+          d: treeEdgePath(from, to),
+        }))
+      }
+      if (showCorrections) {
+        for (const edge of layout.corrections) {
+          const from = layout.nodeByKey.get(edge.fromKey)
+          const to = layout.nodeByKey.get(edge.toKey)
+          if (!from || !to) continue
+          const active = edgeActive(edge)
+          edgePaths.push(h('path', {
+            key: edge.key,
+            className: 'corr-edge' + (active ? ' active' : ''),
+            d: treeCorrectionPath(from, to),
+          }))
+          edgePaths.push(h('circle', {
+            key: `${edge.key}:dot`,
+            className: 'corr-dot' + (active ? ' active' : ''),
+            cx: to.x + to.w,
+            cy: to.y + to.h / 2,
+            r: 2.6,
+          }))
+        }
+      }
+
+      const canvas = h('div', {
+        className: 'tree-canvas' + (focusId !== null ? ' focused' : ''),
+        style: { width: layout.width, height: layout.height, transform: `scale(${zoom})` },
+      },
+        h('svg', {
+          className: 'tree-edges',
+          width: layout.width,
+          height: layout.height,
+          viewBox: `0 0 ${layout.width} ${layout.height}`,
+          'aria-hidden': 'true',
+        }, edgePaths),
+        nodes,
+      )
+
+      const treeWrap = h('div', { className: 'tree-wrap', ref: wrapRef },
+        h('div', { className: 'tree-scroll' },
+          h('div', {
+            className: 'tree-zoomspace',
+            style: { width: Math.ceil(layout.width * zoom), height: Math.ceil(layout.height * zoom) },
+          }, canvas),
+        ),
+        showEmpty
+          ? h('div', { className: 'tree-empty' },
+              h('span', { className: 'big' }, '🌳'),
+              h('span', null, emptyText || String(error)),
+              emptyText === '当前筛选下没有记忆。'
+                ? h('button', { onClick: resetFilters }, '清空筛选')
+                : null,
+            )
+          : null,
+        showEmpty ? null : h('div', { className: 'tree-zoom' },
+          h('button', { title: '缩小', onClick: () => stepZoom(-0.1) }, '−'),
+          h('span', { className: 'zoomval' }, `${Math.round(zoom * 100)}%`),
+          h('button', { title: '放大', onClick: () => stepZoom(0.1) }, '+'),
+          h('button', { title: '适应画布', onClick: fitView }, '适应'),
+        ),
+        showCorrections && layout.corrections.length > 0 && !showEmpty
+          ? h('div', { className: 'tree-legend' }, h('span', null, h('i', { className: 'line' }), '修正关系'))
+          : null,
+        selected
+          ? h(TreeDetail, {
+              rec: selected,
+              labels,
+              byId: recordById,
+              onClose: () => setSelectedId(null),
+              onJump: jumpTo,
+            })
+          : null,
+      )
+
+      return h('div', { className: 'tree-tab' },
+        stats,
+        toolbar,
+        kindbar,
+        error && records.length > 0 ? h('div', { className: 'err' }, error) : null,
+        treeWrap,
       )
     }
 
@@ -1248,14 +2131,33 @@ window.__ModuleLoader__.load({
         error ? h('div', { className: 'err' }, error) : null,
         h('div', { className: 'scroll' + (records.length > 0 || loading ? '' : ' is-empty') }, listBody),
       )
+      // 记忆树是自己的过滤维度(客户端即时筛选),进来时先拉一份不带服务端筛选的全量记录,
+      // 否则从「记录」页带着搜索词切过来会只剩一部分树。
+      const treeBody = h(MemoryTreeTab, {
+        records,
+        scopes,
+        loading,
+        error,
+        onRefresh: () => { setPendingTick(0); load('', '') },
+      })
 
       return h('div', { className: 'memp' },
         h('div', { className: 'tabs' },
           h('button', { className: 'tab' + (tab === 'records' ? ' on' : ''), onClick: () => setTab('records') }, '服务'),
           h('button', { className: 'tab' + (tab === 'data' ? ' on' : ''), onClick: () => { if (tab !== 'data') load(); setTab('data') } }, '记录'),
+          h('button', {
+            className: 'tab' + (tab === 'tree' ? ' on' : ''),
+            onClick: () => { if (tab !== 'tree') load('', ''); setTab('tree') },
+          }, '记忆树'),
           h('button', { className: 'tab' + (tab === 'settings' ? ' on' : ''), onClick: () => setTab('settings') }, '设置'),
         ),
-        tab === 'settings' ? h(SettingsTab, {}) : tab === 'data' ? dataBody : overviewBody,
+        tab === 'settings'
+          ? h(SettingsTab, {})
+          : tab === 'data'
+            ? dataBody
+            : tab === 'tree'
+              ? treeBody
+              : overviewBody,
       )
     }
 
@@ -1460,6 +2362,9 @@ window.__ModuleLoader__.load({
     exports.__test = {
       RecordCard: RecordCard,
       MemoryPanel: MemoryPanel,
+      MemoryTreeTab: MemoryTreeTab,
+      buildMemoryTree: buildMemoryTree,
+      KIND_META: KIND_META,
       CSS: CSS,
       shouldPollInstall: shouldPollInstall,
       // 图标一致性护栏:测试会核对两条渲染路径都是同一份 16px 单色线稿
