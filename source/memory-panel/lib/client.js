@@ -1270,44 +1270,30 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 侧栏入口图标:插件列表里那只年轮瓦片(icon.svg)本体,按 size 缩放(默认 16)。
+     * 侧栏入口图标:年轮线稿(16 网格、1.3 描边、currentColor),按 size 缩放(默认 16)。
      *
-     * 0.9.1 及以前这一列画的是「内存芯片」线稿(单色、跟随 currentColor),和插件
-     * 管理器里的年轮图标是两套记号 —— 侧栏 / 设置侧栏 / 插件列表看到三个不同形状。
-     * 现在三处共用同一份几何与配色:36 网格、深咖瓦片 + 香槟金年轮,显示尺寸交给
-     * width/height 和 viewBox 缩放,所以 16px 下仍是同一只年轮,不需要 16px 小图。
+     * 这里和插件列表的 **icon.svg** 是两个 surface,不能共用一套画法:
+     *   - 插件管理器卡片/行:30/36px、深咖瓦片 + 香槟金年轮,是插件的品牌美术;
+     *   - 左侧栏 / 设置侧栏:16px 单色线稿(宿主 Icon*OutlineMedium 同规范:
+     *     16 网格、fill:none、stroke:currentColor、strokeWidth 1.3)。
+     * 0.9.3 曾把彩色瓦片塞进侧栏,结果在那一列里是一块实心深色方块,和旁边的线稿
+     * 图标格格不入;0.9.4 改回线稿,但记号仍是"年轮"(圆角瓦片轮廓 + 1.75 圈螺旋),
+     * 不再是 0.9.1 以前的"内存芯片"。
      *
-     * 渐变的 id 两处各用一套(logo / nav):同一个页面里侧栏入口和设置侧栏会同时
-     * 存在,重复 id 虽然内容相同,但不能赌宿主什么时候卸载其中一个。
+     * 螺旋用 7 段圆弧近似(不是几百个点的折线),16px 下是一条完整的线;颜色跟随
+     * currentColor,深浅主题自动适配。
      */
     const NAV_ICON_NS = 'http://www.w3.org/2000/svg'
-    const LOGO_VIEW_BOX = '0 0 36 36'
-    /** 年轮螺旋:与 icon.svg 同一条 7 段圆弧(改这里要同步改 icon.svg,测试会拦)。 */
-    const LOGO_RING = 'M18.99 16.75 A2.19 2.19 0 0 1 19.99 19.95 A3.38 3.38 0 0 1 14.94 20.53 A4.56 4.56 0 0 1 15.15 13.71 A5.74 5.74 0 0 1 23.61 15.07 A6.92 6.92 0 0 1 20.76 24.99 A8.11 8.11 0 0 1 9.62 20.33'
-    const LOGO_TILE = { x: 4, y: 4, width: 28, height: 28, rx: 8 }
-    const LOGO_INNER = { x: 4.45, y: 4.45, width: 27.1, height: 27.1, rx: 7.6 }
-    const LOGO_STOPS = {
-      tile: [['#3B2D20', null], ['#120E0A', 1]],
-      ring: [['#F8E2B4', null], ['#BF8230', 1]],
-    }
+    const NAV_VIEW_BOX = '0 0 16 16'
+    /** 年轮螺旋:16 网格、从中心 r1.3 长到 r4.4、1.75 圈。 */
+    const NAV_RING = 'M7.35 6.87 A1.52 1.52 0 0 1 9.51 7.13 A1.96 1.96 0 0 1 9.09 9.89 A2.41 2.41 0 0 1 5.72 9.31 A2.85 2.85 0 0 1 6.46 5.34 A3.29 3.29 0 0 1 11.04 6.24 A3.74 3.74 0 0 1 9.98 11.43 A4.18 4.18 0 0 1 4.19 10.20'
+    /** 圆角瓦片轮廓:与 icon.svg 的瓦片同形,只是描边而不是填色。 */
+    const NAV_FRAME = { x: 1.65, y: 1.65, width: 12.7, height: 12.7, rx: 3.8 }
 
-    function NavLogoIcon({ size = 16 } = {}) {
-      return h('svg', { width: size, height: size, viewBox: LOGO_VIEW_BOX, fill: 'none', 'aria-hidden': 'true' },
-        h('rect', { ...LOGO_TILE, fill: 'url(#dsh-memory-logo-tile)' }),
-        h('rect', { ...LOGO_INNER, fill: 'none', stroke: 'rgba(240,200,140,0.20)', strokeWidth: 0.9 }),
-        h('path', { d: LOGO_RING, fill: 'none', stroke: 'url(#dsh-memory-logo-ring)', strokeWidth: 2.55, strokeLinecap: 'round', strokeLinejoin: 'round' }),
-        h('defs', null,
-          h('linearGradient', { id: 'dsh-memory-logo-tile', x1: 18, y1: 4, x2: 18, y2: 32, gradientUnits: 'userSpaceOnUse' },
-            ...LOGO_STOPS.tile.map(([color, offset]) => offset === null
-              ? h('stop', { stopColor: color })
-              : h('stop', { offset, stopColor: color })),
-          ),
-          h('linearGradient', { id: 'dsh-memory-logo-ring', x1: 18, y1: 9, x2: 18, y2: 27, gradientUnits: 'userSpaceOnUse' },
-            ...LOGO_STOPS.ring.map(([color, offset]) => offset === null
-              ? h('stop', { stopColor: color })
-              : h('stop', { offset, stopColor: color })),
-          ),
-        ),
+    function NavLineIcon({ size = 16 } = {}) {
+      return h('svg', { width: size, height: size, viewBox: NAV_VIEW_BOX, fill: 'none', 'aria-hidden': 'true' },
+        h('rect', { ...NAV_FRAME, fill: 'none', stroke: 'currentColor', strokeWidth: 1.3 }),
+        h('path', { d: NAV_RING, fill: 'none', stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round', strokeLinejoin: 'round' }),
       )
     }
 
@@ -1346,7 +1332,7 @@ window.__ModuleLoader__.load({
                 slots.inject('main', () => slots.register({ name: 'main', key: 'memory' }, () => React.createElement(MemoryPage))),
                 slots.inject('sidebar.panellist', () => slots.register(
                   { name: 'sidebar.panellist', id: 'memory', order: 20, label: () => NAV_LABEL },
-                  () => React.createElement(NavLogoIcon),
+                  () => React.createElement(NavLineIcon),
                 )),
               ]
             } catch (error) {
@@ -1391,44 +1377,26 @@ window.__ModuleLoader__.load({
      *      `dsh-memory-nav` 标记类,规则全部限定在它下面 —— 其它区块(账号/模型/插件市场)
      *      的图标一个都不碰。标记打在**按钮自己**身上而不是它所在的列表上:整列共用一个
      *      列表容器,标在容器上会波及所有区块。
-     *   3. **不改布局、不插 DOM**:那颗 svg 还是宿主自己渲染的,我们只把它内部换成瓦片,
+     *   3. **不改布局、不插 DOM**:那颗 svg 还是宿主自己渲染的,我们只把它内部换成线稿,
      *      盒子尺寸/行高/对齐全由宿主保证。
      *
-     * 0.5.3/0.5.4 曾把蓝色瓦片塞进这一列(实心色块混在细线图标里,格格不入),随后几版
-     * 改画成单色线稿芯片 —— 但那样侧栏入口 / 设置侧栏 / 插件列表就是三种记号。现在统一
-     * 成插件美术本身:深咖瓦片 + 香槟金年轮。16px 下瓦片约 12.4px、年轮约 1.13px,
-     * 视觉重量和这一列的 1.3px 线稿接近;几何与配色只在上面的 LOGO_* 一处维护
-     * (测试会核对它和 icon.svg 是同一只年轮)。
+     * 记号必须和这一列**同一规范**:16 网格、`fill:none`、`stroke:currentColor`、1.3 描边。
+     * 0.5.3/0.5.4 塞过蓝色瓦片,0.9.3 塞过深咖年轮瓦片 —— 在那个单色列里都是一块实心
+     * 色块,和旁边的线稿不一致。0.9.4 起画成**年轮线稿**:圆角瓦片轮廓 + 1.75 圈螺旋,
+     * 形状仍来自插件美术,但颜色只跟 currentColor,深浅主题自动适配。
      *
-     * 实现:把宿主那颗 svg 的**子节点**换成瓦片,并把 viewBox 改到 36 网格(宿主的
-     * width/height 仍是 16,缩放由浏览器完成)。三条被否掉的路,留给后来人:
+     * 实现:把宿主那颗 svg 的**子节点**换成线稿(viewBox 保持 16 网格)。三条被否掉的
+     * 路,留给后来人:
      *   - `::before` 补一个(0.5.3):真机上盒子没成形 —— 齿轮没了、记号也没出现,空一格;
-     *   - 给 svg 上背景图(0.5.4):能画出来,但只能画色块,画不出年轮;
+     *   - 给 svg 上背景图(0.5.4):能画出来,但只能画色块,画不出 1.3 描边的线稿;
      *   - `content: url(...)` 替换 svg 内容:SVG 元素不支持 content 替换,实测无效。
      * 换子节点这条路的失败模式是良性的:svg 由宿主渲染,我们只动它的孩子,尺寸/对齐/行高
      * 一定由宿主保证;万一类名约定变了,选中不到就没有任何改动,图标保持原样。
      * React 若重渲染把图形覆盖回去,observer 会在下一轮按子节点重新补上。
      */
-    const LOGO_DOM = [
-      { tag: 'rect', attrs: { ...LOGO_TILE, fill: 'url(#dsh-memory-nav-tile)' } },
-      { tag: 'rect', attrs: { ...LOGO_INNER, fill: 'none', stroke: 'rgba(240,200,140,0.20)', 'stroke-width': '0.9' } },
-      { tag: 'path', attrs: { d: LOGO_RING, fill: 'none', stroke: 'url(#dsh-memory-nav-ring)', 'stroke-width': '2.55', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'data-dsh-memory-logo': '1' } },
-      {
-        tag: 'defs',
-        attrs: {},
-        children: [
-          {
-            tag: 'linearGradient',
-            attrs: { id: 'dsh-memory-nav-tile', x1: '18', y1: '4', x2: '18', y2: '32', gradientUnits: 'userSpaceOnUse' },
-            children: LOGO_STOPS.tile.map(([color, offset]) => ({ tag: 'stop', attrs: offset === null ? { 'stop-color': color } : { offset: String(offset), 'stop-color': color } })),
-          },
-          {
-            tag: 'linearGradient',
-            attrs: { id: 'dsh-memory-nav-ring', x1: '18', y1: '9', x2: '18', y2: '27', gradientUnits: 'userSpaceOnUse' },
-            children: LOGO_STOPS.ring.map(([color, offset]) => ({ tag: 'stop', attrs: offset === null ? { 'stop-color': color } : { offset: String(offset), 'stop-color': color } })),
-          },
-        ],
-      },
+    const NAV_DOM = [
+      { tag: 'rect', attrs: { ...NAV_FRAME, fill: 'none', stroke: 'currentColor', 'stroke-width': '1.3' } },
+      { tag: 'path', attrs: { d: NAV_RING, fill: 'none', stroke: 'currentColor', 'stroke-width': '1.3', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'data-dsh-memory-logo': '1' } },
     ]
 
     /** 递归建 SVG 节点(不用 innerHTML:避开宿主 CSP,也避免命名空间被字符串解析弄丢)。 */
@@ -1439,11 +1407,11 @@ window.__ModuleLoader__.load({
       return node
     }
 
-    /** 把一颗 nav 图标的图形换成插件同款年轮;已经是年轮就跳过(observer 会反复调到这里)。 */
-    function paintLogo(svg) {
+    /** 把一颗 nav 图标的图形换成年轮线稿;已经是线稿就跳过(observer 会反复调到这里)。 */
+    function paintNavIcon(svg) {
       if (svg.querySelector('[data-dsh-memory-logo]') !== null) return
-      svg.setAttribute('viewBox', LOGO_VIEW_BOX)
-      svg.replaceChildren(...LOGO_DOM.map(svgNode))
+      svg.setAttribute('viewBox', NAV_VIEW_BOX)
+      svg.replaceChildren(...NAV_DOM.map(svgNode))
     }
 
     /**
@@ -1462,7 +1430,7 @@ window.__ModuleLoader__.load({
             if (label !== NAV_LABEL) continue
             cell.classList?.add('dsh-memory-nav')
             const icon = cell.querySelector('[class*="_navIcon"]')
-            if (icon) paintLogo(icon)
+            if (icon) paintNavIcon(icon)
           }
         } catch { /* 换图失败:图标保持宿主原样 */ }
       }
@@ -1494,10 +1462,10 @@ window.__ModuleLoader__.load({
       MemoryPanel: MemoryPanel,
       CSS: CSS,
       shouldPollInstall: shouldPollInstall,
-      // 图标一致性护栏:测试会核对这两份图形与包内 icon.svg 是同一条年轮路径 / 同一组颜色
-      NavLogoIcon: NavLogoIcon,
-      LOGO_DOM: LOGO_DOM,
-      paintLogo: paintLogo,
+      // 图标一致性护栏:测试会核对两条渲染路径都是同一份 16px 单色线稿
+      NavLineIcon: NavLineIcon,
+      NAV_DOM: NAV_DOM,
+      paintNavIcon: paintNavIcon,
     }
     return module.exports
   },

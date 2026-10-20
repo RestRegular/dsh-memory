@@ -904,38 +904,41 @@ test('服务页底部:Star 与 issue 链接', async () => {
   assert.ok(links.includes('https://github.com/RestRegular/dsh-memory/issues/new'), 'issue 链接正确')
 })
 
-test('侧栏图标与插件列表 icon.svg 是同一只年轮(几何 + 配色)', async () => {
-  // 这条断言守的是"三个入口三个记号"的回归:侧栏入口、设置侧栏那一行、插件列表
-  // 曾经各画各的(芯片 / 齿轮 / 年轮)。现在几何与配色必须逐字来自 icon.svg。
+test('侧栏图标是单色线稿:16 网格、1.3 描边、currentColor,不带渐变', async () => {
+  // 这条断言守的是"侧栏里冒出一块彩色瓦片"的回归:插件列表用彩色 icon.svg,但
+  // 左侧栏 / 设置侧栏那一列全是单色线稿,记号必须用 currentColor 画。
   const { exports, hooks } = await loadBundle()
   hooks.resetAll()
-  const iconXml = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '..', 'icon.svg'), 'utf8')
-  const ring = iconXml.match(/<path d="(M18\.99[^"]+)"/)?.[1]
-  assert.ok(ring, 'icon.svg 应包含年轮螺旋路径')
-  const pluginColors = ['#3B2D20', '#120E0A', '#F8E2B4', '#BF8230']
-  for (const color of pluginColors) assert.ok(iconXml.includes(color), `icon.svg 缺少 ${color}`)
-
   type DomNode = { tag: string; attrs: Record<string, string | number>; children?: DomNode[] }
-  const { NavLogoIcon, LOGO_DOM } = exports.__test as {
-    NavLogoIcon: (p: Record<string, unknown>) => unknown
-    LOGO_DOM: DomNode[]
+  const { NavLineIcon, NAV_DOM } = exports.__test as {
+    NavLineIcon: (p: Record<string, unknown>) => unknown
+    NAV_DOM: DomNode[]
   }
 
-  const tree = render(hooks.createElement(NavLogoIcon, { size: 16 }), hooks)
-  assert.ok(tree, 'NavLogoIcon 应渲染出 SVG')
+  const tree = render(hooks.createElement(NavLineIcon, { size: 16 }), hooks)
+  assert.ok(tree, 'NavLineIcon 应渲染出 SVG')
   assert.equal(tree!.tag, 'svg')
-  assert.equal(tree!.props!.viewBox, '0 0 36 36', '与 icon.svg 共用 36 网格')
-  const nodes = collect(tree)
-  assert.ok(nodes.some((n) => n.tag === 'path' && n.props?.d === ring), '侧栏入口的年轮路径必须与 icon.svg 完全一致')
-  const colors = nodes.filter((n) => n.tag === 'stop').map((n) => String(n.props?.stopColor))
-  for (const color of pluginColors) assert.ok(colors.includes(color), `侧栏入口的渐变缺少 ${color}`)
+  assert.equal(tree!.props!.viewBox, '0 0 16 16', '与宿主侧栏图标共用 16 网格')
+  assert.equal(tree!.props!.fill, 'none')
 
-  const domPath = LOGO_DOM.find((n) => n.tag === 'path')
-  assert.equal(domPath?.attrs.d, ring, '设置侧栏那条路径也必须与 icon.svg 完全一致')
-  const domColors = LOGO_DOM
-    .filter((n) => n.tag === 'defs')
-    .flatMap((defs) => defs.children ?? [])
-    .flatMap((gradient) => gradient.children ?? [])
-    .map((stop) => String(stop.attrs['stop-color']))
-  for (const color of pluginColors) assert.ok(domColors.includes(color), `设置侧栏的渐变缺少 ${color}`)
+  const nodes = collect(tree)
+  const shapes = nodes.filter((n) => n.tag === 'rect' || n.tag === 'path')
+  assert.equal(shapes.length, 2, '线稿只有瓦片轮廓 + 年轮螺旋两条图形')
+  for (const shape of shapes) {
+    assert.equal(String(shape.props?.fill), 'none', `${String(shape.tag)} 必须是描边,不能填色`)
+    assert.equal(String(shape.props?.stroke), 'currentColor', `${String(shape.tag)} 必须跟随文字色`)
+    assert.equal(Number(shape.props?.strokeWidth), 1.3, `${String(shape.tag)} 线宽必须与宿主图标一致(1.3)`)
+  }
+  const spiral = nodes.find((n) => n.tag === 'path')
+  assert.ok(String(spiral?.props?.d).includes('A'), '年轮用圆弧画,不是折线')
+  assert.ok(!nodes.some((n) => n.tag === 'linearGradient' || n.tag === 'stop'), '侧栏图标不能带渐变')
+
+  // 设置侧栏走 DOM 那条路:两条图形必须与 React 侧完全一致
+  assert.equal(NAV_DOM.length, 2)
+  assert.equal(NAV_DOM.find((n) => n.tag === 'path')?.attrs.d, spiral?.props?.d)
+  for (const shape of NAV_DOM) {
+    assert.equal(String(shape.attrs.fill), 'none')
+    assert.equal(String(shape.attrs.stroke), 'currentColor')
+    assert.equal(String(shape.attrs['stroke-width']), '1.3')
+  }
 })
