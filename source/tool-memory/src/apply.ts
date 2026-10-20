@@ -120,4 +120,14 @@ export function apply(ctx: any, config: ToolMemoryConfig = {}) {
     const summary = scopeSummary(value, agent)
     return summary ? `${body}\n${summary}` : body
   })
+
+  register(tools.memory_get, (value, _args, exec) => {
+    if (value.records.length === 0) return '没有找到这些 id 对应的记忆。'
+    const body = value.records
+      .map((r) => `(${renderScope(r.scope, exec)}/${r.kind}) ${r.content}`)
+      .join('\n')
+    // missing 回显成调用方给的那个 token(通常是 8 位前缀)即可,回显完整 id 对它没用。
+    const missing = value.missing.length === 0 ? '' : `\n未找到 ${value.missing.length} 个：${value.missing.join('、')}`
+    return `${body}${missing}`
+  })
 }
