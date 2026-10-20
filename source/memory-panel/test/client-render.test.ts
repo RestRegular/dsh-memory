@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Render smoke test for the memory panel client bundle.
  *
  * The panel is hand-written plain JS served through the host's ModuleLoader, so
@@ -902,4 +902,40 @@ test('服务页底部:Star 与 issue 链接', async () => {
   const links = collect(tree()).filter((n) => n.tag === 'a').map((n) => String(n.props?.href))
   assert.ok(links.includes('https://github.com/RestRegular/dsh-memory'), `Star 链接正确(${JSON.stringify(links)})`)
   assert.ok(links.includes('https://github.com/RestRegular/dsh-memory/issues/new'), 'issue 链接正确')
+})
+
+test('侧栏图标与插件列表 icon.svg 是同一只年轮(几何 + 配色)', async () => {
+  // 这条断言守的是"三个入口三个记号"的回归:侧栏入口、设置侧栏那一行、插件列表
+  // 曾经各画各的(芯片 / 齿轮 / 年轮)。现在几何与配色必须逐字来自 icon.svg。
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const iconXml = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '..', 'icon.svg'), 'utf8')
+  const ring = iconXml.match(/<path d="(M18\.99[^"]+)"/)?.[1]
+  assert.ok(ring, 'icon.svg 应包含年轮螺旋路径')
+  const pluginColors = ['#3B2D20', '#120E0A', '#F8E2B4', '#BF8230']
+  for (const color of pluginColors) assert.ok(iconXml.includes(color), `icon.svg 缺少 ${color}`)
+
+  type DomNode = { tag: string; attrs: Record<string, string | number>; children?: DomNode[] }
+  const { NavLogoIcon, LOGO_DOM } = exports.__test as {
+    NavLogoIcon: (p: Record<string, unknown>) => unknown
+    LOGO_DOM: DomNode[]
+  }
+
+  const tree = render(hooks.createElement(NavLogoIcon, { size: 16 }), hooks)
+  assert.ok(tree, 'NavLogoIcon 应渲染出 SVG')
+  assert.equal(tree!.tag, 'svg')
+  assert.equal(tree!.props!.viewBox, '0 0 36 36', '与 icon.svg 共用 36 网格')
+  const nodes = collect(tree)
+  assert.ok(nodes.some((n) => n.tag === 'path' && n.props?.d === ring), '侧栏入口的年轮路径必须与 icon.svg 完全一致')
+  const colors = nodes.filter((n) => n.tag === 'stop').map((n) => String(n.props?.stopColor))
+  for (const color of pluginColors) assert.ok(colors.includes(color), `侧栏入口的渐变缺少 ${color}`)
+
+  const domPath = LOGO_DOM.find((n) => n.tag === 'path')
+  assert.equal(domPath?.attrs.d, ring, '设置侧栏那条路径也必须与 icon.svg 完全一致')
+  const domColors = LOGO_DOM
+    .filter((n) => n.tag === 'defs')
+    .flatMap((defs) => defs.children ?? [])
+    .flatMap((gradient) => gradient.children ?? [])
+    .map((stop) => String(stop.attrs['stop-color']))
+  for (const color of pluginColors) assert.ok(domColors.includes(color), `设置侧栏的渐变缺少 ${color}`)
 })
