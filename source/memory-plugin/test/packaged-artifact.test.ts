@@ -55,6 +55,29 @@ test('客户端 bundle 的注册 id 等于包名', () => {
   assert.equal(declared[1], meta.name)
 })
 
+test('插件列表里显示中文名 / 描述,而不是包名', () => {
+  const meta = JSON.parse(need('package.json'))
+  const expected = [
+    ['zh', '长期记忆'],
+    ['en', 'Long-term Memory'],
+  ] as const
+  for (const [lang, title] of expected) {
+    // 宿主用 Node ESM 解析 `<包>/locale/<lang>.json`;exports 少一行就静默回退成包名
+    assert.equal(meta.exports?.[`./locale/${lang}.json`], `./locale/${lang}.json`, `exports 必须导出 locale/${lang}.json`)
+    const locale = JSON.parse(need(`locale/${lang}.json`))
+    assert.equal(locale.meta?.title, title)
+    assert.ok(locale.meta?.description?.length > 0, `locale/${lang}.json 缺描述`)
+  }
+})
+
+test('图标:包内 SVG,体积在宿主上限(256 KiB)内', () => {
+  const meta = JSON.parse(need('package.json'))
+  assert.equal(meta.icon, './icon.svg')
+  const xml = need('icon.svg')
+  assert.ok(xml.trimStart().startsWith('<svg'), 'icon.svg 必须是 SVG 文档')
+  assert.ok(Buffer.byteLength(xml) < 256 * 1024, 'icon.svg 超过宿主 256 KiB 上限')
+})
+
 test('入口是一个,并且四条半边都在里面', () => {
   const entry = need('lib/index.js')
   for (const spec of ['./provider/apply.js', './tools/apply.js', './inject/apply.js', './panel.js']) {

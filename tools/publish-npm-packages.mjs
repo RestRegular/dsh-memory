@@ -149,7 +149,7 @@ try {
   const info = JSON.parse((packed.stdout ?? '[]').trim() || '[]')[0]
   console.log(`\n${meta.name}@${meta.version}: ${info?.entryCount ?? '?'} files, ${((info?.size ?? 0) / 1024).toFixed(1)} KiB packed`)
   const files = (info?.files ?? []).map((f) => f.path)
-  for (const required of ['package.json', 'cordis.patch.yml', 'lib/index.js', 'lib/client.js', 'lib/provider/scope.js']) {
+  for (const required of ['package.json', 'cordis.patch.yml', 'lib/index.js', 'lib/client.js', 'lib/provider/scope.js', 'icon.svg', 'locale/en.json', 'locale/zh.json']) {
     if (!files.includes(required)) throw new Error(`package is missing ${required}`)
   }
   const stray = files.filter((f) => /node_modules|\.ts$|\.test\./.test(f))

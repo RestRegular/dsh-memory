@@ -1,6 +1,6 @@
 # dsh-memory
 
-DeepSeek Harness 的本地长期记忆插件 —— **一个包、一条 Loader entry、四个半边**:JSONL 存储 + 本地向量检索(llama-server,OpenAI 兼容)+ 四个模型工具 + 自动召回注入 + 设置页管理面板。
+DeepSeek Harness 的本地长期记忆插件 —— **一个包、一条 Loader entry、四个半边**:JSONL 存储 + 本地向量检索(llama-server,OpenAI 兼容)+ 五个模型工具 + 自动召回注入 + 设置页管理面板。
 
 [![npm version](https://img.shields.io/npm/v/@restregular/dsh-memory.svg)](https://www.npmjs.com/package/@restregular/dsh-memory)
 [![license](https://img.shields.io/npm/l/@restregular/dsh-memory.svg)](./LICENSE)
@@ -257,7 +257,9 @@ npm run verify  # 构建到 .verify/,不落 packages/(CI 或改动后自检)
 1. patch **恰好一行** insert,且 `name` 就是包名;
 2. `package.json` 同时声明 `dsh.bundle.patch` 与 `dsh.client.platform: web`,并导出 `./client`;
 3. `lib/client.js` 的 `__ModuleLoader__.load({ id })` 等于包名;
-4. 入口里四条半边的相对 import 都在(改写没生效时,只有装到用户机器上才会 `Cannot find module`)。
+4. 入口里四条半边的相对 import 都在(改写没生效时,只有装到用户机器上才会 `Cannot find module`);
+5. `locale/en.json` / `locale/zh.json` 带 `meta.title` 与 `meta.description`,并且 `exports` 放行了这两个子路径(少一步,插件列表就静默回退成包名);
+6. `icon.svg` 是包内 SVG 且不超过宿主 256 KiB 的读取上限。
 
 可选的真实加载验证(证明产物在没有 TS 支持的普通 node 里能跑):
 
@@ -293,7 +295,7 @@ source/memory-plugin/     单入口:组合四个半边(唯一一条 entry 的实
 source/memory-local/      provider:存储 / 检索 / 向量后端 / 一键安装 / 模型清单与硬件推荐
 source/tool-memory/       四个模型工具
 source/memory-inject/     召回注入
-source/memory-panel/      面板:lib/index.js(服务端)+ lib/client.js(客户端 bundle)
+source/memory-panel/      面板:lib/index.js(服务端)+ lib/client.js(客户端 bundle)+ locale/icon.svg(插件列表显示名与图标)
 packages/dsh-memory/      构建产物 → 发布为 @restregular/dsh-memory(与 npm 上的包逐字节一致)
 tools/build-single-package.mjs   构建(产物契约检查 + 可选加载验证)
 ```
@@ -321,6 +323,10 @@ tools/build-single-package.mjs   构建(产物契约检查 + 可选加载验证)
 
 ## 版本
 
+- **0.9.1** —— 插件列表只显示包名的问题:**加了显示名与图标**。
+  - 宿主 `readPluginMeta` 只读包内 `locale/<lang>.json` 的 `meta.title` / `meta.description`(且必须能通过 `exports` 解析),缺失就回退成包名 —— 所以插件列表里一直是 `@restregular/dsh-memory` + 一长串 `package.json` 描述。现在 `locale/zh.json` 显示「**长期记忆**」,`locale/en.json` 显示「Long-term Memory」,描述也压成一行。
+  - 图标从蓝色芯片换成**年轮**:深咖 `#3B2D20 → #120E0A` 圆角瓦片 + 香槟金 `#F8E2B4 → #BF8230` 螺旋(记忆是时间累积出来的年轮)。刻意避开插件列表里扎堆的蓝/白底,30px 行高下仍是一条完整的线。
+  - 构建与产物测试补了护栏:`locale` 两个文件 + `exports` 放行 + `icon.svg` 体积/格式,任何一项缺失都会构建失败(否则只会静默显示成包名)。
 - **0.9.0** —— **规则变更会跟进旧会话**:
   - 以前在别的会话里新加一条 `kind=rule`,旧会话继续聊时只有系统提示段的文本会刷新 —— 不产生对话消息,模型未必会重读;而且规则段有 300 token 预算,新规则可能被更重要的旧规则挤出常驻段。
   - 现在每轮第一步比一次「该系统提示里的规则行 ∪ 历史里注入过的增量行」与当前规则,把新增/改过的补成一条 `source.kind='memory'` 消息(与召回/摘要同一条卡片来源),只提醒没出现过的;新会话第一步不补(系统提示本来就全有)。

@@ -20,6 +20,8 @@
  *   lib/inject/*.js       agent/pre-step 召回注入
  *   lib/panel.js          面板服务端路由(含同源/登录围栏)
  *   lib/client.js         面板客户端 bundle(注册 id == 包名,由 preflight 检查)
+ *   locale/*.json         插件列表的显示名 / 描述(宿主 readPluginMeta 读 meta.title)
+ *   icon.svg              插件列表图标(包内 SVG,宿主按 30/36px 渲染)
  *   cordis.patch.yml      一行纯 insert(可热挂载)
  *
  * 构建方式沿用旧脚本:node 内置的类型剥离(无工具链),相对 .ts 说明符改写为 .js,
@@ -210,19 +212,25 @@ mkdirSync(join(OUT, 'lib'), { recursive: true })
 transpileFile(join(panelDir, 'lib', 'index.js'), join(OUT, 'lib', 'panel.js'))
 cpSync(join(panelDir, 'lib', 'client.js'), join(OUT, 'lib', 'client.js'))
 cpSync(join(panelDir, 'icon.svg'), join(OUT, 'icon.svg'))
+// 显示名 / 描述由宿主的 readPluginMeta 读 `<包>/locale/<lang>.json` 的 meta.title /
+// meta.description,并且**必须通过 exports 能解析到**(Node ESM 解析)。所以 locale
+// 目录要原样进包,exports 也要放行。
+cpSync(join(panelDir, 'locale'), join(OUT, 'locale'), { recursive: true })
 
 writeJson(join(OUT, 'package.json'), {
   name: NAME,
   version: VERSION,
-  description: 'DeepSeek Harness 本地长期记忆(单包单入口):JSONL 存储 + 本地向量检索(BGE-M3)+ 四个模型工具 + 自动召回注入 + 管理面板。',
+  description: 'DeepSeek Harness 本地长期记忆(单包单入口):JSONL 存储 + 本地向量检索(BGE-M3)+ 五个模型工具 + 自动召回注入 + 管理面板。',
   icon: './icon.svg',
   type: 'module',
   exports: {
     '.': './lib/index.js',
     './client': './lib/client.js',
+    './locale/en.json': './locale/en.json',
+    './locale/zh.json': './locale/zh.json',
     './package.json': './package.json',
   },
-  files: ['lib/', 'cordis.patch.yml', 'icon.svg', 'README.md', 'LICENSE'],
+  files: ['lib/', 'locale/', 'cordis.patch.yml', 'icon.svg', 'README.md', 'LICENSE'],
   dsh: {
     bundle: { patch: './cordis.patch.yml' },
     client: { inject: ['@deepseek-ai/dsh-client-ui-slots'], platform: 'web' },
@@ -279,6 +287,23 @@ if (meta.name !== NAME) { console.error(`PACKAGE NAME FAIL: ${meta.name} != ${NA
 if (meta.dsh?.bundle?.patch === undefined) { console.error('PACKAGE FAIL: missing dsh.bundle.patch'); bad++ }
 if (meta.dsh?.client?.platform !== 'web') { console.error('PACKAGE FAIL: missing dsh.client.platform=web'); bad++ }
 if (meta.exports?.['./client'] !== './lib/client.js') { console.error('PACKAGE FAIL: missing exports["./client"]'); bad++ }
+// 显示名 / 描述:宿主只读包内 locale/<lang>.json,而且必须能通过 exports 解析到
+// (Node ESM 解析)。缺任何一步都**静默**回退成包名 / package.json description ——
+// 插件列表里就还是 @restregular/dsh-memory 那一长串。
+for (const lang of ['en', 'zh']) {
+  const file = join(OUT, 'locale', `${lang}.json`)
+  if (!existsSync(file)) { console.error(`LOCALE FAIL: missing locale/${lang}.json`); bad++; continue }
+  let locale
+  try { locale = JSON.parse(readFileSync(file, 'utf8')) } catch (error) { console.error(`LOCALE FAIL: locale/${lang}.json is not JSON: ${error.message}`); bad++; continue }
+  if (typeof locale?.meta?.title !== 'string' || locale.meta.title.trim() === '') { console.error(`LOCALE FAIL: locale/${lang}.json lacks meta.title`); bad++ }
+  if (typeof locale?.meta?.description !== 'string' || locale.meta.description.trim() === '') { console.error(`LOCALE FAIL: locale/${lang}.json lacks meta.description`); bad++ }
+  if (meta.exports?.[`./locale/${lang}.json`] !== `./locale/${lang}.json`) { console.error(`LOCALE FAIL: exports is missing "./locale/${lang}.json"`); bad++ }
+}
+// 图标:宿主只接受包内 svg/png/jpeg/webp 且 ≤256 KiB。
+const iconFile = join(OUT, 'icon.svg')
+if (!existsSync(iconFile)) { console.error('ICON FAIL: missing icon.svg'); bad++ }
+else if (statSync(iconFile).size > 256 * 1024) { console.error(`ICON FAIL: icon.svg exceeds 256 KiB (${statSync(iconFile).size} bytes)`); bad++ }
+else if (!readFileSync(iconFile, 'utf8').trimStart().startsWith('<svg')) { console.error('ICON FAIL: icon.svg is not an SVG document'); bad++ }
 // 客户端 bundle:注册 id 必须 == 包名(client-modules 按包名建图行)
 const client = readFileSync(join(OUT, 'lib', 'client.js'), 'utf8')
 const declared = client.match(/__ModuleLoader__\.load\(\{\s*id:\s*'([^']+)'/)
