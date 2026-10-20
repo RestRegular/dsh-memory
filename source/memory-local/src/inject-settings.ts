@@ -34,6 +34,12 @@ export interface RulesSettings {
   enabled: boolean
   maxItems: number
   tokenBudget: number
+  /**
+   * 规则变更提醒:旧会话在下一轮第一步补一条「新增/变更的规则」消息。
+   * 系统提示段每步都会刷新,但那条更新不产生对话消息,模型未必会重读;
+   * 规则段又有预算上限,新规则可能被旧规则挤掉 —— 所以补这一条。
+   */
+  delta: boolean
 }
 
 export interface TurnEndSettings {
@@ -61,7 +67,7 @@ export const defaultInjectSettings: InjectSettings = {
   digest: { enabled: true, topK: 8, tokenBudget: 400 },
   impression: { enabled: true, chars: 120 },
   policy: { enabled: true },
-  rules: { enabled: true, maxItems: 10, tokenBudget: 300 },
+  rules: { enabled: true, maxItems: 10, tokenBudget: 300, delta: true },
   turnEnd: { enabled: false },
   sidebar: { enabled: false },
 }
@@ -122,6 +128,7 @@ export function normalizeInjectSettings(raw: unknown, base: InjectSettings = def
       enabled: bool(rules.enabled, base.rules.enabled),
       maxItems: clampInt(rules.maxItems, 1, 40, base.rules.maxItems),
       tokenBudget: clampInt(rules.tokenBudget, 50, 4000, base.rules.tokenBudget),
+      delta: bool(rules.delta, base.rules.delta),
     },
     turnEnd: { enabled: bool(turnEnd.enabled, base.turnEnd.enabled) },
     sidebar: { enabled: bool(sidebar.enabled, base.sidebar.enabled) },

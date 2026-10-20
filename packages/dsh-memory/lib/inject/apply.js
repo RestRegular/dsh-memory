@@ -6,6 +6,7 @@
  *  2. digest     —— 会话第一步给一次"已有记忆"的摘要
  *  3. policy     —— 系统提示里的「记忆使用策略」常驻段
  *  4. rules      —— 系统提示里的「硬性规则」段(kind='rule' 的记忆)
+ * 另有 rulesDelta —— 旧会话在下一轮补一条新增/变更的规则(0.9.0;随 rules 开关)
  * 另有 turnEnd —— 轮末提醒(下一轮开头提示"上一轮若有结论就记一条"),默认关。
  *
  * Message construction MUST go through createUserMessage: the loop reads
@@ -33,6 +34,7 @@ import {
 } from './inject.js'
 import { renderDigestBlock } from './digest.js'
 import { renderRulesBlock } from './rules.js'
+import { ruleDeltaText } from './rules-delta.js'
 import { POLICY_TEXT } from './policy.js'
 import { normalizeInjectSettings,                     } from '../provider/inject-settings.js'
 
@@ -174,13 +176,20 @@ export function apply(ctx         , config                     = {}) {
 
     // 摘要(每个会话一次)、召回(每轮有新内容时)、轮末提醒(下一轮首步)合成
     // 同一条消息:内容没变就什么都不加,避免一步两张卡片。
+    const settings = enabled ? settingsOf() : undefined
     const parts           = []
+    // 规则增量:别的会话新加/改过的规则,在本轮第一步给旧会话补一次。
+    // `delta !== false` 而不是 `=== true`:老 provider 的 settings 快照没有这个
+    // 字段时要按"开"处理,否则升级当天等于静默关掉。
+    if (settings && step === 1 && settings.rules.enabled && settings.rules.delta !== false) {
+      const delta = ruleDeltaText(agent, memory, settings.rules)
+      if (delta) parts.push(delta)
+    }
     if (pendingNudge && step === 1) {
       pendingNudge = false
       parts.push(NUDGE_TEXT)
     }
-    if (enabled) {
-      const settings = settingsOf()
+    if (settings) {
       if (settings.digest.enabled) {
         const digest = await digester.maybeDigest(sessionIdOf(agent), scopes, (records) =>
           renderDigestBlock(records, settings.digest)?.text ?? null)

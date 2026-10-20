@@ -26,6 +26,9 @@ test('normalizeInjectSettings: 默认值、越界夹紧、脏数据不炸', () =
   assert.equal(clamped.recall.tokenBudget, 50)
   assert.equal(clamped.impression.chars, 40)
   assert.equal(clamped.rules.maxItems, 1)
+  // 规则变更提醒默认开:老 settings.json 没有这个字段时不能静默关掉
+  assert.equal(clamped.rules.delta, true)
+  assert.equal(normalizeInjectSettings({ rules: { delta: false } }).rules.delta, false)
 })
 
 test('normalizeInjectSettings: 老的扁平 inject 配置映射到 recall', () => {

@@ -773,7 +773,7 @@ test('设置标签页:读取注入设置、渲染各组开关并能保存', asyn
     digest: { enabled: true, topK: 8, tokenBudget: 400 },
     impression: { enabled: true, chars: 120 },
     policy: { enabled: true },
-    rules: { enabled: true, maxItems: 10, tokenBudget: 300 },
+    rules: { enabled: true, maxItems: 10, tokenBudget: 300, delta: true },
     turnEnd: { enabled: false },
   }
   const calls: Array<{ url: string; method?: string; body?: string }> = []
@@ -833,7 +833,7 @@ test('记录页:点「新建」出现表单,可选 rule 类型;设置页有导�
       digest: { enabled: true, topK: 8, tokenBudget: 400 },
       impression: { enabled: true, chars: 120 },
       policy: { enabled: true },
-      rules: { enabled: true, maxItems: 10, tokenBudget: 300 },
+      rules: { enabled: true, maxItems: 10, tokenBudget: 300, delta: true },
       turnEnd: { enabled: false },
     } }) }
     return { status: 200, json: async () => ({ ok: true, value: { records: [] } }) }

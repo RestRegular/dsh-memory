@@ -678,12 +678,13 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'rules', title: '硬性规则',
-        desc: '把 kind=rule 的记忆放进系统提示常驻段。',
+        desc: '把 kind=rule 的记忆放进系统提示常驻段；旧会话下一轮补一条新增/变更的规则。',
         hint: '关闭只影响系统提示常驻段，记忆本身仍可被检索',
         fields: [
           { k: 'enabled', label: '启用', type: 'bool' },
           { k: 'maxItems', label: '最多条数', type: 'num', min: 1, max: 40, step: 1 },
           { k: 'tokenBudget', label: 'token 预算', type: 'num', min: 50, max: 4000, step: 50 },
+          { k: 'delta', label: '变更提醒', type: 'bool', hint: '旧会话在下一轮第一步补一条「新增/变更的规则」，同一条只提醒一次' },
         ],
       },
       {
@@ -789,7 +790,7 @@ window.__ModuleLoader__.load({
               ? h(Switch, {
                   key: field.k,
                   checked: Boolean(value[field.k]),
-                  title: group.hint || field.label,
+                  title: field.hint || group.hint || field.label,
                   onChange: (next) => patch(group.key, field.k, next),
                 })
               : h('label', { className: 'set-field', key: field.k }, field.label, ' ',
