@@ -46,9 +46,15 @@ import { InjectionState } from './state.js'
 import { InjectAuditStore, auditBudget, auditQuery,                            } from './audit.js'
 import {
   BehaviorSignalStore,
+  assistantVisibleText,
+  commandText,
   detectPhase,
   failureSignal,
+  goalText,
   highRiskSignal,
+  textTagSignal,
+  todoText,
+  toolCallDescription,
   toolResultFailure,
                       
 } from './signals.js'
@@ -108,7 +114,9 @@ export function apply(ctx         , config                     = {}) {
   const injectionState = new InjectionState()
   const audit = new InjectAuditStore()
   const signals = new BehaviorSignalStore()
-  const callNames = new Map                ()
+  const callMeta = new Map                                                ()
+  const sessionScopes = new Map                  ()
+  const tagCache = new Map                                        ()
   let attachedMemory          = null
 
   const attachAudit = (memory         )       => {
@@ -124,12 +132,12 @@ export function apply(ctx         , config                     = {}) {
     audit.record({ at: Date.now(), ...entry })
   }
 
-  const rememberCallName = (callId         , name        )       => {
+  const rememberCallMeta = (callId         , name        , description         )       => {
     if (typeof callId !== 'string' || callId === '') return
-    callNames.set(callId, name)
-    if (callNames.size > 500) {
-      const oldest = callNames.keys().next()
-      if (!oldest.done) callNames.delete(oldest.value)
+    callMeta.set(callId, { name, ...(description !== undefined ? { description } : {}) })
+    if (callMeta.size > 500) {
+      const oldest = callMeta.keys().next()
+      if (!oldest.done) callMeta.delete(oldest.value)
     }
   }
 
@@ -143,6 +151,78 @@ export function apply(ctx         , config                     = {}) {
 
   // One injector per activation: its repeat-suppression state must live across
   // the steps of a turn (a per-step instance would re-inject every step).
+  const scopesForSession = (sessionId        , memory                     , session         )           => {
+    const known = sessionScopes.get(sessionId)
+    if (known !== undefined) return known
+    try {
+      const resolved = memory.resolveReadScopes?.({ session })                        
+      if (Array.isArray(resolved)) {
+        sessionScopes.set(sessionId, resolved)
+        return resolved
+      }
+    } catch { /* 拿不到就用空集合;下次 pre-step 会补 */ }
+    return []
+  }
+
+  /**
+   * 触发词 = 设置里的额外标签 ∪ 当前记忆库里已有的标签(可关)。
+   * 后者让“记忆标签”本身成为触发词,不需要用户把每个标签抄进设置。
+   * listSync 只读内存快照;30 秒缓存避免每条 assistant 消息都扫一遍。
+   */
+  const triggerTags = (
+    memory                                 ,
+    sessionId        ,
+    scopes                   ,
+    auto                              ,
+  )           => {
+    const configured = auto.tags
+    if (!auto.useMemoryTags || !memory?.listSync) return configured
+    const cacheKey = `${sessionId}|${scopes.join('|')}`
+    const now = Date.now()
+    const cached = tagCache.get(cacheKey)
+    if (cached !== undefined && now - cached.at < 30_000) return cached.tags
+    const tags           = []
+    const seen = new Set        ()
+    const add = (tag        )       => {
+      const value = tag.trim()
+      const key = value.toLowerCase()
+      if (value === '' || seen.has(key)) return
+      seen.add(key)
+      tags.push(value)
+    }
+    for (const tag of configured) add(tag)
+    try {
+      const records = memory.listSync({ scopes: [...scopes], limit: 1000 })
+      for (const record of records) for (const tag of record.tags ?? []) add(String(tag))
+    } catch { /* 读不到记忆标签就只用配置标签 */ }
+    const limited = tags.slice(0, 200)
+    tagCache.set(cacheKey, { at: now, tags: limited })
+    if (tagCache.size > 200) {
+      const oldest = tagCache.keys().next()
+      if (!oldest.done) tagCache.delete(oldest.value)
+    }
+    return limited
+  }
+
+  const observeSignal = (sessionId        , signal                            )       => {
+    if (!signal || !signals.note(sessionId, signal)) return
+    recordAudit({
+      sessionId,
+      trigger: signal.reason,
+      phase: signal.phase,
+      query: signal.query,
+      candidates: 0, contentIds: [], hintIds: [], omitted: [], dedupSkipped: 0, budgets: {},
+      retrieval: { ok: true, count: 0 },
+      signal: {
+        reason: signal.reason,
+        ...(signal.errorClass ? { errorClass: signal.errorClass } : {}),
+        ...(signal.tool ? { tool: signal.tool } : {}),
+        ...(signal.tag ? { tag: signal.tag } : {}),
+        ...(signal.source ? { source: signal.source } : {}),
+      },
+    })
+  }
+
   const injector = new MemoryInjector(
     async (query, signal, scopes) => {
       const memory = ctx.get('memory')                                
@@ -191,21 +271,30 @@ export function apply(ctx         , config                     = {}) {
           injectionState.clear(sessionId)
           signals.clear(sessionId)
           digester.reset(sessionId)
-          callNames.clear()
+          sessionScopes.delete(sessionId)
+          for (const key of tagCache.keys()) if (key.startsWith(`${sessionId}|`)) tagCache.delete(key)
+          callMeta.clear()
           return
         }
+        const settings = enabled ? settingsOf() : undefined
+        const auto = settings?.autoRecall
+        if (!auto?.enabled) return
+        const scopes = scopesForSession(sessionId, memory                       , session)
+        const tags = triggerTags(memory                                   , sessionId, scopes, auto)
+
         if (type === 'tool/call') {
           const tool = typeof data.name === 'string' ? data.name : 'tool'
-          const args = typeof data.arguments === 'string' ? data.arguments : ''
-          rememberCallName(data.callId, tool)
-          const signal = highRiskSignal(tool, args)
-          if (signal && signals.note(sessionId, signal)) {
-            recordAudit({
-              sessionId, trigger: signal.reason, phase: signal.phase, query: signal.query,
-              candidates: 0, contentIds: [], hintIds: [], omitted: [], dedupSkipped: 0, budgets: {},
-              retrieval: { ok: true, count: 0 }, signal: { reason: signal.reason, tool: signal.tool },
-            })
-          }
+          const args = typeof data.arguments === 'string'
+            ? data.arguments
+            : (() => { try { return JSON.stringify(data.arguments ?? '') } catch { return '' } })()
+          const description = auto.useToolDescription ? toolCallDescription(data.arguments) : undefined
+          rememberCallMeta(data.callId, tool, description)
+          observeSignal(sessionId, highRiskSignal(tool, args, {
+            tags,
+            ...(description !== undefined ? { description } : {}),
+            useToolDescription: auto.useToolDescription,
+            maxQueryChars: auto.maxQueryChars,
+          }))
           return
         }
         if (type === 'tool/result') {
@@ -213,16 +302,29 @@ export function apply(ctx         , config                     = {}) {
           if (!failure.isError) return
           const message = data.message                                                 
           const callId = message?.source?.callId
-          const tool = typeof callId === 'string' ? callNames.get(callId) : undefined
-          const signal = failureSignal(tool, failure.code, failure.message)
-          if (signals.note(sessionId, signal)) {
-            recordAudit({
-              sessionId, trigger: signal.reason, phase: signal.phase, query: signal.query,
-              candidates: 0, contentIds: [], hintIds: [], omitted: [], dedupSkipped: 0, budgets: {},
-              retrieval: { ok: true, count: 0 },
-              signal: { reason: signal.reason, ...(signal.errorClass ? { errorClass: signal.errorClass } : {}), ...(signal.tool ? { tool: signal.tool } : {}) },
-            })
-          }
+          const meta = typeof callId === 'string' ? callMeta.get(callId) : undefined
+          const description = auto.useToolDescription ? meta?.description : undefined
+          observeSignal(sessionId, failureSignal(meta?.name, failure.code, failure.message, {
+            ...(description !== undefined ? { description } : {}),
+            maxQueryChars: auto.maxQueryChars,
+          }))
+          return
+        }
+        // 可见 assistant 输出 / 任务清单 / 命令 / goal:命中记忆标签就排队一次召回。
+        // 只读 text 块,不读 reasoning/隐藏思维链。
+        if (type === 'assistant/message' || type === 'todo/write' || type === 'command/run' || type === 'goal/change') {
+          const text = type === 'assistant/message' ? assistantVisibleText(event)
+            : type === 'todo/write' ? todoText(event)
+              : type === 'command/run' ? commandText(event)
+                : goalText(event)
+          const source = type === 'assistant/message' ? 'assistant'
+            : type === 'todo/write' ? 'todo'
+              : type === 'command/run' ? 'command' : 'goal'
+          observeSignal(sessionId, text === undefined ? undefined : textTagSignal(text, {
+            tags,
+            source,
+            maxQueryChars: auto.maxQueryChars,
+          }))
           return
         }
       } catch { /* 观察者失败绝不影响会话事件发布 */ }
@@ -288,6 +390,7 @@ export function apply(ctx         , config                     = {}) {
 
     const sessionId = sessionIdOf(agent)
     const scopes = readScopesFor(memory, agent)
+    if (sessionId !== undefined && scopes !== undefined) sessionScopes.set(sessionId, [...scopes])
     const exclude = excludedIds(memory, scopes)
     const signal = sessionId === undefined ? undefined : signals.take(sessionId)
     const userQuery = pickQueryText(input.messages         )

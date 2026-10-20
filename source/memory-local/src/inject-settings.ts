@@ -46,6 +46,37 @@ export interface RulesSettings {
   delta: boolean
 }
 
+/**
+ * 自动召回的“模式”就是一组**标签**。工具调用的 name / description / 参数
+ * 命中任一标签时触发一次定向召回;失败调用则始终用 description 触发。
+ * 标签来自用户的记忆数据(如 release / database / credentials),可在设置里增删,
+ * 不需要写正则,也不只服务发布部署。
+ */
+export interface AutoRecallSettings {
+  enabled: boolean
+  /** 失败工具调用优先用它的 description 作为检索查询。 */
+  useToolDescription: boolean
+  /** 查询最大字符数,防止把整段命令/描述塞进 embedding。 */
+  maxQueryChars: number
+  /** 额外触发标签;还会自动并入当前记忆库里已有的标签。 */
+  tags: string[]
+  /** 是否自动使用记忆库里的标签作为触发词。 */
+  useMemoryTags: boolean
+}
+
+/** 默认触发标签:覆盖发布、部署、数据库、凭据、破坏性操作、依赖、远程等域。 */
+export const DEFAULT_AUTO_RECALL_TAGS: string[] = [
+  'release', 'publish', 'deploy', 'deployment', 'rollback', 'restore', 'backup',
+  'database', 'migration', 'migrate', 'schema', 'credentials', 'credential', 'auth', 'token',
+  'secret', 'login', 'permission', 'security', 'destructive', 'delete', 'drop', 'truncate',
+  'install', 'upgrade', 'network', 'ssh', 'server', 'git', 'push', 'github', 'npm',
+  'devcred', 'docker', 'kubectl', 'terraform', 'production', 'prod',
+  '发布', '推送', '部署', '回滚', '恢复', '备份', '数据库', '迁移', '凭据', '认证',
+  '权限', '安全', '删除', '清空', '安装', '升级', '网络', '服务器', '生产',
+]
+
+
+
 export interface TurnEndSettings {
   /** 轮末提醒:下一轮开头提示"上一轮若有可复用结论就记一条"。默认关闭。 */
   enabled: boolean
@@ -62,6 +93,7 @@ export interface InjectSettings {
   impression: ImpressionSettings
   policy: PolicySettings
   rules: RulesSettings
+  autoRecall: AutoRecallSettings
   turnEnd: TurnEndSettings
   sidebar: SidebarSettings
 }
@@ -72,6 +104,13 @@ export const defaultInjectSettings: InjectSettings = {
   impression: { enabled: true, chars: 120 },
   policy: { enabled: true },
   rules: { enabled: true, maxItems: 10, tokenBudget: 300, delta: true },
+  autoRecall: {
+    enabled: true,
+    useToolDescription: true,
+    maxQueryChars: 240,
+    tags: DEFAULT_AUTO_RECALL_TAGS,
+    useMemoryTags: true,
+  },
   turnEnd: { enabled: false },
   sidebar: { enabled: false },
 }
@@ -110,8 +149,21 @@ export function normalizeInjectSettings(raw: unknown, base: InjectSettings = def
   const impression = section('impression')
   const policy = section('policy')
   const rules = section('rules')
+  const autoRecall = section('autoRecall')
   const turnEnd = section('turnEnd')
   const sidebar = section('sidebar')
+  const rawTags = Array.isArray(autoRecall.tags) ? autoRecall.tags : base.autoRecall.tags
+  const normalizedTags: string[] = []
+  const seenTags = new Set<string>()
+  for (const raw of rawTags.slice(0, 60)) {
+    if (typeof raw !== 'string') continue
+    const tag = raw.trim()
+    if (tag === '') continue
+    const key = tag.toLowerCase()
+    if (seenTags.has(key)) continue
+    seenTags.add(key)
+    normalizedTags.push(tag)
+  }
   return {
     recall: {
       enabled: bool(recall.enabled, base.recall.enabled),
@@ -135,6 +187,13 @@ export function normalizeInjectSettings(raw: unknown, base: InjectSettings = def
       maxItems: clampInt(rules.maxItems, 1, 40, base.rules.maxItems),
       tokenBudget: clampInt(rules.tokenBudget, 50, 4000, base.rules.tokenBudget),
       delta: bool(rules.delta, base.rules.delta),
+    },
+    autoRecall: {
+      enabled: bool(autoRecall.enabled, base.autoRecall.enabled),
+      useToolDescription: bool(autoRecall.useToolDescription, base.autoRecall.useToolDescription),
+      maxQueryChars: clampInt(autoRecall.maxQueryChars, 40, 500, base.autoRecall.maxQueryChars),
+      tags: normalizedTags,
+      useMemoryTags: bool(autoRecall.useMemoryTags, base.autoRecall.useMemoryTags),
     },
     turnEnd: { enabled: bool(turnEnd.enabled, base.turnEnd.enabled) },
     sidebar: { enabled: bool(sidebar.enabled, base.sidebar.enabled) },

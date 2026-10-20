@@ -8,12 +8,19 @@ import { InjectAuditStore, auditQuery } from '../src/audit.ts'
 import {
   BehaviorSignalStore,
   detectPhase,
+  assistantVisibleText,
+  commandText,
   failureSignal,
+  goalText,
   highRiskSignal,
+  textHasTag,
+  textTagSignal,
+  todoText,
+  toolCallDescription,
   toolResultFailure,
 } from '../src/signals.ts'
 import { MemoryInjector, defaultInjectConfig } from '../src/inject.ts'
-import { defaultInjectSettings, type DigestSettings, type RulesSettings } from '../../memory-local/src/inject-settings.ts'
+import { DEFAULT_AUTO_RECALL_TAGS, defaultInjectSettings, type DigestSettings, type RulesSettings } from '../../memory-local/src/inject-settings.ts'
 
 const digestCfg: DigestSettings = defaultInjectSettings.digest
 const rulesCfg: RulesSettings = defaultInjectSettings.rules
@@ -164,14 +171,41 @@ test('审计查询脱敏:不把凭据形状写进审计', () => {
   assert.ok(query!.includes('[REDACTED:'))
 })
 
-test('行为信号:高风险工具/失败分类/阶段判断', () => {
-  assert.equal(highRiskSignal('bash', 'npm publish --access public')?.reason, 'before_high_risk_tool')
-  assert.equal(highRiskSignal('bash', 'git push origin main')?.phase, 'release')
-  assert.equal(highRiskSignal('bash', 'ls -la'), undefined)
+test('行为信号:标签触发、失败分类、description 优先', () => {
+  const tags = DEFAULT_AUTO_RECALL_TAGS
+  assert.equal(highRiskSignal('bash', 'npm publish --access public', { tags })?.reason, 'before_high_risk_tool')
+  assert.equal(highRiskSignal('bash', 'git push origin main', { tags })?.phase, 'release')
+  assert.equal(highRiskSignal('bash', 'ls -la', { tags }), undefined)
+  assert.equal(highRiskSignal('bash', '部署到生产环境', { tags })?.phase, 'deploy')
+  assert.ok(['migrate', 'migration', 'database', 'deploy'].includes(highRiskSignal('bash', 'prisma migrate deploy', { tags })?.tag ?? ''))
+  assert.equal(highRiskSignal('bash', 'drop table users', { tags })?.tag, 'drop')
+  assert.equal(highRiskSignal('bash', 'npm publish', { tags, description: '发布 dsh-memory 0.9.7', useToolDescription: true })?.query, '发布 dsh-memory 0.9.7')
+  // 自定义标签:不依赖内置列表
+  assert.equal(highRiskSignal('bash', 'docker build .', { tags: ['build'] })?.tag, 'build')
+  assert.equal(textHasTag('deploy the production service', 'deploy'), true)
+  assert.equal(textHasTag('redeploy', 'deploy'), false, '词内子串不命中')
+  assert.equal(textHasTag('部署到生产', 'deploy'), true, '英文标签匹配中文文本')
+  assert.equal(textHasTag('release the package', '发布'), true, '中文标签匹配英文文本')
+  assert.equal(toolCallDescription(JSON.stringify({ description: '部署到测试环境' })), '部署到测试环境')
+  const textSignal = textTagSignal('准备发布新版本', { tags: ['发布', 'release'], source: 'assistant' })
+  assert.equal(textSignal?.tag, '发布')
+  assert.equal(textSignal?.reason, 'text_tag_match')
+  assert.ok(textSignal?.query.includes('发布'))
+  assert.equal(textTagSignal('完全无关的内容', { tags: ['发布'] }), undefined)
+  assert.equal(assistantVisibleText({ data: { message: { content: [{ type: 'reasoning', text: '隐藏推理' }, { type: 'text', text: '部署到生产' }] } } }), '部署到生产', '只取可见 text 块')
+  assert.equal(todoText({ data: { todos: [{ content: '发布包' }, { content: '写文档' }] } }), ['发布包', '写文档'].join(String.fromCharCode(10)))
+  assert.equal(commandText({ data: { name: 'deploy', args: '--prod' } }), 'deploy --prod')
+  assert.equal(goalText({ data: { goal: { objective: '数据库迁移' } } }), '数据库迁移')
+  assert.equal(toolCallDescription('not json'), undefined)
   assert.equal(failureSignal('bash', 'E401', 'unauthorized')?.errorClass, 'MISSING_CREDENTIAL')
   assert.equal(failureSignal('bash', 'ETIMEDOUT', 'timed out')?.errorClass, 'TIMEOUT')
   assert.equal(failureSignal('bash', undefined, 'aborted by user')?.errorClass, 'ABORTED_UNKNOWN')
   assert.equal(failureSignal('bash', 'EACCES', 'permission denied')?.errorClass, 'PERMISSION_DENIED')
+  const described = failureSignal('bash', 'E401', 'unauthorized', { description: '部署到测试环境时缺少凭据' })
+  assert.ok(described.query.includes('部署到测试环境时缺少凭据'))
+  assert.ok(described.query.includes('credentials'))
+  const other = failureSignal('bash', 'E401', 'unauthorized', { description: '发布 npm 包' })
+  assert.notEqual(described.key, other.key, '不同 description 应可各自触发一次')
   assert.equal(detectPhase('npm publish'), 'release')
   assert.equal(detectPhase('实现一个标签页'), 'development')
   assert.equal(detectPhase('随便聊聊'), 'unknown')
@@ -186,7 +220,7 @@ test('行为信号:高风险工具/失败分类/阶段判断', () => {
   assert.equal(failure.code, 'E401')
 
   const store = new BehaviorSignalStore()
-  const signal = highRiskSignal('bash', 'git push origin main')!
+  const signal = highRiskSignal('bash', 'git push origin main', { tags })!
   assert.equal(store.note('s1', signal), true)
   assert.equal(store.note('s1', signal), false, '相同信号不重复排队')
   assert.equal(store.take('s1')?.key, signal.key)

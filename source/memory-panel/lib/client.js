@@ -164,6 +164,9 @@ window.__ModuleLoader__.load({
       '.memp .switch .knob{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .12s ease;box-shadow:0 1px 2px rgba(0,0,0,.25)}',
       '.memp .switch.on .knob{left:16px}',
       '.memp .setfoot{display:flex;align-items:center;gap:10px;padding-top:12px}',
+      '.memp .autorecall{flex:1 1 100%;display:flex;flex-direction:column;gap:6px;margin-top:6px}',
+      '.memp .autorecall textarea{min-height:150px;font-family:var(--ds-font-family-code, ui-monospace, monospace);font-size:11px;line-height:1.5}',
+      '.memp .autorecall .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}',
       '.memp .create{padding:10px 12px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;margin:8px 0;background:var(--dsw-alias-bg-layer-2)}',
       '.memp .create .row{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}',
       '.memp .create textarea{width:100%;min-height:64px}',
@@ -1573,6 +1576,16 @@ window.__ModuleLoader__.load({
         ],
       },
       {
+        key: 'autoRecall', title: '自动召回',
+        desc: '从可见文本（assistant 输出、任务清单、命令/工具描述、失败信息）匹配记忆标签，命中即检索。',
+        fields: [
+          { k: 'enabled', label: '启用', type: 'bool' },
+          { k: 'useToolDescription', label: '用工具 description', type: 'bool', hint: '失败/命中时优先用工具调用自己写的 description 做检索' },
+          { k: 'useMemoryTags', label: '用记忆标签', type: 'bool', hint: '自动把记忆库里已有的标签并入触发词' },
+          { k: 'maxQueryChars', label: '查询字数', type: 'num', min: 40, max: 500, step: 10 },
+        ],
+      },
+      {
         key: 'turnEnd', title: '轮末提醒',
         desc: '下一轮开头提醒把本轮结论落盘，默认关闭。',
         fields: [{ k: 'enabled', label: '启用', type: 'bool' }],
@@ -1583,6 +1596,32 @@ window.__ModuleLoader__.load({
         fields: [{ k: 'enabled', label: '启用', type: 'bool' }],
       },
     ]
+
+    /**
+     * 自动召回“模式”编辑器:模式就是一组标签,每行一个。
+     * 工具 name / description / 参数命中任一标签就召回;失败调用始终用 description。
+     */
+    function AutoRecallTagsEditor({ tags, onSave }) {
+      const [text, setText] = React.useState((tags ?? []).join('\n'))
+      return h('div', { className: 'autorecall' },
+        h('div', { className: 'hint' },
+          '每行一个额外标签。记忆库里已有的标签会自动并入（可关）；',
+          '可见文本命中任一个就触发召回，工具失败时始终用 description 检索。'),
+        h('textarea', {
+          rows: 8,
+          spellCheck: false,
+          value: text,
+          placeholder: 'release\npublish\ndeploy\ndatabase\ncredentials\n发布\n部署',
+          onChange: (e) => setText(e.target.value),
+        }),
+        h('div', { className: 'row' },
+          h('button', {
+            onClick: () => onSave(text.split(/[\n,，]+/).map((tag) => tag.trim()).filter(Boolean)),
+          }, '保存标签'),
+          h('span', { className: 'muted' }, '额外标签为空时仍会使用记忆库标签和失败召回'),
+        ),
+      )
+    }
 
     function SettingsTab() {
       const [settings, setSettings] = React.useState(null)
@@ -1689,6 +1728,14 @@ window.__ModuleLoader__.load({
               : null,
           )
         }),
+        h('div', { className: 'setrow' },
+          h('span', { className: 'set-title' }, '召回标签'),
+          h('span', { className: 'set-desc' }, '工具调用命中标签，或工具失败时，用操作/失败描述检索记忆。'),
+          h(AutoRecallTagsEditor, {
+            tags: settings.autoRecall && Array.isArray(settings.autoRecall.tags) ? settings.autoRecall.tags : [],
+            onSave: (tags) => patch('autoRecall', 'tags', tags),
+          }),
+        ),
         h('div', { className: 'setrow data' },
           h('span', { className: 'set-title' }, '数据'),
           h('span', { className: 'set-desc' }, '导出文本（不含向量），导入按当前模型重新嵌入并按内容去重。'),

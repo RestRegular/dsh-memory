@@ -46,7 +46,7 @@ export interface InjectAuditEvaluation {
     mandatoryOmitted: number
   }
   /** 工具失败/高风险信号的结构化分类;不保存原始参数。 */
-  signal?: { reason: string; errorClass?: string; tool?: string }
+  signal?: { reason: string; errorClass?: string; tool?: string; tag?: string; source?: string }
   error?: string
 }
 

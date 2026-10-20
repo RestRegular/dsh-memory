@@ -1415,7 +1415,11 @@ export class LocalMemoryService                             {
     const candidates = new Map              ()
     for (const { store, isGlobal } of stores) {
       const all = [...store.records.values()]
-      const tokenSets = all.map((r) => new Set(tokenize(r.content)))
+      // 词法通道把标签也当可检索文本:自动召回用标签做触发词时,记忆正文里
+      // 不一定出现这个标签(例如 tags=['release'] 但正文是中文),不并进来就搜不到。
+      const searchableText = (record              )         =>
+        `${record.content} ${(record.tags ?? []).join(' ')}`
+      const tokenSets = all.map((r) => new Set(tokenize(searchableText(r))))
       const stats = buildStats(tokenSets)
       for (let i = 0; i < all.length; i++) {
         const rec = all[i] 

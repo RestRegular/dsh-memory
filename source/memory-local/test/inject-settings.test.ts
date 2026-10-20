@@ -148,3 +148,32 @@ test('provider: 0.9.5 的旧默认 digest 400 迁移到 800,显式 hintBudget �
     rmSync(explicitDir, { recursive: true, force: true })
   }
 })
+
+test('autoRecall: 默认标签覆盖多个域,自定义标签可增删去重', () => {
+  const defaults = normalizeInjectSettings(undefined)
+  assert.equal(defaults.autoRecall.enabled, true)
+  assert.equal(defaults.autoRecall.useToolDescription, true)
+  assert.equal(defaults.autoRecall.useMemoryTags, true)
+  assert.ok(defaults.autoRecall.tags.length >= 20)
+  for (const tag of ['release', 'deploy', 'database', 'migration', 'credentials', 'delete', '发布', '部署']) {
+    assert.ok(defaults.autoRecall.tags.includes(tag), `默认标签缺少 ${tag}`)
+  }
+
+  const custom = normalizeInjectSettings({
+    autoRecall: {
+      enabled: false,
+      useToolDescription: false,
+      useMemoryTags: false,
+      maxQueryChars: 9999,
+      tags: ['release', 'Release', ' custom ', '', 42, 'custom'],
+    },
+  })
+  assert.equal(custom.autoRecall.enabled, false)
+  assert.equal(custom.autoRecall.useToolDescription, false)
+  assert.equal(custom.autoRecall.useMemoryTags, false)
+  assert.equal(custom.autoRecall.maxQueryChars, 500)
+  assert.deepEqual(custom.autoRecall.tags, ['release', 'custom'])
+
+  const empty = normalizeInjectSettings({ autoRecall: { tags: [] } })
+  assert.deepEqual(empty.autoRecall.tags, [], '显式空额外标签;仍会使用记忆库标签/failure 召回')
+})

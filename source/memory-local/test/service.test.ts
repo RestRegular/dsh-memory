@@ -96,6 +96,14 @@ test('search respects topK and scope pinning', async () => {
   assert.equal(none.length, 0)
 })
 
+test('search includes tags: 标签可作为检索词命中正文里没有该词的记忆', async () => {
+  const saved = await svc.save({ scope: PROJECT, kind: 'procedure', content: '部署前先检查凭据和回退方案', tags: ['release', 'credentials'] })
+  const hits = await svc.search({ text: 'release', scope: PROJECT, topK: 5 })
+  assert.ok(hits.some((hit) => hit.record.id === saved.id), 'tag release 应命中')
+  const none = await svc.search({ text: 'not-a-real-tag-xyz', scope: PROJECT, topK: 5 })
+  assert.equal(none.length, 0)
+})
+
 test('persistence: records survive reopen from disk', async () => {
   const r = await svc.save({ scope: PROJECT, kind: 'decision', content: '选择 JSONL 而非 sqlite 作为 M1 存储' })
   svc.flushSync()
