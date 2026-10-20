@@ -120,4 +120,15 @@ export function apply(ctx: any, config: ToolMemoryConfig = {}) {
     const summary = scopeSummary(value, agent)
     return summary ? `${body}\n${summary}` : body
   })
+
+  register(tools.memory_get, (value, _args, exec) => {
+    const agent = (exec as { agent?: unknown } | undefined)?.agent
+    const body = value.records.map((r) => {
+      const tags = Array.isArray(r.tags) && r.tags.length > 0 ? ` · ${r.tags.join(', ')}` : ''
+      return `[${r.id}] (${renderScope(r.scope, agent)}/${r.kind}${tags})\n${r.content}`
+    }).join('\n\n')
+    const missing = value.missing.length > 0 ? `未找到：${value.missing.join(', ')}` : ''
+    if (body === '') return missing || '没有找到记忆。'
+    return missing === '' ? body : `${body}\n\n${missing}`
+  })
 }

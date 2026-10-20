@@ -349,6 +349,10 @@ tools/build-single-package.mjs   构建(产物契约检查 + 可选加载验证)
 
 ## 版本
 
+- **0.9.10** —— 修复 `memory_get` 没有注册:
+  - `memoryTools()` 一直有 `memory_get` 的实现，但工具注册层漏了 `register(tools.memory_get, …)`，所以模型侧只能看到 save/search/forget/list 四个工具。
+  - 现在注册完整五个工具；`memory_get` 输出完整 id、作用域、类型、标签和全文，找不到的 id 单独列出。
+  - 新增静态守卫测试：`memoryTools` 里的每个工具都必须在 `apply.ts` 注册，防止再次“实现了但没注册”。
 - **0.9.9** —— 收敛自动召回作用域与相关性:
   - 自动召回只检索 **global + 当前会话 + 当前工作区** 三个标准作用域。
   - 不再把 `inject.extraScopes` 的自定义作用域或 fork 父会话带进自动召回;普通每轮召回仍按原配置。
