@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Memory injection logic (M3) — pure functions, no cordis imports.
  *
  * Injection shape follows the official docs: a user-role message whose content
@@ -8,6 +8,7 @@
 import type { MemoryHit, MemoryRecord } from 'dsh-memory'
 import { estimateTokens } from '../../memory-local/src/rerank.ts'
 import { normalizeScopeInput } from '../../memory-local/src/scope.ts'
+import { InjectionState } from './state.ts'
 
 export interface InjectConfig {
   enabled: boolean
@@ -32,6 +33,8 @@ export const defaultInjectConfig: InjectConfig = {
 export interface InjectMemoryService {
   search(input: unknown): Promise<MemoryHit[]>
   resolveReadScopes?(agent: unknown): string[]
+  /** 当前已退役的记录 id;可选,老 provider 没有时注入层自己按 supersedes 扫描。 */
+  supersededIds?(scopes?: string[]): string[]
 }
 
 /** 宿主里"按会话 id 找 live session"的那一小部分能力(拿不到就不做父会话召回)。 */
@@ -103,6 +106,8 @@ export interface PreStepView {
    * 这里是纯函数层,拿不到也不该去猜。缺省(undefined)时由 provider 用它自己的默认集合。
    */
   scopes?: readonly string[]
+  /** 当前会话 id;按会话管理去重状态,缺省时退化为单进程兜底桶。 */
+  sessionId?: string
 }
 
 export interface PreStepDecisionView {
@@ -131,9 +136,9 @@ export function pickQueryText(messages: readonly InputMessageView[]): string {
 /**
  * 这一步的 messages 里是否已经有一条内容完全相同的召回块。
  *
- * 正常情况下永远不会命中:一个激活只有一个 MemoryInjector,而它自己用 lastText
- * 去重。但只要宿主把这条 entry 应用了两次(热重载/重新启用时旧 fiber 的
- * agent/pre-step 监听没被清掉),两个注入器就会各追加一条逐字相同的消息 ——
+ * 正常情况下永远不会命中:一个激活只有一个 MemoryInjector,而它自己用
+ * 会话级 lastText 去重。但只要宿主把这条 entry 应用了两次(热重载/重新启用时
+ * 旧 fiber 的 agent/pre-step 监听没被清掉),两个注入器就会各追加一条逐字相同的消息 ——
  * 表现在会话轨迹里就是同一轮「上下轮」卡片连着出现两次(2026-10-17 实况)。
  * 注入本身是"多一条也无害、少一条也不坏"的提示块,所以这里按内容做一次幂等:
  * 另一个实例已经放进去的同一段,就不要再放。
@@ -162,12 +167,25 @@ export interface RecallRenderOptions {
   impression?: boolean
 }
 
+export interface RecallOmission {
+  id: string
+  reason: 'top_k' | 'budget'
+}
+
+export interface RecallBlock {
+  text: string
+  tokens: number
+  /** 正文实际写入的 id。 */
+  ids: string[]
+  omitted: RecallOmission[]
+}
+
 /** Render hits into a recall text block, greedily within the token budget. */
 export function renderRecallBlock(
   hits: MemoryHit[],
   cfg: InjectConfig,
   options: RecallRenderOptions = {},
-): { text: string; tokens: number } | null {
+): RecallBlock | null {
   if (hits.length === 0) return null
   const impression = options.impression === true
   const chars = impression ? (options.chars ?? 120) : 300
@@ -176,15 +194,31 @@ export function renderRecallBlock(
     : '以下是与此请求可能相关的长期记忆，供参考（可用 memory_search 核实，用 memory_forget 删除）：'
   let tokens = estimateTokens(header) + 4
   const lines: string[] = []
-  for (const h of hits.slice(0, cfg.topK)) {
+  const ids: string[] = []
+  const omitted: RecallOmission[] = []
+  let budgetExhausted = false
+  for (const [index, h] of hits.entries()) {
+    if (index >= cfg.topK) {
+      omitted.push({ id: h.record.id, reason: 'top_k' })
+      continue
+    }
+    if (budgetExhausted) {
+      omitted.push({ id: h.record.id, reason: 'budget' })
+      continue
+    }
     const line = `- ${h.record.id.slice(0, 8)} ${h.record.content.replace(/\s+/g, ' ').slice(0, chars)}`
     const cost = estimateTokens(line) + 1
-    if (tokens + cost > cfg.tokenBudget) break
+    if (tokens + cost > cfg.tokenBudget) {
+      budgetExhausted = true
+      omitted.push({ id: h.record.id, reason: 'budget' })
+      continue
+    }
     lines.push(line)
+    ids.push(h.record.id)
     tokens += cost
   }
   if (lines.length === 0) return null
-  return { text: `${header}\n${lines.join('\n')}`, tokens }
+  return { text: `${header}\n${lines.join('\n')}`, tokens, ids, omitted }
 }
 
 /** The context block we prepend (matches the documented ContextForm 'recall'). */
@@ -192,56 +226,122 @@ export function recallText(text: string): string {
   return text
 }
 
-/**
- * Turn-agnostic injector: searches memory for the step's query and returns the
- * recall text to append. The host middleware (apply.ts) wraps that text into a
- * real message via createUserMessage — a bare {role, content} object is NOT a
- * message and crashes the loop (see the 2026-10-10 incident below).
- *
- * Repeated identical injections are suppressed so a multi-step turn does not
- * repeat the same block before every model call.
- */
 /** 配置既可以给静态值,也可以给 getter —— 面板改了设置,下一步就生效。 */
 type ConfigSource<T> = T | (() => T)
 
+export interface RecallTriggerOptions {
+  sessionId?: string
+  /** 行为信号触发的查询;缺省用最后一条用户消息。 */
+  query?: string
+  /** 触发原因,写入审计;默认 turn_start。 */
+  trigger?: string
+  /** 这些 id 已被 supersede,不注入正文。 */
+  excludeIds?: ReadonlySet<string>
+  /** 即使与上次查询相同也重新检索(用于明确的失败/阶段事件)。 */
+  force?: boolean
+}
+
+export interface RecallResult {
+  text?: string
+  /** 正文注入的 id。 */
+  ids: string[]
+  candidates: number
+  dedupSkipped: number
+  updated: string[]
+  omitted: RecallOmission[]
+  query: string
+  tokens: number
+  retrieval: { ok: boolean; count: number; error?: string }
+}
+
+/**
+ * Turn-agnostic injector: searches memory for the step's query and returns the
+ * recall text to append. The host middleware (apply.ts) wraps that text into a
+ * real message via createUserMessage.
+ *
+ * 去重从 0.9.6 起按 sessionId + 记忆 id/版本管理:
+ *   - 已注入正文且内容未变 → 跳过;
+ *   - 只注入过标签 → 允许补正文;
+ *   - 内容更新 → 重新注入;
+ *   - 同一段文本 = 最后一道幂等。
+ */
 export class MemoryInjector {
-  private lastText = ''
   private readonly search: (query: string, signal?: AbortSignal, scopes?: readonly string[]) => Promise<MemoryHit[]>
   private readonly cfg: ConfigSource<InjectConfig>
   private readonly renderOptions: ConfigSource<RecallRenderOptions>
+  private readonly state: InjectionState
 
   constructor(
     search: (query: string, signal?: AbortSignal, scopes?: readonly string[]) => Promise<MemoryHit[]>,
     cfg: ConfigSource<InjectConfig>,
     renderOptions: ConfigSource<RecallRenderOptions> = {},
+    state: InjectionState = new InjectionState(),
   ) {
     this.search = search
     this.cfg = cfg
     this.renderOptions = renderOptions
+    this.state = state
   }
 
   async maybeInject(
     input: PreStepView,
     _decision: PreStepDecisionView,
+    options: RecallTriggerOptions = {},
   ): Promise<string | undefined> {
+    const result = await this.maybeInjectDetailed(input, _decision, options)
+    return result?.text
+  }
+
+  async maybeInjectDetailed(
+    input: PreStepView,
+    _decision: PreStepDecisionView,
+    options: RecallTriggerOptions = {},
+  ): Promise<RecallResult | undefined> {
     const cfg = typeof this.cfg === 'function' ? this.cfg() : this.cfg
     if (!cfg.enabled) return undefined
-    const query = pickQueryText(input.messages)
+    const query = options.query ?? pickQueryText(input.messages)
     if (!query) return undefined
+    const sessionId = options.sessionId ?? input.sessionId
 
     let hits: MemoryHit[]
     try {
       hits = await this.search(query, input.signal, input.scopes)
     } catch {
-      return undefined // retrieval failure never breaks the agent loop
+      // 检索失败不能打断 agent 循环;审计会区分"失败"与"成功但无结果"。
+      return {
+        ids: [], candidates: 0, dedupSkipped: 0, updated: [], omitted: [], query,
+        tokens: 0, retrieval: { ok: false, count: 0, error: 'retrieval_failed' },
+      }
+    }
+    // 成功检索后记住查询(即使没有新正文):同一 query 的后续 step 不再重复全量检索。
+    this.state.setLastQuery(sessionId, query)
+
+    const seenIds = options.excludeIds
+    const candidates = seenIds === undefined ? hits : hits.filter((hit) => !seenIds.has(hit.record.id))
+    const { fresh, deduplicated, updated } = this.state.filterNewContent(
+      sessionId,
+      candidates.map((hit) => hit.record),
+    )
+    const freshIds = new Set(fresh.map((record) => record.id))
+    const freshHits = candidates.filter((hit) => freshIds.has(hit.record.id))
+    const optionsForRender = typeof this.renderOptions === 'function' ? this.renderOptions() : this.renderOptions
+    const block = renderRecallBlock(freshHits, cfg, optionsForRender)
+    const base: RecallResult = {
+      ids: [], candidates: candidates.length, dedupSkipped: deduplicated.length, updated, omitted: [], query,
+      tokens: 0, retrieval: { ok: true, count: hits.length },
+    }
+    if (!block) return base
+    if (block.text === this.state.lastTextOf(sessionId)) {
+      return { ...base, ids: block.ids, omitted: block.omitted, tokens: block.tokens, dedupSkipped: deduplicated.length + block.ids.length }
     }
 
-    const options = typeof this.renderOptions === 'function' ? this.renderOptions() : this.renderOptions
-    const block = renderRecallBlock(hits, cfg, options)
-    if (!block || block.text === this.lastText) return undefined
-    this.lastText = block.text
-
-    return block.text
+    this.state.markContent(sessionId, block.ids.map((id) => {
+      const record = freshHits.find((hit) => hit.record.id === id)!.record
+      return { id, updatedAt: record.updatedAt }
+    }))
+    this.state.setLastText(sessionId, block.text)
+    this.state.setLastQuery(sessionId, query)
+    return { ...base, text: block.text, ids: block.ids, omitted: block.omitted, tokens: block.tokens }
   }
 }
 
@@ -284,11 +384,36 @@ export class MemoryDigester {
     return render(records) ?? undefined
   }
 
+  /**
+   * 与 maybeDigest 相同,但把渲染结果原样返回(含统计与 hintIds),
+   * 供 apply.ts 写审计、标记 hint/content 状态。
+   */
+  async maybeDigestDetailed<T>(
+    sessionId: string | undefined,
+    scopes: readonly string[] | undefined,
+    render: (records: MemoryRecord[]) => T | null,
+  ): Promise<T | undefined> {
+    if (sessionId === undefined || this.done.has(sessionId)) return undefined
+    this.markDone(sessionId)
+    let records: MemoryRecord[]
+    try {
+      records = await this.list(scopes)
+    } catch {
+      return undefined
+    }
+    return render(records) ?? undefined
+  }
+
   private markDone(sessionId: string): void {
     this.done.add(sessionId)
     if (this.done.size > MAX_DIGESTED_SESSIONS) {
       const oldest = this.done.values().next()
       if (!oldest.done) this.done.delete(oldest.value)
     }
+  }
+
+  /** 上下文被压缩/重建后重新允许摘要评估(旧摘要可能已不在上下文里)。 */
+  reset(sessionId: string | undefined): void {
+    if (sessionId !== undefined) this.done.delete(sessionId)
   }
 }

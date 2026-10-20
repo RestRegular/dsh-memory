@@ -111,11 +111,23 @@ memory_save({
 - **服务**:「向量服务」:状态、地址、启停开关、**模型与硬件**(见下)、维护(卸载向量服务 / 清空记忆数据,两步确认)
 - **记录**(默认打开):顶部统计(记忆数 / 作用域数 / 待嵌入向量数)、搜索、按作用域筛选、**新建**(任意作用域 + 类型,类型里含 `rule`)、展开编辑 / 删除;列表放在独立的滚动容器里(记忆再多也不把面板撑长),滚动条是自定义的细圆头样式,从侧栏入口打开时容器还会跟着窗口长高;作用域下拉**动态枚举实际存在的作用域**(`global` 显示「全局」、project 显示 cwd、会话 scope 显示会话标题、自定义 scope 显示原名)
 - **记忆树**:所有作用域的记忆按 **作用域 → 类型 → 记录** 三层展开,根节点显示总数;记录卡按类型着色,`supersedes` / `supersededBy` 用金色虚线把「修正版」和「被修正的旧版」连起来。支持搜索(命中高亮、其余淡出)、按类型逐个开关、按作用域筛选、折叠作用域 / 类型、缩放与「适应」、以及点击记录打开的详情抽屉(全文、标签、重要度、时间、id 与双向修正链)。修正是**关系**而不是层级,所以不改变树结构,只叠在右侧;悬停或选中一条记录时,整条修正链一起点亮
-- **设置**:注入链路逐项开关 —— 每轮召回(topK / 预算)、印象形态(每条字数)、会话摘要(条数 / 预算)、记忆使用策略段、硬性规则段(条数 / 预算 / 变更提醒,并显示当前规则条数)、轮末提醒、侧栏入口;底部「数据」:导出全部 / 导入文件。改完**即保存**,不需要点按钮
+- **设置**:注入链路逐项开关 —— 每轮召回(topK / 预算)、印象形态(每条字数)、会话摘要(条数 / 正文预算 / 截断标签预算 / 标签条数)、记忆使用策略段、硬性规则段(条数 / 预算 / 变更提醒,并显示当前规则条数)、轮末提醒、侧栏入口;底部「数据」:导出全部 / 导入文件。改完**即保存**,不需要点按钮
 
 > **导入 / 导出**:导出的是纯文本 —— 作用域、类型、内容、标签、重要度、时间戳,**没有向量**。导入时逐条走保存路径,按**当前模型重新嵌入**,并按「作用域 + 内容」去重(重复的计入「跳过」)。一次最多 5000 条。
 
-面板后端在 `/memory/api`,全部路由:`GET /status`、`GET /records`、`POST /create`、`POST /update`、`POST /delete`、`GET /settings`、`POST /settings`、`GET /export`、`POST /import`、`GET /embed/status`、`POST /embed/start|stop`、`GET /embed/model`、`POST /embed/model/refresh|install|install/cancel|uninstall`、`POST /data/wipe`。
+面板后端在 `/memory/api`,全部路由:`GET /status`、`GET /records`、`GET /settings`、`POST /settings`、`GET /audit`、`POST /create`、`POST /update`、`POST /delete`、`GET /export`、`POST /import`、`GET /embed/status`、`POST /embed/start|stop`、`GET /embed/model`、`POST /embed/model/refresh|install|install/cancel|uninstall`、`POST /data/wipe`。
+
+## 注入可靠性(0.9.6)
+
+摘要和规则不再静默截断:
+
+- **正文预算**:`digest.tokenBudget` 默认从 400 提到 800;`topK` 与预算仍是两个独立上限。
+- **截断标签**:正文因 `topK` / 预算没注入时,附一条独立的「相关记忆索引」——每条只给 8 位 id、标签/主题、类型、作用域,以及 `memory_search` 检索指引;标签有 `digest.hintBudget` / `digest.hintMaxItems` 独立预算。标签也溢出时报告省略数量与原因。
+- **退役规则**:被 `supersedes` 指向的旧记录不再进入摘要、规则段和自动召回;`memory_search` / `memory_get` 仍可查历史。
+- **mandatory / pinned**:规则标签里写 `mandatory` / `pinned`(或 `必含` / `强制`)的条目排在规则段最前;超预算时输出明确警告,不静默丢弃。
+- **行为感知召回**:监听 `session/event` 的 `tool/call` / `tool/result` / compaction。命中 `npm publish`、`git push`、部署等高风险操作,或工具失败(凭据/权限/超时/abort 分类)后,在下一个 `agent/pre-step` 用任务查询做一次增量召回;已注入正文按 **sessionId + 记忆 id/版本** 去重,只给过标签的会补正文,内容更新会重新评估。
+- **审计**:每次摘要/召回/规则评估写入内存审计环,`GET /memory/api/audit?session=<id>` 可查候选、正文、标签、去重、省略原因与各通道预算;不记录凭据或令牌。
+- **限制**:当前行为召回基于 `session/event` 的 `tool/call` / `tool/result`,召回发生在**下一个** `agent/pre-step`;宿主虽有 `tools/pre-execute`,本插件没有用它做操作前阻断,因此"发布/推送前强制检查"仍是告警 + 召回,不是硬阻断。工具失败若底层只返回 aborted,审计会保留 `ABORTED_UNKNOWN`,不会臆测成凭据问题。
 
 ## 数据与文件布局
 
@@ -331,6 +343,15 @@ tools/build-single-package.mjs   构建(产物契约检查 + 可选加载验证)
 
 ## 版本
 
+- **0.9.6** —— 注入可靠性改造:
+  - 摘要默认正文预算 400 → 800;旧版 `settings.json` 里仍是 400 且没有 `hintBudget` 的配置会在加载时迁移到 800,显式带 `hintBudget` 的配置不动。新增候选/正文/`top_k`/预算/退役/过期互斥统计,任何截断都有原因。
+  - 被截断记录生成独立标签索引(id + 标签/主题 + 类型 + 作用域),标签有独立预算与条数上限;mandatory/pinned 与发布/部署/凭据类标签优先保留。
+  - `supersedes` 旧记录统一从摘要、规则段、自动召回中退役;`memory_search` / `memory_get` 仍保留历史。
+  - 规则段支持 `mandatory` / `pinned` 标签,超出预算时输出警告;规则溢出不再静默。
+  - 按会话 + 记忆 id/版本去重,区分 `hint_injected` 与 `content_injected`;只给过标签的记忆可在任务命中后补正文,内容更新会重新评估;compaction 后重置摘要与去重状态。
+  - 监听 `session/event` 的 `tool/call` / `tool/result`,对 `npm publish`、`git push`、部署和工具失败做定向增量召回;失败按 `MISSING_CREDENTIAL` / `PERMISSION_DENIED` / `TIMEOUT` / `ABORTED_UNKNOWN` 分类。
+  - 新增内存审计环与 `GET /memory/api/audit`;记录触发原因、阶段、候选、正文、标签、去重、省略原因和各通道预算,不记录凭据。
+  - 测试新增摘要截断/标签索引/退役/mandatory/会话级状态/审计/行为信号,以及一次完整的「摘要标签 → 高风险工具 → 正文召回 → 工具失败诊断」链路。
 - **0.9.5** —— 新增「记忆树」标签页:
   - 所有作用域的记忆按 **作用域 → 类型 → 记录** 分层展示,根节点是总数;记录卡按类型着色(事实 / 决策 / 偏好 / 流程 / 笔记 / 规则),修正/被修正各有徽标。
   - `supersedes` 是点对点关系、不是层级,所以不改树结构:金色虚线从修正版弯到旧版的右缘,悬停或选中任意一端时,两端与整条修正链一起点亮;关闭「修正连线」可只看结构。

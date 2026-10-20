@@ -16,6 +16,10 @@
                  
               
                      
+                                
+                    
+                   
+                      
  
 
                                      
@@ -64,7 +68,7 @@
 
 export const defaultInjectSettings                 = {
   recall: { enabled: true, topK: 5, tokenBudget: 500 },
-  digest: { enabled: true, topK: 8, tokenBudget: 400 },
+  digest: { enabled: true, topK: 8, tokenBudget: 800, hintBudget: 160, hintMaxItems: 6 },
   impression: { enabled: true, chars: 120 },
   policy: { enabled: true },
   rules: { enabled: true, maxItems: 10, tokenBudget: 300, delta: true },
@@ -118,6 +122,8 @@ export function normalizeInjectSettings(raw         , base                 = def
       enabled: bool(digest.enabled, base.digest.enabled),
       topK: clampInt(digest.topK, 1, 30, base.digest.topK),
       tokenBudget: clampInt(digest.tokenBudget, 50, 4000, base.digest.tokenBudget),
+      hintBudget: clampInt(digest.hintBudget, 30, 1000, base.digest.hintBudget),
+      hintMaxItems: clampInt(digest.hintMaxItems, 1, 30, base.digest.hintMaxItems),
     },
     impression: {
       enabled: bool(impression.enabled, base.impression.enabled),

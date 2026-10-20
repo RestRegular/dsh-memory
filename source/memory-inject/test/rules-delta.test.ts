@@ -96,7 +96,8 @@ test('常驻段与增量块用同一种行格式,截断也一致', () => {
 test('renderRulesDeltaBlock 遵守条数上限,空列表返回 null', () => {
   const rules = Array.from({ length: 5 }, (_, i) => rec(`规则 ${i}`, { updatedAt: i }))
   const block = renderRulesDeltaBlock(rules, { ...rulesCfg, maxItems: 2 })!
-  assert.equal(block.split('\n').length - 1, 2)
+  assert.equal(block.split('\n').filter((line) => line.startsWith('- ')).length, 2)
+  assert.ok(block.includes('另有 3 条规则未展示'), '超限规则必须有可见提示')
   assert.equal(renderRulesDeltaBlock([], rulesCfg), null)
 })
 

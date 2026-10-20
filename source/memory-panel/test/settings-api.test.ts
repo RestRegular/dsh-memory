@@ -177,3 +177,31 @@ test('面板 /embed/reindex:后台触发重建并返回记录数', async () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('面板 /audit:返回注入半边挂载的审计记录,可按 session 过滤', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-audit-'))
+  const svc = new LocalMemoryService({ storeDir: dir, scopes: { global: true, project: true } })
+  try {
+    svc.attachInjectAudit({
+      list(sessionId?: string) {
+        const entries = [
+          { at: 1, sessionId: 's1', trigger: 'turn_start' },
+          { at: 2, sessionId: 's2', trigger: 'tool_failure' },
+        ]
+        return sessionId === undefined ? entries : entries.filter((entry) => entry.sessionId === sessionId)
+      },
+    })
+    const all = fakeRes()
+    await handleRequest(ctxWith(svc), ROUTE, get(`${ROUTE}/audit`), all)
+    assert.equal(all.out.status, 200)
+    assert.equal(all.out.body.value.entries.length, 2)
+
+    const one = fakeRes()
+    await handleRequest(ctxWith(svc), ROUTE, get(`${ROUTE}/audit?session=s2`), one)
+    assert.equal(one.out.status, 200)
+    assert.deepEqual(one.out.body.value.entries.map((entry) => entry.trigger), ['tool_failure'])
+    svc.flushSync()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

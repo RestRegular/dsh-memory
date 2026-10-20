@@ -1547,11 +1547,13 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'digest', title: '会话摘要',
-        desc: '会话第一步给一次项目 / 全局的记忆概览。',
+        desc: '会话第一步给一次项目 / 全局的记忆概览；正文被截断时附一条标签索引。',
         fields: [
           { k: 'enabled', label: '启用', type: 'bool' },
           { k: 'topK', label: '最多条数', type: 'num', min: 1, max: 30, step: 1 },
           { k: 'tokenBudget', label: 'token 预算', type: 'num', min: 50, max: 4000, step: 50 },
+          { k: 'hintBudget', label: '标签预算', type: 'num', min: 30, max: 1000, step: 10 },
+          { k: 'hintMaxItems', label: '标签条数', type: 'num', min: 1, max: 30, step: 1 },
         ],
       },
       {

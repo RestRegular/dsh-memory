@@ -1,4 +1,4 @@
-﻿import { test } from 'node:test'
+import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { MemoryRecord } from 'dsh-memory'
 import { digestScopeLabel, rankForDigest, renderDigestBlock } from '../src/digest.ts'
@@ -39,7 +39,12 @@ test('renderDigestBlock returns null for no records and stays within budget', ()
   assert.ok(block)
   assert.ok(block!.tokens <= 120)
   assert.ok(block!.count >= 1 && block!.count <= digestCfg.topK)
-  assert.equal(renderDigestBlock(many, { ...digestCfg, tokenBudget: 5 }), null)
+  // 预算连正文 header 都放不下时,不再返回 null:至少留下可检索的标签索引。
+  const tiny = renderDigestBlock(many, { ...digestCfg, tokenBudget: 5 })
+  assert.ok(tiny)
+  assert.equal(tiny!.stats.injected, 0)
+  assert.ok(tiny!.stats.hint.injected > 0)
+  assert.ok(tiny!.text.includes('相关记忆索引'))
 })
 
 test('rankForDigest prefers important + fresh records, then project over global', () => {

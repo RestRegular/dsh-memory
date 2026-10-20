@@ -5,6 +5,11 @@
  * 注意力;系统提示是每步都会看见的位置,且文本稳定时可以跟着前缀缓存。
  * 只放"不可机械校验"的规则 —— 能写成检查的规则应该进钩子(代码强制)。
  *
+ * 0.9.6 起:
+ *   - 已被新规则 supersede 的旧规则不进入常驻段,保留历史用于 memory_get/search;
+ *   - mandatory/pinned 标签的规则排在最前,超出预算时给出明确警告,不静默丢弃;
+ *   - 任何因条数/预算未展示的规则都会在段尾报告数量,并写入审计。
+ *
  * 增量提醒(0.9.0 起):系统提示段每步都会按内存快照重渲染,但"规则是别的会话里
  * 新加/改过的"这件事只改文本、不产生任何对话消息;模型在旧会话里继续聊时未必会
  * 重新读一遍系统提示,而且规则段有 token 预算,新规则可能被旧规则挤出常驻段。
@@ -14,12 +19,23 @@
 import type { MemoryRecord } from 'dsh-memory'
 import { estimateTokens } from '../../memory-local/src/rerank.ts'
 import type { RulesSettings } from '../../memory-local/src/inject-settings.ts'
+import { supersededIds } from './digest.ts'
 
 export const RULES_HEADER =
   '以下是必须遵守的硬性规则（来自 kind=rule 的长期记忆；除非用户明确要求破例，否则按它做）：'
 
 export const RULES_DELTA_HEADER =
   '以下是新增或变更的硬性规则（来自 kind=rule 的长期记忆；从现在起按它做）：'
+
+/** mandatory/pinned 是显式的标签约定,不把全部 kind=rule 自动升级。 */
+const MANDATORY_TAGS = new Set(['mandatory', 'pinned', '必含', '强制'])
+
+export function isMandatoryRule(record: MemoryRecord): boolean {
+  return (record.tags ?? []).some((tag) => {
+    const value = String(tag).trim().toLowerCase()
+    return MANDATORY_TAGS.has(value) || value.startsWith('mandatory:') || value.startsWith('pinned:')
+  })
+}
 
 /**
  * 一条规则的渲染行。常驻段与增量块共用同一个格式 —— 增量靠"逐行比对"判断
@@ -29,33 +45,141 @@ export function ruleLine(record: MemoryRecord): string {
   return `- ${record.content.replace(/\s+/g, ' ').slice(0, 240)}`
 }
 
-/** 规则排序:重要度优先,其次新的在前,最后按内容稳定排序(两个实例结果一致)。 */
+/** 规则排序:mandatory 优先,其次重要度、新的在前,最后按内容稳定排序。 */
 export function orderRules(records: readonly MemoryRecord[]): MemoryRecord[] {
   return [...records].sort(
     (a, b) =>
+      Number(isMandatoryRule(b)) - Number(isMandatoryRule(a)) ||
       b.importance - a.importance ||
       b.updatedAt - a.updatedAt ||
       a.content.localeCompare(b.content),
   )
 }
 
-function renderLines(records: readonly MemoryRecord[], header: string, cfg: RulesSettings, budget: number): string | null {
-  let tokens = estimateTokens(header) + 4
-  const lines: string[] = []
-  for (const record of orderRules(records).slice(0, cfg.maxItems)) {
-    const line = ruleLine(record)
-    const cost = estimateTokens(line) + 1
-    if (tokens + cost > budget) break
-    lines.push(line)
-    tokens += cost
-  }
-  if (lines.length === 0) return null
-  return `${header}\n${lines.join('\n')}`
+export interface RulesStats {
+  candidates: number
+  active: number
+  injected: number
+  omittedTopK: number
+  omittedBudget: number
+  omittedSuperseded: number
+  mandatory: number
+  mandatoryInjected: number
+  mandatoryOmitted: number
+  truncated: boolean
 }
 
-/** 渲染规则段(系统提示常驻)。重要性优先,新的在前;每条截 240 字,超出预算截断。 */
-export function renderRulesBlock(records: readonly MemoryRecord[], cfg: RulesSettings): string | null {
+export interface RulesRender {
+  text: string
+  tokens: number
+  count: number
+  stats: RulesStats
+}
+
+function renderLines(
+  records: readonly MemoryRecord[],
+  header: string,
+  cfg: RulesSettings,
+  budget: number,
+): RulesRender {
+  const retired = supersededIds(records)
+  const active: MemoryRecord[] = []
+  let omittedSuperseded = 0
+  for (const record of records) {
+    if (retired.has(record.id)) { omittedSuperseded += 1; continue }
+    active.push(record)
+  }
+
+  let tokens = estimateTokens(header) + 4
+  const lines: string[] = []
+  let omittedTopK = 0
+  let omittedBudget = 0
+  let budgetExhausted = false
+  let mandatoryInjected = 0
+  let mandatoryOmitted = 0
+  const mandatoryTotal = active.filter(isMandatoryRule).length
+
+  for (const [index, record] of orderRules(active).entries()) {
+    const mandatory = isMandatoryRule(record)
+    if (index >= cfg.maxItems) {
+      omittedTopK += 1
+      if (mandatory) mandatoryOmitted += 1
+      continue
+    }
+    if (budgetExhausted) {
+      omittedBudget += 1
+      if (mandatory) mandatoryOmitted += 1
+      continue
+    }
+    const line = ruleLine(record)
+    const cost = estimateTokens(line) + 1
+    if (tokens + cost > budget) {
+      budgetExhausted = true
+      omittedBudget += 1
+      if (mandatory) mandatoryOmitted += 1
+      continue
+    }
+    lines.push(line)
+    tokens += cost
+    if (mandatory) mandatoryInjected += 1
+  }
+
+  if (lines.length === 0 && active.length === 0) {
+    return {
+      text: '', tokens: 0, count: 0,
+      stats: {
+        candidates: records.length, active: 0, injected: 0,
+        omittedTopK, omittedBudget, omittedSuperseded,
+        mandatory: 0, mandatoryInjected: 0, mandatoryOmitted: 0, truncated: omittedSuperseded > 0,
+      },
+    }
+  }
+  // 一条都装不下且不是 mandatory 溢出的情况:文本为空,但统计仍保留给审计。
+  // 系统提示的调用方(renderRulesBlock)会把空文本转成 null,保持旧行为。
+
+  const notes: string[] = []
+  const noBody = lines.length === 0 && mandatoryOmitted === 0
+  const omitted = omittedTopK + omittedBudget
+  if (!noBody && omitted > 0) {
+    const parts: string[] = []
+    if (omittedTopK > 0) parts.push(`条数上限 ${omittedTopK}`)
+    if (omittedBudget > 0) parts.push(`预算 ${omittedBudget}`)
+    notes.push(`（另有 ${omitted} 条规则未展示：${parts.join(' / ')}；需要时用 memory_search 查 kind=rule）`)
+  }
+  if (!noBody && mandatoryOmitted > 0) {
+    notes.push(`（警告：${mandatoryOmitted} 条 mandatory / pinned 规则未展示，当前规则不完整）`)
+  }
+  const text = [lines.length > 0 ? `${header}\n${lines.join('\n')}` : '', ...notes].filter(Boolean).join('\n')
+  const extraTokens = notes.reduce((sum, note) => sum + estimateTokens(note) + 1, 0)
+
+  return {
+    text,
+    tokens: tokens + extraTokens,
+    count: lines.length,
+    stats: {
+      candidates: records.length,
+      active: active.length,
+      injected: lines.length,
+      omittedTopK,
+      omittedBudget,
+      omittedSuperseded,
+      mandatory: mandatoryTotal,
+      mandatoryInjected,
+      mandatoryOmitted,
+      truncated: omitted > 0,
+    },
+  }
+}
+
+/** 渲染规则段(系统提示常驻)及其审计统计。没有可展示的规则时 text 为空串。 */
+export function renderRules(records: readonly MemoryRecord[], cfg: RulesSettings): RulesRender {
   return renderLines(records, RULES_HEADER, cfg, cfg.tokenBudget)
+}
+
+/** 渲染规则段(系统提示常驻),只要文本;空文本返回 null。 */
+export function renderRulesBlock(records: readonly MemoryRecord[], cfg: RulesSettings): string | null {
+  const text = renderRules(records, cfg).text
+  return text === '' ? null : text
 }
 
 /**
@@ -63,7 +187,8 @@ export function renderRulesBlock(records: readonly MemoryRecord[], cfg: RulesSet
  * 时才需要的补充,用同一个 300 token 的上限容易把最该提醒的一条又截掉。
  */
 export function renderRulesDeltaBlock(records: readonly MemoryRecord[], cfg: RulesSettings): string | null {
-  return renderLines(records, RULES_DELTA_HEADER, cfg, Math.max(cfg.tokenBudget, 600))
+  const text = renderLines(records, RULES_DELTA_HEADER, cfg, Math.max(cfg.tokenBudget, 600)).text
+  return text === '' ? null : text
 }
 
 /** 模型可见历史里的一小部分形状(只读;不依赖宿主的 Message 类型)。 */

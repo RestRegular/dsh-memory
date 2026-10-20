@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LocalMemoryService } from '../src/index.ts'
@@ -94,4 +94,57 @@ test('sidebar: 默认关闭,面板可把它打开', () => {
   assert.equal(normalizeInjectSettings(undefined).sidebar.enabled, false)
   const merged = mergeInjectSettings(defaultInjectSettings, { sidebar: { enabled: true } })
   assert.equal(merged.sidebar.enabled, true)
+})
+
+test('provider: listSync 默认退役 superseded 旧规则,includeSuperseded 可取回历史', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-supersede-'))
+  try {
+    const svc = fresh(dir)
+    const old = await svc.save({ scope: 'project:x', kind: 'rule', content: '旧规则' })
+    const next = await svc.save({ scope: 'project:x', kind: 'rule', content: '新规则', supersedes: old.id })
+    assert.deepEqual(svc.supersededIds(['project:x']), [old.id])
+    assert.deepEqual(svc.listSync({ scopes: ['project:x'], kind: 'rule' }).map((r) => r.content), ['新规则'])
+    assert.deepEqual(
+      svc.listSync({ scopes: ['project:x'], kind: 'rule', includeSuperseded: true }).map((r) => r.content).sort(),
+      ['新规则', '旧规则'],
+    )
+    assert.equal(next.supersedes, old.id)
+    svc.flushSync()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('provider: injectAudit 由注入半边挂载后可查询,未挂载时为空', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-audit-'))
+  try {
+    const svc = fresh(dir)
+    assert.deepEqual(svc.injectAudit(), [])
+    svc.attachInjectAudit({ list: (sessionId?: string) => [{ sessionId: sessionId ?? 'all' }] })
+    assert.deepEqual(svc.injectAudit('s1'), [{ sessionId: 's1' }])
+    svc.flushSync()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('provider: 0.9.5 的旧默认 digest 400 迁移到 800,显式 hintBudget 的配置不动', () => {
+  const oldDir = mkdtempSync(join(tmpdir(), 'dsh-memory-migrate-'))
+  const explicitDir = mkdtempSync(join(tmpdir(), 'dsh-memory-migrate-'))
+  try {
+    writeFileSync(join(oldDir, 'settings.json'), JSON.stringify({ digest: { enabled: true, topK: 8, tokenBudget: 400 } }))
+    const oldSvc = fresh(oldDir)
+    assert.equal(oldSvc.injectSettings().digest.tokenBudget, 800)
+    assert.equal(oldSvc.injectSettings().digest.hintBudget, 160)
+    oldSvc.flushSync()
+
+    writeFileSync(join(explicitDir, 'settings.json'), JSON.stringify({ digest: { enabled: true, topK: 8, tokenBudget: 400, hintBudget: 80 } }))
+    const explicitSvc = fresh(explicitDir)
+    assert.equal(explicitSvc.injectSettings().digest.tokenBudget, 400)
+    assert.equal(explicitSvc.injectSettings().digest.hintBudget, 80)
+    explicitSvc.flushSync()
+  } finally {
+    rmSync(oldDir, { recursive: true, force: true })
+    rmSync(explicitDir, { recursive: true, force: true })
+  }
 })

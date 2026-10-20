@@ -494,6 +494,8 @@ export class LocalMemoryService                             {
           names            
   /** 注入设置(面板「设置」标签页可改;落盘在 <storeDir>/settings.json)。 */
           inject                
+  /** 注入半边的审计收集器(可选;没有注入半边时保持 null)。 */
+          injectAuditSink                                               = null
 
   constructor(config                    = {}) {
     this.cfg = resolveConfig(config)
@@ -536,6 +538,16 @@ export class LocalMemoryService                             {
     return normalizeInjectSettings(this.inject, this.inject)
   }
 
+  /** 注入半边注册审计收集器。重复注册时后一个覆盖前一个(激活重载)。 */
+  attachInjectAudit(sink                                       )       {
+    this.injectAuditSink = sink
+  }
+
+  /** 面板 /memory/api/audit 用:返回注入评估记录(最新在前);没有注入半边时为空。 */
+  injectAudit(sessionId         )          {
+    try { return this.injectAuditSink?.list(sessionId) ?? [] } catch { return [] }
+  }
+
   /** 面板改设置:合并补丁 → 落盘 → 返回新值。写盘失败只告警,不影响运行中的设置。 */
   updateInjectSettings(patch         )                 {
     this.inject = mergeInjectSettings(this.inject, patch)
@@ -553,7 +565,16 @@ export class LocalMemoryService                             {
     const base = normalizeInjectSettings(fromConfig)
     try {
       if (existsSync(this.settingsPath)) {
-        return mergeInjectSettings(base, JSON.parse(readFileSync(this.settingsPath, 'utf8')))
+        const parsed = JSON.parse(readFileSync(this.settingsPath, 'utf8'))           
+        const digest = (parsed                                               )?.digest
+        // 0.9.5 及以前的默认 digest 预算是 400,且没有 hintBudget 字段。
+        // 升级到 0.9.6 时把"旧默认值"迁到新默认 800;显式写过 hintBudget 的配置不动。
+        const oldDigestDefault = digest !== undefined && digest !== null
+          && typeof digest === 'object' && digest.hintBudget === undefined
+          && Number(digest.tokenBudget) === 400
+        const merged = mergeInjectSettings(base, parsed)
+        if (oldDigestDefault) merged.digest.tokenBudget = base.digest.tokenBudget
+        return merged
       }
     } catch (error) {
       console.warn(`[dsh-memory-local] 忽略损坏的注入设置 ${this.settingsPath}: ${error instanceof Error ? error.message : String(error)}`)
@@ -562,18 +583,42 @@ export class LocalMemoryService                             {
   }
 
   /**
+   * 被其他记录 supersedes 指向的记录 id(=已退役)。scope 缺省时扫描全部已加载 scope。
+   * 只读、不发现、不创建;注入半边/规则段/自动召回共用这一份口径。
+   */
+  supersededIds(scopes                )           {
+    const ids = new Set        ()
+    const stores = scopes === undefined
+      ? this.store.allScopes()
+      : scopes.map((scope) => this.store.peek(scope)).filter((s)                             => s !== undefined)
+    for (const store of stores) {
+      for (const record of store.records.values()) {
+        if (typeof record.supersedes === 'string' && record.supersedes.length > 0) ids.add(record.supersedes)
+      }
+    }
+    return [...ids]
+  }
+
+  /**
    * 同步列记录(只读、不触发磁盘发现)。系统提示里的「硬性规则」段每步都要
    * 渲染,必须是同步的;这里直接读已加载 scope 的内存快照。
+   *
+   * 默认排除已被 supersede 的旧记录;需要历史/审计时显式 includeSuperseded。
    */
-  listSync(input                                                            = {})                 {
+  listSync(input                                                                                         = {})                 {
     const seen = new Set             ()
-    const out                 = []
+    const stores               = []
     for (const scope of input.scopes ?? []) {
       if (seen.has(scope)) continue
       seen.add(scope)
       const s = this.store.peek(scope)
-      if (!s) continue
+      if (s) stores.push(s)
+    }
+    const retired = input.includeSuperseded ? new Set        () : new Set(this.supersededIds(input.scopes))
+    const out                 = []
+    for (const s of stores) {
       for (const rec of s.records.values()) {
+        if (retired.has(rec.id)) continue
         if (input.kind !== undefined && rec.kind !== input.kind) continue
         out.push(rec)
       }
@@ -1665,13 +1710,14 @@ export class LocalMemoryService                             {
     return { imported, skipped, rejected, errors }
   }
 
-  /** 规则条数(面板设置页显示;只数已加载/已发现的作用域)。 */
+  /** 规则条数(面板设置页显示;只数已加载/已发现的作用域,排除退役规则)。 */
   ruleStats()                                    {
     this.discoverScopes()
+    const retired = new Set(this.supersededIds())
     let total = 0
     let scopes = 0
     for (const s of this.store.allScopes()) {
-      const n = [...s.records.values()].filter((r) => r.kind === 'rule').length
+      const n = [...s.records.values()].filter((r) => r.kind === 'rule' && !retired.has(r.id)).length
       if (n > 0) { total += n; scopes += 1 }
     }
     return { total, scopes }

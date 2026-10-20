@@ -240,6 +240,12 @@ async function handle(ctx, routePath, req, res) {
     // memories from earlier sessions included) — best-effort discovery, cached.
     discoverScopes(memory, store)
 
+    if (method === 'GET' && path === '/audit') {
+      if (typeof memory.injectAudit !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供注入审计接口（请升级 @restregular/dsh-memory）')
+      const session = (url.searchParams.get('session') ?? '').trim()
+      writeJson(res, { ok: true, value: { entries: memory.injectAudit(session === '' ? undefined : session) } })
+      return
+    }
     if (method === 'GET' && path === '/status') {
       const stats = typeof memory.scopeStats === 'function'
         ? memory.scopeStats()
