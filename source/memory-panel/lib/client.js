@@ -335,7 +335,7 @@ window.__ModuleLoader__.load({
       '.memp .td-rel-text{color:var(--dsw-alias-label-secondary);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}',
       '@media (max-width:620px){.memp .tree-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.memp .tree-toolbar input[type=text]{max-width:none}}',
       // ===== 审计 =====
-      '.memp .audit{display:flex;flex-direction:column;gap:10px;min-height:0;height:calc(100vh - 160px);max-height:calc(100vh - 160px);overflow:hidden}',
+      '.memp .audit{display:flex;flex-direction:column;gap:10px;min-height:0;height:calc(100vh - 210px);max-height:calc(100vh - 210px);overflow:hidden}',
       '.memp .audit-head{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}',
       '.memp .audit-title{font-size:16px;font-weight:650;line-height:1.35}',
       '.memp .audit-sub{font-size:11.5px;color:var(--dsw-alias-label-secondary);line-height:1.55;margin-top:2px}',
@@ -385,7 +385,7 @@ window.__ModuleLoader__.load({
       '.memp .audit-pill.bad{color:var(--dsw-alias-label-danger, #e05555);border-color:color-mix(in srgb,var(--dsw-alias-label-danger, #e05555) 42%,var(--dsw-alias-border-l1))}',
       '.memp .audit-pill.mute{color:var(--dsw-alias-label-secondary)}',
       '.memp .audit-empty{border:1px dashed var(--dsw-alias-border-l1);border-radius:10px;padding:26px 16px;text-align:center;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.65}',
-      '.memp .audit-detail{border:1px solid var(--dsw-alias-border-l1);border-radius:11px;background:var(--dsw-alias-bg-layer-1);padding:10px 11px;display:flex;flex-direction:column;gap:9px;height:100%;max-height:100%;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}',
+      '.memp .audit-detail{border:1px solid var(--dsw-alias-border-l1);border-radius:11px;background:var(--dsw-alias-bg-layer-1);padding:10px 11px 20px;box-sizing:border-box;display:flex;flex-direction:column;gap:9px;height:auto;max-height:calc(100vh - 340px);min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}',
       '.memp .audit-detail-head{display:flex;gap:7px;align-items:center}',
       '.memp .audit-detail-head b{font-size:12.5px}',
       '.memp .audit-detail-head .spacer{flex:1}',
@@ -416,15 +416,15 @@ window.__ModuleLoader__.load({
       '.memp .audit-id-group-title{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--dsw-alias-label-secondary);letter-spacing:.02em}',
       '.memp .audit-id-group-title b{font-weight:600;color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums}',
       '.memp .audit-id-sub{font-size:9.5px;color:var(--dsw-alias-label-secondary);opacity:.85}',
-      '.memp .audit-tip{position:fixed;z-index:120;max-width:min(380px,calc(100vw - 24px));max-height:min(300px,60vh);overflow:hidden;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2,var(--dsw-alias-border-l1));border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 97%,black 3%);box-shadow:0 14px 36px rgba(0,0,0,.28);pointer-events:none;color:var(--dsw-alias-label-primary)}',
+      '.memp .audit-tip{position:fixed;z-index:120;max-width:min(380px,calc(100vw - 24px));max-height:min(300px,60vh);overflow:auto;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2,var(--dsw-alias-border-l1));border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 97%,black 3%);box-shadow:0 14px 36px rgba(0,0,0,.28);pointer-events:auto;cursor:pointer;color:var(--dsw-alias-label-primary)}',
       '.memp .audit-tip-head{display:flex;align-items:center;gap:6px;margin-bottom:5px;font-size:11px;color:var(--dsw-alias-label-secondary)}',
       '.memp .audit-tip-title{font-weight:600;color:var(--dsw-alias-label-primary);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}',
       '.memp .audit-tip-meta{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:5px}',
-      '.memp .audit-tip-content{font-size:11px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-primary);max-height:170px;overflow:hidden}',
+      '.memp .audit-tip-content{font-size:11px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-primary);max-height:none;overflow:visible}',
       '.memp .audit-tip-foot{margin-top:6px;font-size:9.5px;color:var(--dsw-alias-label-secondary)}',
       '.memp .rec.focus{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 1px color-mix(in srgb,var(--dsw-alias-brand-primary) 25%,transparent)}',
       '@media (max-width:900px){.memp .audit-split.has-detail{grid-template-columns:minmax(0,1fr)}.memp .audit-row{grid-template-columns:54px 120px 120px minmax(100px,1fr) 96px 100px 80px}.memp .audit-table-head{grid-template-columns:54px 120px 120px minmax(100px,1fr) 96px 100px 80px}}',
-      '@media (max-width:620px){.memp .audit-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.memp .audit-table-head{display:none}.memp .audit-row{display:flex;flex-wrap:wrap;gap:4px 8px}.memp .audit-row .col-trigger,.memp .audit-row .col-budget{display:none}.memp .audit-row .col-nums{margin-left:auto}.memp .audit-row .col-time{order:1}.memp .audit-row .col-channel{order:2}.memp .audit-row .col-delivery{order:3}.memp .audit-row .col-outcome{order:4;margin-left:auto}.memp .audit-filter-row input[type=text],.memp .audit-filter-row input[type=search]{max-width:none;flex:1}.memp .audit{height:calc(100vh - 120px);max-height:calc(100vh - 120px)}}',
+      '@media (max-width:620px){.memp .audit-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.memp .audit-table-head{display:none}.memp .audit-row{display:flex;flex-wrap:wrap;gap:4px 8px}.memp .audit-row .col-trigger,.memp .audit-row .col-budget{display:none}.memp .audit-row .col-nums{margin-left:auto}.memp .audit-row .col-time{order:1}.memp .audit-row .col-channel{order:2}.memp .audit-row .col-delivery{order:3}.memp .audit-row .col-outcome{order:4;margin-left:auto}.memp .audit-filter-row input[type=text],.memp .audit-filter-row input[type=search]{max-width:none;flex:1}.memp .audit{height:calc(100vh - 150px);max-height:calc(100vh - 150px)}.memp .audit-detail{max-height:calc(100vh - 280px)}}',
     ].join('')
 
     async function api(method, body) {
@@ -2173,6 +2173,8 @@ window.__ModuleLoader__.load({
       const [reloadTick, setReloadTick] = React.useState(0)
       const [tip, setTip] = React.useState(null)
       const [recordCache, setRecordCache] = React.useState({})
+      const tipTimer = React.useRef(null)
+      const hideTimer = React.useRef(null)
 
       function queryParams(cursorValue) {
         const params = new URLSearchParams()
@@ -2257,32 +2259,55 @@ window.__ModuleLoader__.load({
           return undefined
         }
       }
-      const tipPosition = (event) => {
+      const clearTipTimers = () => {
+        if (tipTimer.current !== null) { clearTimeout(tipTimer.current); tipTimer.current = null }
+        if (hideTimer.current !== null) { clearTimeout(hideTimer.current); hideTimer.current = null }
+      }
+      React.useEffect(() => () => clearTipTimers(), [])
+      const positionForAnchor = (element) => {
         const width = typeof window !== 'undefined' ? window.innerWidth : 1200
         const height = typeof window !== 'undefined' ? window.innerHeight : 800
-        return {
-          x: Math.max(8, Math.min(event.clientX + 14, width - 390)),
-          y: Math.max(8, Math.min(event.clientY + 14, height - 320)),
-        }
+        const rect = element && typeof element.getBoundingClientRect === 'function' ? element.getBoundingClientRect() : null
+        if (rect === null) return { x: 12, y: 12 }
+        const tipWidth = Math.min(380, width - 24)
+        const tipHeight = 240
+        const x = Math.max(12, Math.min(rect.left, width - tipWidth - 12))
+        let y = rect.bottom + 8
+        if (y + tipHeight > height - 12) y = Math.max(12, rect.top - tipHeight - 8)
+        return { x, y }
       }
-      const moveTip = (event) => {
-        if (!event || typeof event.clientX !== 'number') return
-        setTip((prev) => prev === null ? prev : { ...prev, ...tipPosition(event) })
+      const scheduleTip = (build, element) => {
+        clearTipTimers()
+        if (tip !== null && tip.id !== build().id) setTip(null)
+        tipTimer.current = setTimeout(() => {
+          tipTimer.current = null
+          setTip({ ...build(), ...positionForAnchor(element) })
+        }, 350)
       }
-      const hideTip = () => setTip(null)
-      const showMemoryTip = (id, event) => {
-        const pos = tipPosition(event)
+      const cancelHideTip = () => {
+        if (hideTimer.current !== null) { clearTimeout(hideTimer.current); hideTimer.current = null }
+      }
+      const scheduleHideTip = () => {
+        if (tipTimer.current !== null) { clearTimeout(tipTimer.current); tipTimer.current = null }
+        cancelHideTip()
+        hideTimer.current = setTimeout(() => { hideTimer.current = null; setTip(null) }, 220)
+      }
+      const hideTip = () => { clearTipTimers(); setTip(null) }
+      const showMemoryTip = (id, element) => {
         const known = findRecord(id)
-        setTip({ type: 'memory', id, record: known, loading: known === undefined, ...pos })
+        const box = { record: known }
+        scheduleTip(() => ({ type: 'memory', id, record: box.record, loading: box.record === undefined }), element)
         if (known === undefined) {
           fetchRecord(id).then((record) => {
-            if (record !== undefined) setTip((prev) => prev !== null && prev.id === id ? { ...prev, record, loading: false } : prev)
+            if (record === undefined) return
+            box.record = record
+            setTip((prev) => prev !== null && prev.id === id ? { ...prev, record, loading: false } : prev)
           })
         }
       }
-      const showSessionTip = (id, event) => {
+      const showSessionTip = (id, element) => {
         const summary = typeof sessionInfo === 'function' ? (() => { try { return sessionInfo(id) } catch { return undefined } })() : undefined
-        setTip({ type: 'session', id, summary, ...tipPosition(event) })
+        scheduleTip(() => ({ type: 'session', id, summary }), element)
       }
       const openMemoryId = async (id) => {
         const record = findRecord(id) || await fetchRecord(id)
@@ -2296,10 +2321,9 @@ window.__ModuleLoader__.load({
       const idChip = (id, tone = '', title = undefined) => h('button', {
         key: `${tone}:${id}`,
         className: 'audit-id' + (tone ? ` ${tone}` : ''),
-        title: title || id,
-        onMouseEnter: (event) => showMemoryTip(id, event),
-        onMouseMove: moveTip,
-        onMouseLeave: hideTip,
+        'aria-label': title || id,
+        onMouseEnter: (event) => showMemoryTip(id, event.currentTarget),
+        onMouseLeave: scheduleHideTip,
         onClick: () => openMemoryId(id),
       }, id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id)
 
@@ -2495,10 +2519,9 @@ window.__ModuleLoader__.load({
           ? [h('span', { className: 'k', key: 'k-session' }, '会话'),
              h('span', { className: 'v', key: 'v-session' }, h('button', {
                className: 'audit-id',
-               title: selected.sessionId,
-               onMouseEnter: (event) => showSessionTip(selected.sessionId, event),
-               onMouseMove: moveTip,
-               onMouseLeave: hideTip,
+               'aria-label': selected.sessionId,
+               onMouseEnter: (event) => showSessionTip(selected.sessionId, event.currentTarget),
+               onMouseLeave: scheduleHideTip,
                onClick: () => openSessionId(selected.sessionId),
              }, selected.sessionId))]
           : null
@@ -2633,7 +2656,7 @@ window.__ModuleLoader__.load({
         if (tip.type === 'session') {
           const summary = tip.summary || {}
           const title = summary.title || summary.name || `会话 ${String(tip.id).slice(0, 8)}`
-          return h('div', { className: 'audit-tip', style: { left: tip.x, top: tip.y } },
+          return h('div', { className: 'audit-tip', style: { left: tip.x, top: tip.y }, onMouseEnter: cancelHideTip, onMouseLeave: hideTip, onClick: () => openSessionId(tip.id) },
             h('div', { className: 'audit-tip-head' }, h('span', null, '会话'), h('span', { className: 'audit-tip-title' }, title)),
             h('div', { className: 'audit-tip-meta' },
               auditPill(String(tip.id).slice(0, 8) + '…', 'mute'),
@@ -2641,12 +2664,13 @@ window.__ModuleLoader__.load({
               summary.archived === true ? auditPill('已归档', 'warn') : null,
             ),
             summary.cwd ? h('div', { className: 'audit-tip-content' }, summary.cwd) : null,
+            h('div', { className: 'audit-tip-content' }, `ID ${tip.id}`),
             summary.updatedAt ? h('div', { className: 'audit-tip-foot' }, `更新于 ${fmtTime(summary.updatedAt)}`) : null,
             h('div', { className: 'audit-tip-foot' }, '点击打开会话'),
           )
         }
         const record = tip.record
-        return h('div', { className: 'audit-tip', style: { left: tip.x, top: tip.y } },
+        return h('div', { className: 'audit-tip', style: { left: tip.x, top: tip.y }, onMouseEnter: cancelHideTip, onMouseLeave: hideTip, onClick: () => openMemoryId(tip.id) },
           h('div', { className: 'audit-tip-head' }, h('span', null, '记忆'), h('span', { className: 'audit-tip-title' }, record ? record.id : tip.id)),
           record
             ? h('div', null,
@@ -2658,7 +2682,7 @@ window.__ModuleLoader__.load({
                 record.tags && record.tags.length > 0
                   ? h('div', { className: 'audit-flat' }, record.tags.map((tag) => h('span', { className: 'tag', key: tag }, tag)))
                   : null,
-                h('div', { className: 'audit-tip-content' }, `${String(record.content || '').slice(0, 700)}${String(record.content || '').length > 700 ? '…' : ''}`),
+                h('div', { className: 'audit-tip-content' }, String(record.content || '')),
               )
             : h('div', { className: 'audit-tip-content' }, tip.loading ? '加载记录…' : '记录未找到（可能已删除或不在已加载作用域）'),
           h('div', { className: 'audit-tip-foot' }, '点击跳转到「记录」页并展开'),
