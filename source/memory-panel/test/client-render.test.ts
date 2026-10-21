@@ -379,7 +379,19 @@ test('审计标签页:真实事件渲染为事件流与详情,评估不等于投
     json: async () => ({ ok: true, value: { entries, total: 2, stats: { entries: 2, capacity: 2000, perSessionCapacity: 200, dropped: 0, writeErrors: 0, persistence: 'memory' } } }),
   })
   const AuditTab = (exports.__test as { AuditTab: (p: Record<string, unknown>) => unknown }).AuditTab
-  const element = () => hooks.React.createElement(AuditTab, { scopes: [{ scope: 'session:s1', label: '测试会话' }] })
+  const opened: { record?: { id: string; scope?: string }; session?: string } = {}
+  const records = [{
+    id: 'mem-1', scope: 'project:D:/repo', kind: 'procedure',
+    content: '发布前先检查 devcred 凭据，并确认版本号与工作区状态。',
+    tags: ['release', 'publish'], importance: 0.8, updatedAt: Date.now(),
+  }]
+  const element = () => hooks.React.createElement(AuditTab, {
+    scopes: [{ scope: 'session:s1', label: '测试会话' }],
+    records,
+    openRecord: (id: string, scope?: string) => { opened.record = { id, scope } },
+    openSession: (id: string) => { opened.session = id },
+    sessionInfo: () => ({ title: '测试会话', cwd: 'D:/repo', updatedAt: Date.now(), running: true }),
+  })
   let current: RenderNode | null = render(element(), hooks)
   hooks.setRerender(() => { current = render(element(), hooks) })
   hooks.runEffects()
@@ -406,8 +418,32 @@ test('审计标签页:真实事件渲染为事件流与详情,评估不等于投
   const detail = textOf(current)
   assert.ok(detail.includes('检索与过滤'))
   assert.ok(detail.includes('原始命中'))
-  assert.ok(detail.includes('top_k'))
+  assert.ok(detail.includes('省略 · 条数上限'))
+  assert.ok(detail.includes('选中正文'))
+  assert.ok(detail.includes('候选中的可枚举 ID'))
   assert.ok(detail.includes('fnv1a:def'), '详情展示已脱敏 query 的 hash')
+
+  // 记忆 ID hover 显示原文浮窗，点击跳转到记录页。
+  const recordChip = collect(current)
+    .filter((n) => n.tag === 'button' && String(n.props?.className ?? '').split(/\s+/).includes('audit-id'))
+    .find((n) => textOf(n).includes('mem-1'))
+  assert.ok(recordChip, '选中记忆 ID 是按钮')
+  ;(recordChip!.props!.onMouseEnter as (e: unknown) => void)({ clientX: 120, clientY: 120 })
+  assert.ok(textOf(current).includes('发布前先检查 devcred 凭据'), 'hover 显示记忆原文')
+  ;(recordChip!.props!.onClick as () => void)()
+  for (let i = 0; i < 2; i++) await Promise.resolve()
+  assert.deepEqual(opened.record, { id: 'mem-1', scope: 'project:D:/repo' })
+
+  // 会话 ID hover 显示会话信息，点击打开会话。
+  const sessionChip = collect(current)
+    .filter((n) => n.tag === 'button' && String(n.props?.className ?? '').split(/\s+/).includes('audit-id'))
+    .find((n) => textOf(n) === 's1')
+  assert.ok(sessionChip, '会话 ID 是按钮')
+  ;(sessionChip!.props!.onMouseEnter as (e: unknown) => void)({ clientX: 130, clientY: 130 })
+  assert.ok(textOf(current).includes('测试会话'), 'hover 显示会话标题')
+  ;(sessionChip!.props!.onClick as () => void)()
+  for (let i = 0; i < 2; i++) await Promise.resolve()
+  assert.equal(opened.session, 's1')
   hooks.resetAll()
 })
 

@@ -361,7 +361,7 @@ window.__ModuleLoader__.load({
       '.memp .audit-switch .switch.on .knob{left:16px}',
       '.memp .audit-filter-sub{padding-top:1px}',
       '.memp .audit-range-sep{color:var(--dsw-alias-label-secondary);font-size:11px;flex:none}',
-      '.memp .audit-split{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;min-height:0;flex:1;overflow:hidden;align-items:stretch}',
+      '.memp .audit-split{display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:10px;min-height:0;flex:1;overflow:hidden;align-items:stretch}',
       '.memp .audit-split.has-detail{grid-template-columns:minmax(0,1fr) minmax(300px,360px)}',
       '.memp .audit-list-wrap{display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}',
       '.memp .audit-table-head{display:grid;grid-template-columns:62px 140px minmax(150px,1.3fr) minmax(110px,0.8fr) 112px minmax(108px,0.9fr) 92px;gap:8px;align-items:center;position:sticky;top:0;z-index:2;box-sizing:border-box;padding:6px 9px;margin-bottom:2px;font-size:10px;letter-spacing:.03em;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);border:1px solid transparent;border-bottom-color:var(--dsw-alias-border-l1)}',
@@ -385,7 +385,7 @@ window.__ModuleLoader__.load({
       '.memp .audit-pill.bad{color:var(--dsw-alias-label-danger, #e05555);border-color:color-mix(in srgb,var(--dsw-alias-label-danger, #e05555) 42%,var(--dsw-alias-border-l1))}',
       '.memp .audit-pill.mute{color:var(--dsw-alias-label-secondary)}',
       '.memp .audit-empty{border:1px dashed var(--dsw-alias-border-l1);border-radius:10px;padding:26px 16px;text-align:center;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.65}',
-      '.memp .audit-detail{border:1px solid var(--dsw-alias-border-l1);border-radius:11px;background:var(--dsw-alias-bg-layer-1);padding:10px 11px;display:flex;flex-direction:column;gap:9px;max-height:100%;min-height:0;overflow:auto;scrollbar-width:thin}',
+      '.memp .audit-detail{border:1px solid var(--dsw-alias-border-l1);border-radius:11px;background:var(--dsw-alias-bg-layer-1);padding:10px 11px;display:flex;flex-direction:column;gap:9px;height:100%;max-height:100%;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}',
       '.memp .audit-detail-head{display:flex;gap:7px;align-items:center}',
       '.memp .audit-detail-head b{font-size:12.5px}',
       '.memp .audit-detail-head .spacer{flex:1}',
@@ -408,6 +408,21 @@ window.__ModuleLoader__.load({
       '.memp .audit-json{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:7px;max-height:220px;overflow:auto}',
       '.memp .audit-pager{display:flex;gap:6px;align-items:center;justify-content:flex-end;font-size:11px;color:var(--dsw-alias-label-secondary)}',
       '.memp .audit-flat{display:flex;flex-wrap:wrap;gap:4px}',
+      '.memp .audit-id{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px;line-height:1.65;padding:1px 6px;border-radius:6px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.memp .audit-id:hover{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary)}',
+      '.memp .audit-id.omit{color:color-mix(in srgb,#D9A441 78%,var(--dsw-alias-label-primary));border-color:color-mix(in srgb,#D9A441 32%,var(--dsw-alias-border-l1))}',
+      '.memp .audit-id.dedup{opacity:.75}',
+      '.memp .audit-id-group{display:flex;flex-direction:column;gap:5px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-2) 55%,transparent)}',
+      '.memp .audit-id-group-title{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--dsw-alias-label-secondary);letter-spacing:.02em}',
+      '.memp .audit-id-group-title b{font-weight:600;color:var(--dsw-alias-label-primary);font-variant-numeric:tabular-nums}',
+      '.memp .audit-id-sub{font-size:9.5px;color:var(--dsw-alias-label-secondary);opacity:.85}',
+      '.memp .audit-tip{position:fixed;z-index:120;max-width:min(380px,calc(100vw - 24px));max-height:min(300px,60vh);overflow:hidden;padding:9px 10px;border:1px solid var(--dsw-alias-border-l2,var(--dsw-alias-border-l1));border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 97%,black 3%);box-shadow:0 14px 36px rgba(0,0,0,.28);pointer-events:none;color:var(--dsw-alias-label-primary)}',
+      '.memp .audit-tip-head{display:flex;align-items:center;gap:6px;margin-bottom:5px;font-size:11px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .audit-tip-title{font-weight:600;color:var(--dsw-alias-label-primary);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}',
+      '.memp .audit-tip-meta{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:5px}',
+      '.memp .audit-tip-content{font-size:11px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-primary);max-height:170px;overflow:hidden}',
+      '.memp .audit-tip-foot{margin-top:6px;font-size:9.5px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .rec.focus{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 1px color-mix(in srgb,var(--dsw-alias-brand-primary) 25%,transparent)}',
       '@media (max-width:900px){.memp .audit-split.has-detail{grid-template-columns:minmax(0,1fr)}.memp .audit-row{grid-template-columns:54px 120px 120px minmax(100px,1fr) 96px 100px 80px}.memp .audit-table-head{grid-template-columns:54px 120px 120px minmax(100px,1fr) 96px 100px 80px}}',
       '@media (max-width:620px){.memp .audit-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.memp .audit-table-head{display:none}.memp .audit-row{display:flex;flex-wrap:wrap;gap:4px 8px}.memp .audit-row .col-trigger,.memp .audit-row .col-budget{display:none}.memp .audit-row .col-nums{margin-left:auto}.memp .audit-row .col-time{order:1}.memp .audit-row .col-channel{order:2}.memp .audit-row .col-delivery{order:3}.memp .audit-row .col-outcome{order:4;margin-left:auto}.memp .audit-filter-row input[type=text],.memp .audit-filter-row input[type=search]{max-width:none;flex:1}.memp .audit{height:calc(100vh - 120px);max-height:calc(100vh - 120px)}}',
     ].join('')
@@ -710,7 +725,7 @@ window.__ModuleLoader__.load({
       })
     }
 
-    function RecordCard({ rec, vectorOn, labels, onSaved, onDeleted }) {
+    function RecordCard({ rec, vectorOn, labels, onSaved, onDeleted, focus = false }) {
       // collapsed by default: the list stays scannable, full text on demand
       const [expanded, setExpanded] = React.useState(false)
       const [editing, setEditing] = React.useState(false)
@@ -721,6 +736,9 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState('')
       const [copied, setCopied] = React.useState(false)
+
+      // 从审计页点 memory ID 跳过来时自动展开目标记录。
+      React.useEffect(() => { if (focus) setExpanded(true) }, [focus])
 
       const copyId = () => {
         try {
@@ -761,7 +779,7 @@ window.__ModuleLoader__.load({
         setTags(rec.tags.join(', ')); setImportance(rec.importance)
       }
 
-      return h('div', { className: 'rec' },
+      return h('div', { className: 'rec' + (focus ? ' focus' : '') },
         h('div', {
           className: 'rec-head',
           role: 'button',
@@ -2123,7 +2141,12 @@ window.__ModuleLoader__.load({
       { value: 'custom', label: '自定义日期…', ms: null },
     ]
 
-    function AuditTab({ scopes }) {
+    const AUDIT_OMIT_LABEL = {
+      top_k: '条数上限', budget: '预算', superseded: '已退役', expired: '已过期',
+      tag_mismatch: '标签不匹配', dedup: '去重', excluded: '被排除', skipped: '跳过',
+    }
+
+    function AuditTab({ scopes, records = [], openRecord, openSession, sessionInfo }) {
       const [entries, setEntries] = React.useState([])
       const [stats, setStats] = React.useState(null)
       const [total, setTotal] = React.useState(0)
@@ -2148,6 +2171,8 @@ window.__ModuleLoader__.load({
       const [until, setUntil] = React.useState('')
       const [selectedId, setSelectedId] = React.useState(null)
       const [reloadTick, setReloadTick] = React.useState(0)
+      const [tip, setTip] = React.useState(null)
+      const [recordCache, setRecordCache] = React.useState({})
 
       function queryParams(cursorValue) {
         const params = new URLSearchParams()
@@ -2211,6 +2236,73 @@ window.__ModuleLoader__.load({
 
       const resetAndReload = () => { setCursor(''); setCursorStack([]); setReloadTick((n) => n + 1) }
       const selected = selectedId === null ? null : entries.find((entry) => entry.id === selectedId) || null
+
+      // 记忆 ID / 会话 ID 的悬停浮窗与跳转。
+      const recordMap = {}
+      for (const rec of records) if (rec && rec.id) recordMap[rec.id] = rec
+      for (const [id, rec] of Object.entries(recordCache)) if (!recordMap[id]) recordMap[id] = rec
+      const findRecord = (id) => {
+        if (recordMap[id]) return recordMap[id]
+        return records.find((rec) => rec && rec.id && rec.id.startsWith(id)) || recordCache[id]
+      }
+      const fetchRecord = async (id) => {
+        const known = findRecord(id)
+        if (known) return known
+        try {
+          const value = await api(`records?id=${encodeURIComponent(id)}`)
+          const rec = Array.isArray(value.records) ? value.records[0] : undefined
+          if (rec !== undefined) setRecordCache((prev) => ({ ...prev, [rec.id]: rec, [id]: rec }))
+          return rec
+        } catch {
+          return undefined
+        }
+      }
+      const tipPosition = (event) => {
+        const width = typeof window !== 'undefined' ? window.innerWidth : 1200
+        const height = typeof window !== 'undefined' ? window.innerHeight : 800
+        return {
+          x: Math.max(8, Math.min(event.clientX + 14, width - 390)),
+          y: Math.max(8, Math.min(event.clientY + 14, height - 320)),
+        }
+      }
+      const moveTip = (event) => {
+        if (!event || typeof event.clientX !== 'number') return
+        setTip((prev) => prev === null ? prev : { ...prev, ...tipPosition(event) })
+      }
+      const hideTip = () => setTip(null)
+      const showMemoryTip = (id, event) => {
+        const pos = tipPosition(event)
+        const known = findRecord(id)
+        setTip({ type: 'memory', id, record: known, loading: known === undefined, ...pos })
+        if (known === undefined) {
+          fetchRecord(id).then((record) => {
+            if (record !== undefined) setTip((prev) => prev !== null && prev.id === id ? { ...prev, record, loading: false } : prev)
+          })
+        }
+      }
+      const showSessionTip = (id, event) => {
+        const summary = typeof sessionInfo === 'function' ? (() => { try { return sessionInfo(id) } catch { return undefined } })() : undefined
+        setTip({ type: 'session', id, summary, ...tipPosition(event) })
+      }
+      const openMemoryId = async (id) => {
+        const record = findRecord(id) || await fetchRecord(id)
+        hideTip()
+        if (typeof openRecord === 'function') openRecord(record?.id ?? id, record?.scope)
+      }
+      const openSessionId = (id) => {
+        hideTip()
+        if (typeof openSession === 'function') openSession(id)
+      }
+      const idChip = (id, tone = '', title = undefined) => h('button', {
+        key: `${tone}:${id}`,
+        className: 'audit-id' + (tone ? ` ${tone}` : ''),
+        title: title || id,
+        onMouseEnter: (event) => showMemoryTip(id, event),
+        onMouseMove: moveTip,
+        onMouseLeave: hideTip,
+        onClick: () => openMemoryId(id),
+      }, id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id)
+
       const prepared = entries.filter((entry) => entry.delivery && entry.delivery.status === 'unknown' && entry.reasonCode === 'prepared').length
       const suppressed = entries.filter((entry) => entry.delivery && (entry.delivery.status === 'suppressed' || entry.delivery.status === 'not_attempted')).length
       const failed = entries.filter((entry) => entry.outcome === 'failed').length
@@ -2380,10 +2472,36 @@ window.__ModuleLoader__.load({
         })
         const selectedIds = selected.selected ? selected.selected.contentIds : (selected.contentIds || [])
         const hintIds = selected.selected ? selected.selected.hintIds : (selected.hintIds || [])
+        const newlyAddedIds = selected.selected && Array.isArray(selected.selected.newlyAddedIds) ? selected.selected.newlyAddedIds : []
         const omitted = Array.isArray(selected.omitted) ? selected.omitted : []
+        const dedupIds = selected.dedup && Array.isArray(selected.dedup.ids) ? selected.dedup.ids : []
+        const omitGroups = new Map()
+        for (const item of omitted) {
+          const reason = item.reason || 'other'
+          if (!omitGroups.has(reason)) omitGroups.set(reason, [])
+          omitGroups.get(reason).push(item)
+        }
+        const sameIdSet = (a, b) => a.length === b.length && a.every((id) => b.includes(id))
+        const idGroup = (label, ids, tone, empty = '无', titleOf = undefined) => h('div', { className: 'audit-id-group' },
+          h('div', { className: 'audit-id-group-title' }, h('span', null, label), h('b', null, String(ids.length))),
+          ids.length > 0
+            ? h('div', { className: 'audit-flat' }, ids.map((id) => idChip(id, tone, titleOf ? titleOf(id) : undefined)))
+            : h('span', { className: 'audit-id-sub' }, empty),
+        )
         const kv = (label, value) => (value === undefined || value === null || value === '')
           ? null
           : [h('span', { className: 'k', key: `k-${label}` }, label), h('span', { className: 'v', key: `v-${label}` }, String(value))]
+        const sessionNode = selected.sessionId
+          ? [h('span', { className: 'k', key: 'k-session' }, '会话'),
+             h('span', { className: 'v', key: 'v-session' }, h('button', {
+               className: 'audit-id',
+               title: selected.sessionId,
+               onMouseEnter: (event) => showSessionTip(selected.sessionId, event),
+               onMouseMove: moveTip,
+               onMouseLeave: hideTip,
+               onClick: () => openSessionId(selected.sessionId),
+             }, selected.sessionId))]
+          : null
         const json = JSON.stringify(selected, null, 2)
         return h('div', { className: 'audit-detail' },
           h('div', { className: 'audit-detail-head' },
@@ -2398,7 +2516,7 @@ window.__ModuleLoader__.load({
             kv('序号', selected.seq),
             kv('时间', fmtTime(selected.at)),
             kv('schema', selected.schemaVersion || '旧版'),
-            kv('会话', selected.sessionId),
+            sessionNode,
             kv('step', selected.step),
             kv('通道', `${auditChannelLabel(selected.channel)} / ${selected.kind}`),
             kv('阶段', selected.stage),
@@ -2428,10 +2546,29 @@ window.__ModuleLoader__.load({
               kv('选中', selectedIds.length),
               kv('新增', selected.selected && selected.selected.newlyAddedIds ? selected.selected.newlyAddedIds.length : '—'),
               kv('hint', hintIds.length),
+              kv('省略', omitted.length),
               kv('去重跳过', selected.dedup ? selected.dedup.skipped : '—'),
             ),
-            selectedIds.length > 0 ? h('div', { className: 'audit-flat' }, selectedIds.map((id) => h('span', { className: 'tag', key: id }, id))) : null,
-            omitted.length > 0 ? h('div', { className: 'audit-flat' }, omitted.map((item, i) => h('span', { className: 'tag', key: `${item.id}-${i}`, title: item.tags ? item.tags.join(', ') : '' }, `${item.id.slice(0, 8)} · ${item.reason}`))) : null,
+            h('div', { className: 'audit-id-sub' }, '候选中的可枚举 ID = 选中 + 省略；标签过滤 / 退役排除只在上方计数里。'),
+            idGroup(selected.channel === 'rules' ? '选中规则' : '选中正文', selectedIds, '', '没有选中 ID'),
+            newlyAddedIds.length > 0 && !sameIdSet(newlyAddedIds, selectedIds)
+              ? idGroup('本次新增到消息', newlyAddedIds, '', '无')
+              : null,
+            hintIds.length > 0 ? idGroup('标签索引（只给 ID，未注入正文）', hintIds, '', '无') : null,
+            ...Array.from(omitGroups.entries()).map(([reason, items]) => idGroup(
+              `省略 · ${AUDIT_OMIT_LABEL[reason] || reason}`,
+              items.map((item) => item.id),
+              'omit',
+              '无',
+              (id) => {
+                const item = items.find((entry) => entry.id === id)
+                return `${id}${item && item.tags && item.tags.length > 0 ? ` · ${item.tags.join(', ')}` : ''}`
+              },
+            )),
+            dedupIds.length > 0 ? idGroup('去重跳过', dedupIds, 'dedup', '无') : null,
+            selectedIds.length + hintIds.length + omitted.length + dedupIds.length === 0
+              ? h('div', { className: 'audit-id-sub' }, '这条事件没有可枚举的记忆 ID。')
+              : null,
           ),
           budgetRows.length > 0 ? h('div', { className: 'audit-sec' },
             h('div', { className: 'audit-sec-title' }, '预算'),
@@ -2492,6 +2629,43 @@ window.__ModuleLoader__.load({
           : h('div', { className: 'audit-list' }, listHeader, entries.map(row))
       const listArea = h('div', { className: 'audit-list-wrap' }, listBody)
 
+      const tipNode = tip === null ? null : (() => {
+        if (tip.type === 'session') {
+          const summary = tip.summary || {}
+          const title = summary.title || summary.name || `会话 ${String(tip.id).slice(0, 8)}`
+          return h('div', { className: 'audit-tip', style: { left: tip.x, top: tip.y } },
+            h('div', { className: 'audit-tip-head' }, h('span', null, '会话'), h('span', { className: 'audit-tip-title' }, title)),
+            h('div', { className: 'audit-tip-meta' },
+              auditPill(String(tip.id).slice(0, 8) + '…', 'mute'),
+              summary.running === true ? auditPill('运行中', 'ok') : null,
+              summary.archived === true ? auditPill('已归档', 'warn') : null,
+            ),
+            summary.cwd ? h('div', { className: 'audit-tip-content' }, summary.cwd) : null,
+            summary.updatedAt ? h('div', { className: 'audit-tip-foot' }, `更新于 ${fmtTime(summary.updatedAt)}`) : null,
+            h('div', { className: 'audit-tip-foot' }, '点击打开会话'),
+          )
+        }
+        const record = tip.record
+        return h('div', { className: 'audit-tip', style: { left: tip.x, top: tip.y } },
+          h('div', { className: 'audit-tip-head' }, h('span', null, '记忆'), h('span', { className: 'audit-tip-title' }, record ? record.id : tip.id)),
+          record
+            ? h('div', null,
+                h('div', { className: 'audit-tip-meta' },
+                  auditPill(record.kind, 'mute'),
+                  auditPill(record.scope, 'mute'),
+                  auditPill(`重要度 ${Number(record.importance ?? 0).toFixed(2)}`, 'mute'),
+                ),
+                record.tags && record.tags.length > 0
+                  ? h('div', { className: 'audit-flat' }, record.tags.map((tag) => h('span', { className: 'tag', key: tag }, tag)))
+                  : null,
+                h('div', { className: 'audit-tip-content' }, `${String(record.content || '').slice(0, 700)}${String(record.content || '').length > 700 ? '…' : ''}`),
+              )
+            : h('div', { className: 'audit-tip-content' }, tip.loading ? '加载记录…' : '记录未找到（可能已删除或不在已加载作用域）'),
+          h('div', { className: 'audit-tip-foot' }, '点击跳转到「记录」页并展开'),
+        )
+      })()
+
+
       return h('div', { className: 'audit' },
         ...banner,
         h('div', { className: 'audit-stats' },
@@ -2521,13 +2695,14 @@ window.__ModuleLoader__.load({
             load(nextCursor, stack)
           } }, '下一页'),
         ),
+        tipNode,
       )
     }
 
     /** 待嵌入自动刷新:最多 300 次 × 1.5s(后端挂着时不无限轮询)。 */
     const PENDING_POLL_LIMIT = 300
 
-    function MemoryPanel() {
+    function MemoryPanel({ openSession, sessionInfo } = {}) {
       const [records, setRecords] = React.useState([])
       const [scopes, setScopes] = React.useState([])
       const [embedServer, setEmbedServer] = React.useState(null)
@@ -2537,6 +2712,7 @@ window.__ModuleLoader__.load({
       const [dangerAsk, setDangerAsk] = React.useState('')
       const [scopeFilter, setScopeFilter] = React.useState('')
       const [q, setQ] = React.useState('')
+      const [focusRecord, setFocusRecord] = React.useState(null)
       const [loading, setLoading] = React.useState(true)
       const [error, setError] = React.useState('')
       const [tab, setTab] = React.useState('data')
@@ -2562,6 +2738,16 @@ window.__ModuleLoader__.load({
         setLoading(false)
       }
       React.useEffect(() => { load('', '') }, [])
+
+      /** 审计里的记忆 ID → 切到「记录」页并展开对应记录。 */
+      const openRecord = (id, scope) => {
+        setFocusRecord(id)
+        setTab('data')
+        setQ('')
+        const nextScope = scope || ''
+        setScopeFilter(nextScope)
+        load('', nextScope)
+      }
       // 导入完成后从设置页切换回记录页时,列表要能看到新数据(事件由设置页发出)。
       React.useEffect(() => {
         if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return undefined
@@ -2855,7 +3041,7 @@ window.__ModuleLoader__.load({
       const listBody = !loading && !error && records.length === 0
         ? h('div', { className: 'empty' }, filtering ? '没有匹配的记忆' : '还没有记忆')
         : h('div', { className: 'list' },
-            records.map((rec) => h(RecordCard, { key: rec.id, rec, vectorOn: configured && vectorEnabled, labels: labels, onSaved: () => { setPendingTick(0); load() }, onDeleted: () => { setPendingTick(0); load() } })))
+            records.map((rec) => h(RecordCard, { key: rec.id, rec, focus: focusRecord === rec.id, vectorOn: configured && vectorEnabled, labels: labels, onSaved: () => { setPendingTick(0); load() }, onDeleted: () => { setPendingTick(0); load() } })))
 
       // 服务页底部:一句号召 + 两个外链(Star / issue)。放在内容最后,不打扰上面的状态卡。
       const footer = h('div', { className: 'footer' },
@@ -2901,7 +3087,7 @@ window.__ModuleLoader__.load({
             : tab === 'tree'
               ? treeBody
               : tab === 'audit'
-                ? h(AuditTab, { scopes })
+                ? h(AuditTab, { scopes, records, openRecord, openSession, sessionInfo })
                 : overviewBody,
       )
     }
@@ -2909,10 +3095,10 @@ window.__ModuleLoader__.load({
     const inject = ['slots']
 
     /** 侧栏入口打开的主界面页面(整块可滚动,内容就是面板本体)。 */
-    function MemoryPage() {
+    function MemoryPage({ openSession, sessionInfo } = {}) {
       return h('div', { className: 'mem-page' },
         h('div', { className: 'mem-page-head' }, h('h2', null, '记忆系统')),
-        h(MemoryPanel, {}),
+        h(MemoryPanel, { openSession, sessionInfo }),
       )
     }
 
@@ -2955,9 +3141,40 @@ window.__ModuleLoader__.load({
 
         const slots = ctx.get('slots')
         if (slots === undefined) return
+
+        /** 宿主 uiWorkspace 服务：打开会话 / 读取会话摘要（旧宿主缺失时静默降级）。 */
+        const workspaceService = () => {
+          try { return ctx.get('uiWorkspace') } catch { return undefined }
+        }
+        const openSession = (id) => {
+          try {
+            const workspace = workspaceService()
+            if (workspace && typeof workspace.openSession === 'function') {
+              workspace.openSession(id)
+              return
+            }
+            // 没有 uiWorkspace（极旧宿主/独立预览）时退回 hash 路由；不保证宿主识别。
+            if (typeof window !== 'undefined') window.location.hash = `#/s/${encodeURIComponent(id)}`
+          } catch (error) {
+            console.warn('[dsh-memory] 打开会话失败:', error?.message)
+          }
+        }
+        const sessionInfo = (id) => {
+          try {
+            const workspace = workspaceService()
+            const summary = workspace?.sessions?.list?.getSnapshot?.()?.byId?.[id]
+            if (summary !== undefined) return summary
+            const session = ctx.get('sessions')?.get?.(id)
+            if (session === undefined) return undefined
+            return session.summary ?? session
+          } catch {
+            return undefined
+          }
+        }
+
         slots.inject('settings.section', () => slots.register(
           { name: 'settings.section', id: 'memory', order: 24, label: NAV_LABEL },
-          () => React.createElement(MemoryPanel),
+          () => React.createElement(MemoryPanel, { openSession, sessionInfo }),
         ))
 
         // 侧栏入口(可选):开启后在左侧栏「插件」下方多一个「记忆系统」,点击在主界面打开面板。
@@ -2976,7 +3193,7 @@ window.__ModuleLoader__.load({
             }
             try {
               sidebarDisposers = [
-                slots.inject('main', () => slots.register({ name: 'main', key: 'memory' }, () => React.createElement(MemoryPage))),
+                slots.inject('main', () => slots.register({ name: 'main', key: 'memory' }, () => React.createElement(MemoryPage, { openSession, sessionInfo }))),
                 slots.inject('sidebar.panellist', () => slots.register(
                   { name: 'sidebar.panellist', id: 'memory', order: 20, label: () => NAV_LABEL },
                   () => React.createElement(NavLineIcon),

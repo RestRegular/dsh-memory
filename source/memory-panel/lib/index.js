@@ -592,6 +592,7 @@ async function handle(ctx, routePath, req, res) {
     if (method === 'GET' && path === '/records') {
       const rawScope = url.searchParams.get('scope')
       const query = (url.searchParams.get('q') ?? '').trim().toLowerCase()
+      const idQuery = (url.searchParams.get('id') ?? '').trim()
       // scope 先过同一套规范化:非法 → 400(而不是当成一个陌生 scope 去建文件);
       // 合法但不存在的 scope → 空列表。`peek`/`peekScope`,**绝不通过 store.scope() 创建**。
       let scope = null
@@ -623,6 +624,9 @@ async function handle(ctx, routePath, req, res) {
           r.content.toLowerCase().includes(query)
           || r.kind.toLowerCase().includes(query)
           || r.tags.some((t) => t.toLowerCase().includes(query)))
+      }
+      if (idQuery) {
+        records = records.filter((r) => r.id === idQuery || r.id.startsWith(idQuery))
       }
       writeJson(res, { ok: true, value: { records } })
       return
