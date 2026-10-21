@@ -344,10 +344,13 @@ test('审计标签页:独立入口、真实空状态、不伪造数据', async (
     embedServer: null,
   }, undefined, '审计')
   const text = textOf(tree())
-  assert.ok(text.includes('记忆审计'), '审计页有独立标题')
+  assert.ok(!text.includes('记忆审计'), '按需求移除顶部标题')
+  assert.ok(!text.includes('追踪记忆注入'), '按需求移除解释文本')
+  assert.ok(text.includes('自动刷新'), '自动刷新开关可见')
   assert.ok(text.includes('内存模式'), '如实显示内存模式')
   assert.ok(text.includes('当前筛选没有审计事件'), '无事件时显示真实空状态')
   assert.ok(!text.includes('已投递 42'), '不补造统计')
+  hooks.resetAll()
 })
 
 test('审计标签页:真实事件渲染为事件流与详情,评估不等于投递', async () => {
@@ -382,7 +385,7 @@ test('审计标签页:真实事件渲染为事件流与详情,评估不等于投
   hooks.runEffects()
   for (let i = 0; i < 8; i++) await Promise.resolve()
   const text = textOf(current)
-  assert.ok(text.includes('记忆审计'))
+  assert.ok(!text.includes('记忆审计'))
   assert.ok(text.includes('召回'), '通道名渲染')
   assert.ok(text.includes('已准备（投递未确认）'), 'unknown 投递不冒充已投递')
   assert.ok(text.includes('发布 token=[REDACTED:key-assignment]') === false, '列表不直接展示 query 原文')
@@ -402,6 +405,7 @@ test('审计标签页:真实事件渲染为事件流与详情,评估不等于投
   assert.ok(detail.includes('原始命中'))
   assert.ok(detail.includes('top_k'))
   assert.ok(detail.includes('fnv1a:def'), '详情展示已脱敏 query 的 hash')
+  hooks.resetAll()
 })
 
 test('作用域下拉用服务端给的 label(会话标题 / project 的 cwd)', async () => {

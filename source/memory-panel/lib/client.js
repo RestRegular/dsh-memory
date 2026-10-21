@@ -335,11 +335,12 @@ window.__ModuleLoader__.load({
       '.memp .td-rel-text{color:var(--dsw-alias-label-secondary);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}',
       '@media (max-width:620px){.memp .tree-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.memp .tree-toolbar input[type=text]{max-width:none}}',
       // ===== 审计 =====
-      '.memp .audit{display:flex;flex-direction:column;gap:12px;min-height:0}',
+      '.memp .audit{display:flex;flex-direction:column;gap:10px;min-height:0;height:calc(100vh - 160px);max-height:calc(100vh - 160px);overflow:hidden}',
       '.memp .audit-head{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}',
       '.memp .audit-title{font-size:16px;font-weight:650;line-height:1.35}',
       '.memp .audit-sub{font-size:11.5px;color:var(--dsw-alias-label-secondary);line-height:1.55;margin-top:2px}',
       '.memp .audit-mode{margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap}',
+      '.memp .audit-inline-note{font-size:10.5px;color:var(--dsw-alias-brand-primary);white-space:nowrap}',
       '.memp .audit-banner{border:1px solid color-mix(in srgb,#D9A441 42%,var(--dsw-alias-border-l1));background:color-mix(in srgb,#D9A441 9%,transparent);border-radius:9px;padding:7px 10px;font-size:11.5px;line-height:1.55;color:var(--dsw-alias-label-secondary)}',
       '.memp .audit-banner.bad{border-color:color-mix(in srgb,var(--dsw-alias-label-danger, #e05555) 45%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-label-danger, #e05555) 8%,transparent)}',
       '.memp .audit-stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}',
@@ -360,13 +361,15 @@ window.__ModuleLoader__.load({
       '.memp .audit-switch .switch.on .knob{left:16px}',
       '.memp .audit-filter-sub{padding-top:1px}',
       '.memp .audit-range-sep{color:var(--dsw-alias-label-secondary);font-size:11px;flex:none}',
-      '.memp .audit-split{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;min-height:0;align-items:start}',
+      '.memp .audit-split{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;min-height:0;flex:1;overflow:hidden;align-items:stretch}',
       '.memp .audit-split.has-detail{grid-template-columns:minmax(0,1fr) minmax(300px,360px)}',
-      '.memp .audit-list{display:flex;flex-direction:column;gap:5px;min-width:0;max-height:min(58vh,620px);overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;padding:1px 4px 1px 1px;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dsw-alias-label-secondary) 30%,transparent) transparent}',
+      '.memp .audit-list-wrap{display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}',
+      '.memp .audit-table-head{display:grid;grid-template-columns:58px 110px 104px minmax(72px,1fr) 92px 106px 84px;gap:8px;align-items:center;padding:0 9px 5px;margin-bottom:2px;font-size:10px;letter-spacing:.03em;color:var(--dsw-alias-label-secondary);border-bottom:1px solid var(--dsw-alias-border-l1)}',
+      '.memp .audit-list{display:flex;flex-direction:column;gap:5px;min-width:0;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;padding:5px 4px 1px 1px;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dsw-alias-label-secondary) 30%,transparent) transparent}',
       '.memp .audit-list::-webkit-scrollbar{width:8px}',
       '.memp .audit-list::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dsw-alias-label-secondary) 28%,transparent);border-radius:999px;border:2px solid transparent;background-clip:padding-box}',
       '.memp .audit-list::-webkit-scrollbar-track{background:transparent}',
-      '.memp .audit-row{display:grid;grid-template-columns:64px 116px minmax(90px,1fr) 92px 104px 84px 74px;gap:8px;align-items:center;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-alias-bg-layer-1);padding:6px 9px;font-size:11.5px;cursor:pointer;text-align:left;color:inherit;width:100%}',
+      '.memp .audit-row{display:grid;grid-template-columns:58px 110px 104px minmax(72px,1fr) 92px 106px 84px;gap:8px;align-items:center;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-alias-bg-layer-1);padding:6px 9px;font-size:11.5px;cursor:pointer;text-align:left;color:inherit;width:100%}',
       '.memp .audit-row:hover{border-color:var(--dsw-alias-brand-primary)}',
       '.memp .audit-row.on{border-color:var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 6%,var(--dsw-alias-bg-layer-1))}',
       '.memp .audit-row .m{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -381,7 +384,7 @@ window.__ModuleLoader__.load({
       '.memp .audit-pill.bad{color:var(--dsw-alias-label-danger, #e05555);border-color:color-mix(in srgb,var(--dsw-alias-label-danger, #e05555) 42%,var(--dsw-alias-border-l1))}',
       '.memp .audit-pill.mute{color:var(--dsw-alias-label-secondary)}',
       '.memp .audit-empty{border:1px dashed var(--dsw-alias-border-l1);border-radius:10px;padding:26px 16px;text-align:center;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.65}',
-      '.memp .audit-detail{border:1px solid var(--dsw-alias-border-l1);border-radius:11px;background:var(--dsw-alias-bg-layer-1);padding:10px 11px;display:flex;flex-direction:column;gap:9px;max-height:min(560px,68vh);overflow:auto;scrollbar-width:thin}',
+      '.memp .audit-detail{border:1px solid var(--dsw-alias-border-l1);border-radius:11px;background:var(--dsw-alias-bg-layer-1);padding:10px 11px;display:flex;flex-direction:column;gap:9px;max-height:100%;min-height:0;overflow:auto;scrollbar-width:thin}',
       '.memp .audit-detail-head{display:flex;gap:7px;align-items:center}',
       '.memp .audit-detail-head b{font-size:12.5px}',
       '.memp .audit-detail-head .spacer{flex:1}',
@@ -399,8 +402,8 @@ window.__ModuleLoader__.load({
       '.memp .audit-json{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:7px;max-height:220px;overflow:auto}',
       '.memp .audit-pager{display:flex;gap:6px;align-items:center;justify-content:flex-end;font-size:11px;color:var(--dsw-alias-label-secondary)}',
       '.memp .audit-flat{display:flex;flex-wrap:wrap;gap:4px}',
-      '@media (max-width:900px){.memp .audit-split.has-detail{grid-template-columns:minmax(0,1fr)}.memp .audit-row{grid-template-columns:54px 100px minmax(80px,1fr) 70px 84px}}',
-      '@media (max-width:620px){.memp .audit-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.memp .audit-row{grid-template-columns:minmax(0,1fr) auto;gap:4px 8px}.memp .audit-row .sec{display:none}.memp .audit-filter-row input[type=text],.memp .audit-filter-row input[type=search]{max-width:none;flex:1}.memp .audit-list{max-height:52vh}}',
+      '@media (max-width:900px){.memp .audit-split.has-detail{grid-template-columns:minmax(0,1fr)}.memp .audit-row{grid-template-columns:54px 96px 92px minmax(60px,1fr) 76px 92px 76px}.memp .audit-table-head{grid-template-columns:54px 96px 92px minmax(60px,1fr) 76px 92px 76px}}',
+      '@media (max-width:620px){.memp .audit-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.memp .audit-table-head{display:none}.memp .audit-row{display:flex;flex-wrap:wrap;gap:4px 8px}.memp .audit-row .col-trigger,.memp .audit-row .col-budget{display:none}.memp .audit-row .col-nums{margin-left:auto}.memp .audit-row .col-time{order:1}.memp .audit-row .col-channel{order:2}.memp .audit-row .col-delivery{order:3}.memp .audit-row .col-outcome{order:4;margin-left:auto}.memp .audit-filter-row input[type=text],.memp .audit-filter-row input[type=search]{max-width:none;flex:1}.memp .audit{height:calc(100vh - 120px);max-height:calc(100vh - 120px)}}',
     ].join('')
 
     async function api(method, body) {
@@ -2091,6 +2094,7 @@ window.__ModuleLoader__.load({
         if (navigator?.clipboard?.writeText) {
           await navigator.clipboard.writeText(text)
           setNotice('已复制')
+          setTimeout(() => setNotice(''), 2200)
           return
         }
       } catch { /* fallthrough */ }
@@ -2122,7 +2126,11 @@ window.__ModuleLoader__.load({
       const [cursor, setCursor] = React.useState('')
       const [loading, setLoading] = React.useState(true)
       const [error, setError] = React.useState('')
-      const [notice, setNotice] = React.useState('')
+      const [copyNotice, setCopyNotice] = React.useState('')
+      const [exportNotice, setExportNotice] = React.useState('')
+      const [autoRefresh, setAutoRefresh] = React.useState(true)
+      const [refreshMs, setRefreshMs] = React.useState(500)
+      const loadingRef = React.useRef(false)
       const [session, setSession] = React.useState(readAuditSession())
       const [channel, setChannel] = React.useState('')
       const [outcome, setOutcome] = React.useState('')
@@ -2159,8 +2167,11 @@ window.__ModuleLoader__.load({
         return params
       }
 
-      async function load(cursorValue, stack) {
-        setLoading(true); setError(''); setNotice('')
+      async function load(cursorValue, stack, options = {}) {
+        const silent = options.silent === true
+        if (silent && loadingRef.current) return
+        loadingRef.current = true
+        if (!silent) { setLoading(true); setError('') }
         try {
           const value = await api(`audit?${queryParams(cursorValue)}`)
           const list = Array.isArray(value.entries) ? value.entries : []
@@ -2170,15 +2181,27 @@ window.__ModuleLoader__.load({
           setNextCursor(typeof value.nextCursor === 'string' ? value.nextCursor : null)
           setCursor(cursorValue || '')
           if (stack !== undefined) setCursorStack(stack)
-          if (selectedId !== null && !list.some((entry) => entry.id === selectedId)) setSelectedId(null)
+          if (selectedId !== null && !list.some((entry) => entry.id === selectedId)) { setSelectedId(null); setCopyNotice('') }
+          if (silent) setError('')
         } catch (e) {
           setError(String(e.message || e))
-          setEntries([])
+          if (!silent) setEntries([])
         }
-        setLoading(false)
+        loadingRef.current = false
+        if (!silent) setLoading(false)
       }
 
       React.useEffect(() => { load('', []) }, [reloadTick])
+
+      // 自动刷新：默认 500ms，可关；页面隐藏时跳过，避免后台无意义轮询。
+      React.useEffect(() => {
+        if (!autoRefresh) return undefined
+        const timer = setInterval(() => {
+          if (typeof document !== 'undefined' && document.hidden) return
+          load(cursor, cursorStack, { silent: true })
+        }, refreshMs)
+        return () => clearInterval(timer)
+      }, [autoRefresh, refreshMs, cursor, cursorStack, session, channel, outcome, trigger, search, problem, range, since, until])
 
       const resetAndReload = () => { setCursor(''); setCursorStack([]); setReloadTick((n) => n + 1) }
       const selected = selectedId === null ? null : entries.find((entry) => entry.id === selectedId) || null
@@ -2200,9 +2223,10 @@ window.__ModuleLoader__.load({
       const channelOptions = [{ value: '', label: '全部通道' }].concat(Object.keys(AUDIT_CHANNEL_META).map((key) => ({ value: key, label: AUDIT_CHANNEL_META[key] })))
       const outcomeOptions = [{ value: '', label: '全部结果' }].concat(Object.keys(AUDIT_OUTCOME_META).map((key) => ({ value: key, label: AUDIT_OUTCOME_META[key].label })))
       const rangeOptions = AUDIT_RANGE_META.map((item) => ({ value: item.value, label: item.label }))
+      const refreshOptions = [500, 1000, 2000, 5000, 10000].map((ms) => ({ value: String(ms), label: `${ms / 1000} 秒` }))
 
       const exportAudit = async (format) => {
-        setNotice('')
+        setExportNotice('')
         try {
           const res = await fetch(`${API}/audit/export?${queryParams('')}&format=${format}`)
           if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -2213,9 +2237,10 @@ window.__ModuleLoader__.load({
           link.download = `dsh-memory-audit.${format}`
           link.click()
           setTimeout(() => URL.revokeObjectURL(url), 1000)
-          setNotice(`已导出当前筛选（${format.toUpperCase()}）。`)
+          setExportNotice(`已导出当前筛选（${format.toUpperCase()}）。`)
+          setTimeout(() => setExportNotice(''), 2200)
         } catch (e) {
-          setNotice(`导出失败：${String(e.message || e)}`)
+          setExportNotice(`导出失败：${String(e.message || e)}`)
         }
       }
 
@@ -2263,6 +2288,14 @@ window.__ModuleLoader__.load({
           h('button', { disabled: loading, onClick: () => setReloadTick((n) => n + 1) }, loading ? '刷新中…' : '刷新'),
         ),
         h('div', { className: 'audit-filter-row audit-filter-sub' },
+          h('span', { className: 'audit-switch' },
+            h(Switch, { checked: autoRefresh, disabled: loading, label: '自动刷新', onChange: (next) => setAutoRefresh(next) }),
+            '自动刷新',
+          ),
+          h(Dropdown, {
+            items: refreshOptions, value: String(refreshMs), disabled: loading || !autoRefresh,
+            onChange: (next) => setRefreshMs(Number(next)),
+          }),
           h('input', {
             type: 'text', className: 'audit-trigger', placeholder: '触发源', value: trigger,
             'aria-label': '按触发源筛选',
@@ -2294,6 +2327,7 @@ window.__ModuleLoader__.load({
           h('span', { className: 'spacer' }),
           h('button', { disabled: loading, onClick: () => exportAudit('jsonl') }, '导出 JSONL'),
           h('button', { disabled: loading, onClick: () => exportAudit('json') }, '导出 JSON'),
+          exportNotice ? h('span', { className: 'audit-inline-note' }, exportNotice) : null,
         ),
       )
 
@@ -2307,24 +2341,24 @@ window.__ModuleLoader__.load({
         return h('button', {
           key: entry.id,
           className: 'audit-row' + (entry.id === selectedId ? ' on' : ''),
-          onClick: () => setSelectedId(entry.id),
+          onClick: () => { setSelectedId(entry.id); setCopyNotice('') },
         },
-          h('span', { className: 'm t', title: fmtTime(entry.at) }, shortTime(entry.at)),
-          h('span', { className: 'm' },
+          h('span', { className: 'm t col-time', title: fmtTime(entry.at) }, shortTime(entry.at)),
+          h('span', { className: 'm col-channel' },
             h('b', { className: 'ch' }, auditChannelLabel(entry.channel)),
             h('span', { className: 'trig' }, ` · ${entry.kind || 'event'}`),
           ),
-          h('span', { className: 'm trig', title: `${entry.trigger || ''} ${entry.phase || ''}` },
+          h('span', { className: 'm trig col-trigger', title: `${entry.trigger || ''} ${entry.phase || ''}` },
             `${entry.trigger || '—'}${entry.phase ? ` / ${entry.phase}` : ''}`),
-          h('span', { className: 'm nums' }, `${candidates} / ${picked} / ${omitted}`),
-          h('span', { className: 'm' }, budget
+          h('span', { className: 'm nums col-nums' }, `${candidates} / ${picked} / ${omitted}`),
+          h('span', { className: 'm col-budget' }, budget
             ? h('span', { className: 'audit-budget' },
                 h('span', { className: 'bar' }, h('i', { className: budget.over ? 'over' : '', style: { width: `${budget.budget > 0 ? Math.min(100, Math.round((budget.used / budget.budget) * 100)) : 100}%` } })),
                 h('span', { className: 'num' }, `${budget.used}/${budget.budget}`),
               )
             : h('span', { className: 'muted' }, '—')),
-          h('span', { className: 'm del' }, auditPill(delivery.label + delivery.detail, delivery.tone, delivery.detail || undefined)),
-          h('span', { className: 'm' }, auditPill(outcomeMeta.label, outcomeMeta.tone)),
+          h('span', { className: 'm del col-delivery' }, auditPill(delivery.label + delivery.detail, delivery.tone, delivery.detail || undefined)),
+          h('span', { className: 'm col-outcome' }, auditPill(outcomeMeta.label, outcomeMeta.tone)),
         )
       }
 
@@ -2349,8 +2383,9 @@ window.__ModuleLoader__.load({
           h('div', { className: 'audit-detail-head' },
             h('b', null, auditSummaryLine(selected)),
             h('span', { className: 'spacer' }),
-            h('button', { className: 'linkbtn', onClick: () => copyAuditText(selected.id, setNotice) }, '复制 ID'),
-            h('button', { className: 'audit-close', title: '关闭', onClick: () => setSelectedId(null) }, '×'),
+            h('button', { className: 'linkbtn', onClick: () => copyAuditText(selected.id, setCopyNotice) }, '复制 ID'),
+            copyNotice ? h('span', { className: 'audit-inline-note' }, copyNotice) : null,
+            h('button', { className: 'audit-close', title: '关闭', onClick: () => { setSelectedId(null); setCopyNotice('') } }, '×'),
           ),
           h('div', { className: 'audit-kv' },
             kv('事件', selected.id),
@@ -2425,7 +2460,7 @@ window.__ModuleLoader__.load({
           h('details', { className: 'audit-sec' },
             h('summary', { className: 'audit-sec-title' }, '原始结构化事件'),
             h('pre', { className: 'audit-json' }, json),
-            h('div', { className: 'row' }, h('button', { className: 'linkbtn', onClick: () => copyAuditText(json, setNotice) }, '复制 JSON')),
+            h('div', { className: 'row' }, h('button', { className: 'linkbtn', onClick: () => copyAuditText(json, setCopyNotice) }, '复制 JSON'), copyNotice ? h('span', { className: 'audit-inline-note' }, copyNotice) : null),
           ),
         )
       })() : null
@@ -2441,17 +2476,21 @@ window.__ModuleLoader__.load({
             )
           : h('div', { className: 'audit-list' }, entries.map(row))
 
+      const listHeader = h('div', { className: 'audit-table-head' },
+        h('span', null, '时间'),
+        h('span', null, '通道 / 事件'),
+        h('span', null, '触发 / 阶段'),
+        h('span', null, '候选 / 选中 / 省略'),
+        h('span', null, '预算'),
+        h('span', null, '投递'),
+        h('span', null, '结果'),
+      )
+      const listArea = h('div', { className: 'audit-list-wrap' },
+        entries.length > 0 ? listHeader : null,
+        listBody,
+      )
+
       return h('div', { className: 'audit' },
-        h('div', { className: 'audit-head' },
-          h('div', null,
-            h('div', { className: 'audit-title' }, '记忆审计'),
-            h('div', { className: 'audit-sub' }, '追踪记忆注入的触发、筛选、预算、投递与失败原因；评估选中 ≠ 已投递。'),
-          ),
-          h('div', { className: 'audit-mode' },
-            auditPill(persistence === 'memory' ? '内存模式 · 重启后不保留' : persistence === 'jsonl' ? '持久化正常' : '记录不完整', persistence === 'degraded' ? 'bad' : persistence === 'memory' ? 'warn' : 'ok'),
-            notice ? h('span', { className: 'muted' }, notice) : null,
-          ),
-        ),
         ...banner,
         h('div', { className: 'audit-stats' },
           h('div', { className: 'audit-stat' }, h('b', null, String(total)), h('span', null, '筛选内事件')),
@@ -2463,7 +2502,7 @@ window.__ModuleLoader__.load({
         toolbar,
         error && entries.length > 0 ? h('div', { className: 'err' }, error) : null,
         h('div', { className: 'audit-split' + (selected ? ' has-detail' : '') },
-          h('div', null, listBody),
+          listArea,
           detail,
         ),
         h('div', { className: 'audit-pager' },
