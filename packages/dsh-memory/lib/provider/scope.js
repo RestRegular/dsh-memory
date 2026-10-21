@@ -19,6 +19,7 @@
  * `foo:bar` 会与保留前缀撞成同一个键空间,用户也能靠它伪造 `project:` 键。
  */
 import { createHash } from 'node:crypto'
+import { posix, win32 } from 'node:path'
 import { isCustomScopeKey } from './store.js'
 
 /** 作用域键:除 'global' 外的形态由 resolveCurrentScopes / normalizeScopeInput 产生。 */
@@ -185,6 +186,62 @@ export function scopeTier(scope          )         {
 /** 写路径遇到只读 scope 时的错误码('all' 不能写)。 */
 export const SCOPE_NOT_WRITABLE = 'SCOPE_NOT_WRITABLE'
 
+// ------------------------------------------------------------------ 项目键的路径写法
+
+/** `D:\x` / `D:/x` / `\\server\share` —— 只有这些才按 Windows 语义处理。 */
+const WINDOWS_ABSOLUTE = /^(?:[A-Za-z]:[\\/]|\\\\)/u
+/** Windows 盘符路径(`D:` 后跟分隔符);UNC 没有盘符,单独判。 */
+const DRIVE_PATH = /^[A-Za-z]:[\\/]/u
+const POSIX_ABSOLUTE = /^\//u
+
+/**
+ * 项目作用域里的**路径规范形**:同一个目录只允许一种写法。
+ *
+ * 为什么需要:Windows 上 `D:/repositories/dsh-memory` 与 `D:\repositories\dsh-memory`
+ * 是同一个目录,但 `project:<路径>` 是字符串键、落盘文件名是它的 SHA-1 —— 两种写法会
+ * 变成两个 scope 文件。用 `memory_save({ path })` 写进去的记忆,同一个工作区里的会话
+ * (键来自宿主 `session.header.cwd`,反斜杠形式)再也读不到,而且注入 / 面板里会看到
+ * 两个"同名"作用域绝对路径。
+ *
+ * 只做**绝不可能指向另一个目录**的改写:
+ *   - Windows 绝对路径走 `win32.resolve`:分隔符统一成 `\`、消掉 `.`/`..` 与末尾分隔符,
+ *     盘符统一大写(`d:\x` → `D:\x`);
+ *   - POSIX 绝对路径走 `posix.resolve`(同样消掉 `.`/`..` 与末尾分隔符);
+ *   - 非绝对路径**原样返回**(不能拿 process.cwd() 去猜:那是 DSH 的 profile 目录);
+ *   - 大小写除盘符外**不动** —— 既有 scope 文件是按原始大小写做 SHA-1 的,擅自小写会让
+ *     旧数据"消失"。只是大小写不同的重复键由 `projectScopeIdentity` 识别、由 provider
+ *     在发现作用域时合并。
+ */
+export function canonicalWorkspacePath(value        )         {
+  const trimmed = value.trim()
+  if (WINDOWS_ABSOLUTE.test(trimmed)) {
+    const resolved = win32.resolve(trimmed)
+    const driveFixed = DRIVE_PATH.test(resolved)
+      ? resolved.replace(/^([a-z]):/u, (_, drive        ) => `${drive.toUpperCase()}:`)
+      : resolved
+    return stripTrailingSeparators(driveFixed, win32)
+  }
+  if (POSIX_ABSOLUTE.test(trimmed)) return stripTrailingSeparators(posix.resolve(trimmed), posix)
+  return trimmed.replace(/[\\/]+$/u, '') || trimmed
+}
+
+function stripTrailingSeparators(path        , impl                             )         {
+  // 根(`D:\` / `/`)本身就是一个合法的 scope 路径,不能剥成 `D:`。
+  if (path === impl.parse(path).root) return path
+  const stripped = path.replace(/[\\/]+$/u, '')
+  return stripped === '' ? path : stripped
+}
+
+/**
+ * 判断两个项目键是否指向"同一个目录":规范形之后,Windows 盘符路径再折叠大小写
+ * (Windows 文件系统不区分大小写)。POSIX 路径保留大小写 —— 在 Linux 上
+ * `/Users/a` 与 `/users/a` 是两个不同的目录。
+ */
+export function projectScopeIdentity(path        )         {
+  const canonical = canonicalWorkspacePath(path)
+  return WINDOWS_ABSOLUTE.test(canonical) ? canonical.toLowerCase() : canonical
+}
+
 // ------------------------------------------------------------------ 当前会话 / 当前项目
 
 /** 宿主 agent 上我们真正会碰到的那几个字段(其余一律不碰)。 */
@@ -235,7 +292,10 @@ export function resolveCurrentScopes(agent         , opts                       
   // 而 DSH 服务进程的 process.cwd() 是**profile 目录**(~/.dsh/profiles/<name>),
   // 与工作区无关 —— 0.5.5 及以前把 `project:${process.cwd()}` 当成"配置"先传进来,
   // 结果所有项目的项目级记忆都挤进同一个桶,`project:` 这个作用域等于失效。
-  const project = `project:${cwd ?? stripProjectPrefix(opts.projectScope) ?? process.cwd()}`
+  // 路径再过一遍 canonicalWorkspacePath:宿主若给出 `D:/x` / 带尾部分隔符的写法,
+  // 与 path 参数、显式 project:<路径> 落到同一个 scope(0.11.1)。
+  const projectPath = cwd ?? stripProjectPrefix(opts.projectScope) ?? process.cwd()
+  const project = `project:${canonicalWorkspacePath(projectPath)}`
   return sessionId !== undefined ? { session: `session:${sessionId}`, project } : { project }
 }
 

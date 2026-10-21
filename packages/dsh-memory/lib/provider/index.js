@@ -16,8 +16,10 @@
                    
 import { MemoryStore, scopeFileName,                 } from './store.js'
 import {
+  canonicalWorkspacePath,
   isCustomScope,
   normalizeScopeInput,
+  projectScopeIdentity,
   resolveCurrentScopes,
   scopeKind,
   scopeTier,
@@ -490,6 +492,8 @@ export class LocalMemoryService                             {
           projectScope                         
   /** 上次发现磁盘 scope 的时间(限流用;0 = 还没发现过)。 */
           discoveredAt = 0
+  /** "同一目录不同写法"的项目作用域是否已经合并过(每个进程只做一次)。 */
+          scopesReconciled = false
   /** 作用域别名(project:<路径> → 显示名),落盘 <storeDir>/scopes.json。 */
           names            
   /** 注入设置(面板「设置」标签页可改;落盘在 <storeDir>/settings.json)。 */
@@ -608,15 +612,16 @@ export class LocalMemoryService                             {
    * 默认排除已被 supersede 的旧记录;需要历史/审计时显式 includeSuperseded。
    */
   listSync(input                                                                                         = {})                 {
+    const wanted = (input.scopes ?? []).map((scope) => this.canonicalScope(scope))
     const seen = new Set             ()
     const stores               = []
-    for (const scope of input.scopes ?? []) {
+    for (const scope of wanted) {
       if (seen.has(scope)) continue
       seen.add(scope)
       const s = this.store.peek(scope)
       if (s) stores.push(s)
     }
-    const retired = input.includeSuperseded ? new Set        () : new Set(this.supersededIds(input.scopes))
+    const retired = input.includeSuperseded ? new Set        () : new Set(this.supersededIds(wanted))
     const out                 = []
     for (const s of stores) {
       for (const rec of s.records.values()) {
@@ -1738,9 +1743,21 @@ export class LocalMemoryService                             {
     return this.names.scopeOf(name)                           
   }
 
-  /** 自定义名可能是别名：统一转回真实键，读写口径共用。 */
+  /**
+   * 作用域键归一:自定义名可能是别名 → 转回真实键;`project:<路径>` 统一路径写法。
+   *
+   * 项目键必须过 `canonicalWorkspacePath`:工具层的 `path`、模型显式给的
+   * `project:D:/x`、面板 HTTP 写入都从这里落盘,同一个目录不能因为 `/` 与 `\` 的差别
+   * 变成两个 scope(0.11.1;读路径的键来自 resolveCurrentScopes,也走同一套规范化)。
+   */
           canonicalScope(scope             )              {
-    if (scope === 'global' || scope.startsWith('project:') || scope.startsWith('session:')) return scope
+    if (scope === 'global' || scope.startsWith('session:')) return scope
+    if (scope.startsWith('project:')) {
+      const path = scope.slice('project:'.length)
+      if (path === '') return scope
+      const canonical = canonicalWorkspacePath(path)
+      return (canonical === path ? scope : `project:${canonical}`)               
+    }
     return (this.names.scopeOf(scope)                           ) ?? scope
   }
 
@@ -1790,8 +1807,103 @@ export class LocalMemoryService                             {
       } catch {
         // 发现失败不影响读写,清单里少几个而已
       }
+      try {
+        this.reconcileScopes()
+      } catch {
+        // 合并失败同样不影响读写:留着两个 scope 也比丢数据强
+      }
     }
     return this.knownScopes()
+  }
+
+  /**
+   * 把"同一个目录的不同写法"合并成一个项目作用域(0.11.1,每个进程只跑一次)。
+   *
+   * 0.7.0 引入 `memory_save({ path })` 之后, `D:/repositories/x` 与 `D:\repositories\x`
+   * 会落成两个 scope 文件;工作区里的会话用宿主给的 `header.cwd`,于是另一份里的记忆
+   * 永远读不到(面板里还会看到两个同名作用域)。写入侧已在 `canonicalScope` 统一写法,
+   * 这里负责把**历史数据**并到规范键上:
+   *   - 同组的判定走 `projectScopeIdentity`(Windows 盘符路径再折叠大小写,POSIX 不动);
+   *   - 目标键优先选"写法已经规范"的那一个,其次记录多的(稳定时按键名);**只有变体存在时
+   *     改名**到规范键(否则会话读规范键、永远看不到这份记忆);
+   *   - 记录按 id 并入目标(目标已有同 id 就跳过);向量长度与当前配置一致时一起搬;
+   *   - 别名跟着走(目标没有别名时才接管),迁空的 scope 由 flush 顺手删掉文件。
+   * 多进程并发时,flush 的"锁内重新读盘 + 只合并本进程增量"兜底:这里只发 upsert/delete,
+   * 不会把别的进程刚写的内容覆盖掉。
+   */
+  reconcileScopes()                     {
+    if (this.scopesReconciled) return { merged: 0 }
+    this.scopesReconciled = true
+    // 直接调用(装配期)时还没有发现过磁盘 scope:先发现,否则只能看到已加载的那两个,
+    // 合并会漏、而且这唯一一次机会被浪费掉。
+    if (this.discoveredAt === 0) {
+      this.discoveredAt = Date.now()
+      try {
+        this.store.loadDiscovered()
+      } catch {
+        // 发现失败:清单少几个,不影响读写
+      }
+    }
+    const groups = new Map                                                                      ()
+    for (const store of this.store.allScopes()) {
+      if (!store.scope.startsWith('project:')) continue
+      const path = store.scope.slice('project:'.length)
+      if (path === '') continue
+      const identity = projectScopeIdentity(path)
+      const list = groups.get(identity)
+      const entry = { scope: store.scope, store, records: store.records.size }
+      if (list === undefined) groups.set(identity, [entry])
+      else list.push(entry)
+    }
+    let merged = 0
+    for (const list of groups.values()) {
+      const canonicalOf = (scope             )              =>
+        `project:${canonicalWorkspacePath(scope.slice('project:'.length))}`               
+      // 1) 写法已经规范的优先 2) 记录多的 3) 键名字典序(稳定,避免每次合并目标漂移)
+      list.sort((a, b) =>
+        Number(canonicalOf(b.scope) === b.scope) - Number(canonicalOf(a.scope) === a.scope)
+        || b.records - a.records
+        || a.scope.localeCompare(b.scope))
+      const targetScope = list[0] .scope
+      // 只有变体存在时(用 path 参数写进来的记忆,会话还没写过那个目录)也要**改名**:
+      // 会话读的是规范键,不改名等于这份记忆永远看不见。改名后 records 一条不少。
+      const canonicalTarget = canonicalOf(targetScope)
+      const finalTarget = canonicalTarget === targetScope ? targetScope : canonicalTarget
+      const sources = list.filter((entry) => entry.scope !== finalTarget)
+      if (sources.length === 0) continue
+      const targetStore = this.store.scope(finalTarget)
+      for (const source of sources) {
+        for (const record of [...source.store.records.values()]) {
+          if (!targetStore.records.has(record.id)) {
+            targetStore.insert({ ...record, scope: finalTarget })
+            const vector = source.store.vectors.get(record.id)
+            // 向量只有在维度与当前配置一致时才可信(换过模型/池化的边车已被 loadScope 校验过,
+            // 这里再按维度兜一层);搬不动的留给回填/重启后重新嵌入。
+            if (vector !== undefined && vector.length === this.cfg.vector.dims) {
+              targetStore.setVector(record.id, vector)
+            }
+          }
+          source.store.remove(record.id)
+        }
+        const alias = this.names.nameOf(source.scope)
+        if (alias !== undefined) {
+          this.names.release(source.scope)
+          if (this.names.nameOf(finalTarget) === undefined) {
+            try {
+              this.names.claim(finalTarget, alias)
+            } catch {
+              // 名字已被别的 scope 占用 → 放弃别名(路径本身仍可引用)
+            }
+          }
+        }
+        merged += 1
+      }
+    }
+    if (merged > 0) {
+      this.store.flush()
+      console.warn(`[dsh-memory-local] 已合并 ${merged} 个"同一目录不同写法"的项目作用域`)
+    }
+    return { merged }
   }
 
   /** Force a synchronous flush (dispose/HMR path). */

@@ -12,7 +12,7 @@
  */
                                              
 import { isAbsolute, resolve } from 'node:path'
-import { normalizeScopeInput, resolveScopeRef } from '../provider/scope.js'
+import { canonicalWorkspacePath, normalizeScopeInput, resolveScopeRef } from '../provider/scope.js'
 
 /** Shape each tool shares: JSON-schema parameters + canonical output value. */
                                  
@@ -163,15 +163,15 @@ function resolveScope(
 
 /**
  * `path` → 绝对工作区路径。相对路径按会话 cwd 解析（拿不到就按进程 cwd），
- * 去掉末尾分隔符 —— 同一个目录必须只有一种写法，否则 project:<路径> 会分叉。
+ * 再走 `canonicalWorkspacePath` 统一写法 —— 同一个目录必须只有一种 scope 键，
+ * 否则 `project:<路径>` 会分叉（`D:/x` 与 `D:\x` 曾是两个 scope，见 0.11.1）。
  */
 function resolveWorkspacePath(raw        , agent         )         {
   const value = raw.trim()
   if (value === '') throw new MemoryToolError('PATH_INVALID', 'path 不能为空')
   const cwd = (agent                                                            )?.session?.header?.cwd
   const base = typeof cwd === 'string' && cwd.length > 0 ? cwd : process.cwd()
-  const full = isAbsolute(value) ? value : resolve(base, value)
-  return full.replace(/[\\/]+$/u, '') || full
+  return canonicalWorkspacePath(isAbsolute(value) ? value : resolve(base, value))
 }
 
 export function memorySaveTool(opts                    )                                 {

@@ -1,4 +1,4 @@
-﻿import { test } from 'node:test'
+import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -17,9 +17,9 @@ function withDir(fn) {
 
 test('createRecord: 只接受明确的 scope,面板不猜 project/session', async () => {
   await withDir(async (svc) => {
-    const rec = await svc.createRecord({ scope: 'project:C:/w', kind: 'rule', content: '改 lib 必须同时改 source' })
+    const rec = await svc.createRecord({ scope: 'project:C:\\w', kind: 'rule', content: '改 lib 必须同时改 source' })
     assert.equal(rec.kind, 'rule')
-    assert.equal(rec.scope, 'project:C:/w')
+    assert.equal(rec.scope, 'project:C:\\w')
     const custom = await svc.createRecord({ scope: 'handbook', content: '自定义作用域里的一条' })
     assert.equal(custom.scope, 'handbook')
     await assert.rejects(() => svc.createRecord({ scope: 'project', content: 'x' }), /SCOPE_INVALID/)
@@ -31,7 +31,7 @@ test('createRecord: 只接受明确的 scope,面板不猜 project/session', asyn
 test('exportAll: 纯文本 + 元数据,不含向量', async () => {
   await withDir(async (svc) => {
     await svc.save({ scope: 'global', kind: 'fact', content: '全局事实' })
-    await svc.save({ scope: 'project:C:/w', kind: 'rule', content: '项目规则' })
+    await svc.save({ scope: 'project:C:\\w', kind: 'rule', content: '项目规则' })
     const doc = svc.exportAll()
     assert.equal(doc.version, 1)
     assert.equal(typeof doc.exportedAt, 'number')
@@ -39,7 +39,7 @@ test('exportAll: 纯文本 + 元数据,不含向量', async () => {
     for (const r of doc.records) {
       assert.deepEqual(Object.keys(r).sort(), ['content', 'createdAt', 'importance', 'kind', 'scope', 'tags', 'updatedAt'])
     }
-    assert.deepEqual(doc.records.map((r) => r.scope).sort(), ['global', 'project:C:/w'])
+    assert.deepEqual(doc.records.map((r) => r.scope).sort(), ['global', 'project:C:\\w'])
   })
 })
 
@@ -50,12 +50,12 @@ test('importRecords: 往返导入 + 重复按内容跳过', async () => {
   const b = fresh(other)
   try {
     await a.save({ scope: 'global', kind: 'decision', content: '选择 JSONL 作为存储' })
-    await a.save({ scope: 'project:C:/w', kind: 'rule', content: '发布前必须跑 npm test' })
+    await a.save({ scope: 'project:C:\\w', kind: 'rule', content: '发布前必须跑 npm test' })
     const doc = a.exportAll()
 
     const first = await b.importRecords(doc)
     assert.deepEqual({ imported: first.imported, skipped: first.skipped, rejected: first.rejected }, { imported: 2, skipped: 0, rejected: 0 })
-    const kinds = new Set(b.listSync({ scopes: ['global', 'project:C:/w'] }).map((r) => r.kind))
+    const kinds = new Set(b.listSync({ scopes: ['global', 'project:C:\\w'] }).map((r) => r.kind))
     assert.ok(kinds.has('rule') && kinds.has('decision'))
 
     const again = await b.importRecords(doc)

@@ -27,6 +27,13 @@ export class CordisMemoryService extends Service {
   constructor(ctx         , config                    = {}) {
     super(ctx, 'memory')
     this.impl = new LocalMemoryService(config)
+    // 0.11.1:同一个目录因为 `D:/x` 与 `D:\x` 写法不同而分叉成两个 scope 的历史数据,
+    // 在装配期合并一次(每进程一次;失败只影响合并,不影响读写)。
+    try {
+      this.impl.reconcileScopes()
+    } catch {
+      // 合并失败:两个 scope 继续并存(读写仍然正常),不阻断插件加载
+    }
     ctx.effect(() => () => this.impl.flushSync())
     this.attachRerank(ctx, config)
   }
