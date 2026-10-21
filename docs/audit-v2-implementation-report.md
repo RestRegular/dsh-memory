@@ -1,6 +1,6 @@
 # dsh-memory 审计 v2 实施报告
 
-> **版本**：`@restregular/dsh-memory` 0.12.3  
+> **版本**：`@restregular/dsh-memory` 0.12.4  
 > **基线**：`fa5e297`（0.11.1） + `docs/audit-implementation-review.md`  
 > **实施方案**：`dsh-memory-audit-v2-implementation-plan.md`  
 > **完成日期**：2026-10-22  
@@ -141,13 +141,16 @@ panel UI
 
 `source/memory-panel/lib/client.js` 新增独立「审计」标签页：
 
-- 标题区 + 持久化/完整性状态；
+- 顶部只保留带边框的持久化/内存模式提示（0.12.3 起移除标题、解释文本与右侧状态气泡）；
 - 概览统计：筛选内事件、本页已准备（投递未确认）、被抑制/未尝试、失败、丢弃/容量；
-- 筛选：会话、通道、结果、触发源、搜索（memory / `trace:` / `op:`）、仅看问题、起止日期；
-- 事件流表格：时间、通道/kind、trigger/phase、候选/选中/省略、预算、投递、结果；
+- 两行筛选：会话、通道、结果、时间范围、搜索、仅看问题、刷新；触发源、自定义日期、清空、导出；
+- 时间范围为自绘下拉（全部/15m/1h/24h/7d/30d/自定义），“仅看问题”与“自动刷新”使用自绘开关；
+- 自动刷新默认 500ms，可关闭并在 0.5/1/2/5/10 秒间切换；页面隐藏时跳过；
+- 事件流表格：带固定表头（时间、通道/事件、触发/阶段、候选/选中/省略、预算、投递、结果），只有列表纵向滚动；
+- 审计页固定为视口高度，整页不滚动；详情抽屉独立滚动；
 - 详情抽屉：生命周期、查询（脱敏）、检索与过滤、选择与省略、预算条、投递、失败、信号、原始 JSON、复制 ID/JSON；
 - 分页：上一页/下一页（cursor 栈）；
-- 导出当前筛选 JSONL；
+- 导出当前筛选 JSONL/JSON；复制/导出反馈就地显示在按钮旁；
 - 加载、空状态、错误重试、内存模式/降级/写入失败提示；
 - 不使用大型前端依赖，沿用现有 React + `h()` + CSS token。
 
@@ -178,7 +181,7 @@ panel UI
 
 ### 构建 / 文档
 
-- `package.json`（构建版本 0.12.0）
+- `package.json`（构建版本 0.12.4）
 - `packages/dsh-memory/**`（重新构建）
 - `README.md` / `CHANGELOG.md`
 - `docs/audit-implementation-review.md`（基线审查）
@@ -208,7 +211,7 @@ npm run build
 ### 5.2 结果
 
 - 全量：**323 项，322 通过，1 跳过，0 失败**（跳过项为既有环境相关用例）。
-- 构建：`@restregular/dsh-memory@0.12.3`，39 个产物文件，`BUILD OK`。
+- 构建：`@restregular/dsh-memory@0.12.4`，39 个产物文件，`BUILD OK`。
 - 新增测试覆盖：
   - pre-step 评估 + delivery（unknown / suppressed / not_attempted）；
   - digest source load / 渲染失败错误码；
@@ -227,12 +230,13 @@ npm run build
 
 | 项 | 状态 |
 | --- | --- |
-| npm `0.12.0` | 已发布；registry tarball 已可下载（200） |
-| npm `0.12.1` | 已发布；registry tarball 200 |
+| npm `0.12.0` | 已发布 |
+| npm `0.12.1` | 已发布 |
 | npm `0.12.2` | 已发布；修复 `CordisMemoryService` 未转发审计方法 |
-| npm `0.12.3` | 已发布，`dist-tags.latest` 已指向 0.12.3，registry tarball 已可下载（200） |
-| GitHub `main` | `3e45621`（docs 收尾）；0.12.3 UI 提交 `4dfa673`，0.12.2 为 `6ebc1a0` |
-| Git tags | `v0.12.0`、`v0.12.1`、`v0.12.2`、`v0.12.3` |
+| npm `0.12.3` | 已发布；两行筛选、自绘时间范围/开关、列表滚动 |
+| npm `0.12.4` | 已发布，`npm view` 验证 `dist-tags.latest = 0.12.4` |
+| GitHub `main` | `cd65d93`（0.12.4 UI/自动刷新）；0.12.3 为 `4dfa673` |
+| Git tags | `v0.12.0`、`v0.12.1`、`v0.12.2`、`v0.12.3`、`v0.12.4` |
 | 本地 profile | 未升级（按项目约定，发布/推送后不自动改本地插件） |
 
 ---
