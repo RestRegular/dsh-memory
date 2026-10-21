@@ -191,6 +191,31 @@ export class CordisMemoryService extends Service {
     return next
   }
 
+  /** 注入半边注册审计 sink；Cordis 服务必须显式转发，否则面板拿到的是 undefined。 */
+  attachInjectAudit(sink                                                        )       {
+    this.impl.attachInjectAudit(sink)
+  }
+
+  /** 按 sink 身份解绑（插件半边卸载/热重载）。 */
+  detachInjectAudit(sink          )       {
+    this.impl.detachInjectAudit(sink)
+  }
+
+  /** 旧接口：审计条目数组。 */
+  injectAudit(sessionId         )                                                {
+    return this.impl.injectAudit(sessionId)
+  }
+
+  /** v2 审计分页查询。 */
+  injectAuditPage(query          )                                                    {
+    return this.impl.injectAuditPage(query)
+  }
+
+  /** 审计容量/丢弃/写入错误。 */
+  injectAuditStats()                                                     {
+    return this.impl.injectAuditStats()
+  }
+
   /**
    * 当前 agent 上下文 → 默认合并读取范围(会话 + 项目 + global,按开关与 key 去重)。
    * 工具与召回注入都走它,保证与 `resolveWriteScope` 是同一套口径。

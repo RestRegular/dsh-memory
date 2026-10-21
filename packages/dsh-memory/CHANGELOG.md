@@ -2,6 +2,16 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.12.2 — 修复面板审计接口未转发
+
+- **根因**：审计方法加在 `LocalMemoryService` 上，但面板通过 `ctx.get('memory')` 拿到的是
+  `CordisMemoryService` 包装实例；包装层没有转发 `injectAudit / injectAuditPage /
+  injectAuditStats / attachInjectAudit / detachInjectAudit`，所以 0.12.1 的「审计」页显示
+  “provider 未提供注入审计接口”。
+- 在 `CordisMemoryService` 上补齐五个转发方法；新增 `service-delegation.test.ts` 直接断言
+  包装层暴露这些方法，防止再次“实现了但服务上看不到”。
+- 升级后需要重启 DSH（或让宿主重新加载 provider），只刷新页面仍会命中旧的服务实例。
+
 ## 0.12.1 — 审计 v2 收尾
 
 - 审计详情键值对使用唯一 key；补充日期/搜索/触发源输入的可访问标签；会话选择器回填当前选择。
