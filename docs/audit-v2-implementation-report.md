@@ -1,6 +1,6 @@
 # dsh-memory 审计 v2 实施报告
 
-> **版本**：`@restregular/dsh-memory` 0.12.1  
+> **版本**：`@restregular/dsh-memory` 0.12.3  
 > **基线**：`fa5e297`（0.11.1） + `docs/audit-implementation-review.md`  
 > **实施方案**：`dsh-memory-audit-v2-implementation-plan.md`  
 > **完成日期**：2026-10-22  
@@ -207,8 +207,8 @@ npm run build
 
 ### 5.2 结果
 
-- 全量：**322 项，321 通过，1 跳过，0 失败**（跳过项为既有环境相关用例）。
-- 构建：`@restregular/dsh-memory@0.12.1`，39 个产物文件，`BUILD OK`。
+- 全量：**323 项，322 通过，1 跳过，0 失败**（跳过项为既有环境相关用例）。
+- 构建：`@restregular/dsh-memory@0.12.3`，39 个产物文件，`BUILD OK`。
 - 新增测试覆盖：
   - pre-step 评估 + delivery（unknown / suppressed / not_attempted）；
   - digest source load / 渲染失败错误码；
@@ -228,9 +228,11 @@ npm run build
 | 项 | 状态 |
 | --- | --- |
 | npm `0.12.0` | 已发布；registry tarball 已可下载（200） |
-| npm `0.12.1` | 已发布，`dist-tags.latest` 已指向 0.12.1，registry tarball 已可下载（200） |
-| GitHub `main` | `5659ea2`（docs 收尾）；0.12.1 代码提交 `e490c19`，0.12.0 为 `7c455db` |
-| Git tags | `v0.12.0`、`v0.12.1` 已推送 |
+| npm `0.12.1` | 已发布；registry tarball 200 |
+| npm `0.12.2` | 已发布；修复 `CordisMemoryService` 未转发审计方法 |
+| npm `0.12.3` | 已发布，`dist-tags.latest` 已指向 0.12.3；tarball 需等待 registry validating 结束 |
+| GitHub `main` | `4dfa673`（0.12.3 UI 布局）；`0.12.2` 为 `6ebc1a0` |
+| Git tags | `v0.12.0`、`v0.12.1`、`v0.12.2`、`v0.12.3` |
 | 本地 profile | 未升级（按项目约定，发布/推送后不自动改本地插件） |
 
 ---
