@@ -352,6 +352,10 @@ tools/build-single-package.mjs   构建(产物契约检查 + 可选加载验证)
 
 ## 版本
 
+- **0.10.1** —— 修复深色模式下开关看不清:
+  - 设置卡片的 `.switch` 与向量服务的 `.toggle` 都把圆点写死成 `#fff`,而深色主题的 `--dsw-alias-brand-primary` 是近白色(`#f9fafb`),开启态白点直接融进白轨道(对比度约 1.05:1);关闭态轨道用 `--dsw-alias-border-l1`(约 6% 透明度),在深浅色下都几乎不可见。
+  - 两套开关改为跟随宿主 `[role=switch]` 的 token:关闭态轨道 `--dsw-alias-border-l3`、圆点 `--dsw-alias-switch-thumb`;开启态圆点 `--dsw-alias-label-primary-foreground`。浅色模式行为不变,深色模式轨道和圆点都可辨。
+  - 新增回归测试:断言两套开关使用上述 token,不再出现 `#fff` 与 `border-l1`。
 - **0.10.0** —— 存储层可多进程共用 + 向量身份带上 pooling(issue #3):
   - **跨进程安全**:不再"每个 scope 只读盘一次 + 内存快照整份重写"。每个 scope 一把锁文件(`openSync(…, 'wx')`,Windows 上 `EPERM`/`EACCES` 也按"已存在"处理),`flush()` 在锁内**重新读盘**、只把本次的增量(新增/更新/删除)合并进去;tmp 文件名带 pid + 随机后缀,两个进程并发写不会撞名破坏原子性。陈旧锁(持有者已死或 10s 未动)会被接管。
   - **读路径能看见别的进程的写入**:每 1s 限流 stat 一次,`mtime:size` 变了就重新读盘,不用重启。

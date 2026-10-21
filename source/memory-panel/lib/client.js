@@ -63,12 +63,15 @@ window.__ModuleLoader__.load({
       '.memp button:focus{outline:none}',
       '.memp button:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}',
       '.memp button:disabled{opacity:.5;cursor:default;border-color:var(--dsw-alias-border-l1);color:var(--dsw-alias-label-primary)}',
-      // 服务器开关(switch 造型)
+      // 服务器开关(switch 造型)。配色照抄宿主 [role=switch]:
+      //   - 关闭态轨道 border-l3(border-l1 只有 ~6% 透明度,深浅色下都几乎看不见);
+      //   - 圆点关闭态 switch-thumb、开启态 label-primary-foreground。
+      // 深色主题的 brand-primary 是近白色,圆点写死 #fff 会直接融进轨道里。
       '.memp .toggle{display:inline-flex;align-items:center;gap:8px;padding:4px 12px 4px 5px}',
-      '.memp .toggle-track{width:34px;height:18px;border-radius:999px;background:var(--dsw-alias-border-l1);position:relative;transition:background .15s ease;flex:none;display:inline-block}',
+      '.memp .toggle-track{width:34px;height:18px;border-radius:999px;background:var(--dsw-alias-border-l3);position:relative;transition:background .15s ease;flex:none;display:inline-block}',
       '.memp .toggle.on .toggle-track{background:var(--dsw-alias-brand-primary)}',
-      '.memp .toggle-knob{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .15s ease}',
-      '.memp .toggle.on .toggle-knob{transform:translateX(16px)}',
+      '.memp .toggle-knob{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:var(--dsw-alias-switch-thumb);box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .15s ease,background .15s ease}',
+      '.memp .toggle.on .toggle-knob{transform:translateX(16px);background:var(--dsw-alias-label-primary-foreground)}',
       // 记忆列表:一条一行时信息密度优先
       '.memp .list{display:flex;flex-direction:column;gap:8px}',
       '.memp .rec{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:9px 12px;background:var(--dsw-alias-bg-layer-1)}',
@@ -158,11 +161,13 @@ window.__ModuleLoader__.load({
       '.memp .setrow .set-desc{flex:1 1 100%;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
       '.memp .setrow .set-field{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--dsw-alias-label-secondary)}',
       '.memp .setrow input[type=number]{width:78px}',
-      // 开关:与向量服务的 toggle 同一套视觉(轨道 + 圆点)
-      '.memp .switch{position:relative;width:34px;height:20px;padding:0;border:0;border-radius:999px;background:var(--dsw-alias-border-l1);cursor:pointer;transition:background .12s ease}',
+      // 开关:与向量服务的 toggle 同一套视觉(轨道 + 圆点),配色同宿主 switch。
+      // 深色主题下开启态轨道是近白色,圆点必须用 label-primary-foreground 才看得见;
+      // 关闭态轨道用 border-l3、圆点用 switch-thumb,避免"只剩一个白点"。
+      '.memp .switch{position:relative;width:34px;height:20px;padding:0;border:0;border-radius:999px;background:var(--dsw-alias-border-l3);cursor:pointer;transition:background .12s ease}',
       '.memp .switch.on{background:var(--dsw-alias-brand-primary)}',
-      '.memp .switch .knob{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .12s ease;box-shadow:0 1px 2px rgba(0,0,0,.25)}',
-      '.memp .switch.on .knob{left:16px}',
+      '.memp .switch .knob{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--dsw-alias-switch-thumb);transition:left .12s ease,background .12s ease;box-shadow:0 1px 2px rgba(0,0,0,.25)}',
+      '.memp .switch.on .knob{left:16px;background:var(--dsw-alias-label-primary-foreground)}',
       '.memp .setfoot{display:flex;align-items:center;gap:10px;padding-top:12px}',
       // 新版设置页:卡片 + 可见 label + 状态文案 + 字段说明
       '.memp .setp{display:flex;flex-direction:column;gap:10px}',

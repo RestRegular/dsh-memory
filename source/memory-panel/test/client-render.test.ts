@@ -1074,3 +1074,30 @@ test('记忆树标签页:从面板能切过去,空数据也有统计、类型图
   assert.ok(classNames.includes('tree-wrap'), '树画布存在')
   assert.ok(classNames.includes('tree-stats'), '统计区存在')
 })
+
+test('两个开关的配色跟随宿主 switch token,深色主题下轨道和圆点都能看清', async () => {
+  const { exports } = await loadBundle()
+  const css = (exports.__test as { CSS: string }).CSS
+  const rule = (selector: string) => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return new RegExp(escaped + '\\{([^}]*)\\}').exec(css)?.[1] ?? ''
+  }
+
+  // 宿主 switch 的配色(--dsw-alias-*):关闭态轨道 border-l3、圆点 switch-thumb;
+  // 开启态轨道 brand-primary、圆点 label-primary-foreground。深色主题的 brand-primary
+  // 是近白色,所以圆点不能写死 #fff,关闭态轨道也不能用几乎透明的 border-l1(#ffffff0f)。
+  const pairs = [
+    { name: '设置开关', track: '.memp .switch', on: '.memp .switch.on', knob: '.memp .switch .knob', knobOn: '.memp .switch.on .knob' },
+    { name: '向量服务开关', track: '.memp .toggle-track', on: '.memp .toggle.on .toggle-track', knob: '.memp .toggle-knob', knobOn: '.memp .toggle.on .toggle-knob' },
+  ]
+  for (const p of pairs) {
+    const track = rule(p.track)
+    assert.match(track, /background:var\(--dsw-alias-border-l3\)/, `${p.name}:关闭态轨道用 border-l3:${track}`)
+    assert.doesNotMatch(track, /border-l1/, `${p.name}:关闭态轨道不能再用几乎透明的 border-l1`)
+    assert.match(rule(p.on), /background:var\(--dsw-alias-brand-primary\)/, `${p.name}:开启态轨道用品牌色`)
+    const knob = rule(p.knob)
+    assert.match(knob, /background:var\(--dsw-alias-switch-thumb\)/, `${p.name}:关闭态圆点用 switch-thumb:${knob}`)
+    assert.doesNotMatch(knob, /#fff/i, `${p.name}:圆点不能写死白色`)
+    assert.match(rule(p.knobOn), /background:var\(--dsw-alias-label-primary-foreground\)/, `${p.name}:开启态圆点用 label-primary-foreground`)
+  }
+})
