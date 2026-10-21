@@ -228,8 +228,8 @@ npm run build
 | 项 | 状态 |
 | --- | --- |
 | npm `0.12.0` | 已发布；registry tarball 已可下载（200） |
-| npm `0.12.1` | 已发布，`dist-tags.latest` 已指向 0.12.1；tarball 需等待 registry validating 结束 |
-| GitHub `main` | `e490c19`（0.12.1 收尾提交）；0.12.0 为 `7c455db` |
+| npm `0.12.1` | 已发布，`dist-tags.latest` 已指向 0.12.1，registry tarball 已可下载（200） |
+| GitHub `main` | `5659ea2`（docs 收尾）；0.12.1 代码提交 `e490c19`，0.12.0 为 `7c455db` |
 | Git tags | `v0.12.0`、`v0.12.1` 已推送 |
 | 本地 profile | 未升级（按项目约定，发布/推送后不自动改本地插件） |
 
