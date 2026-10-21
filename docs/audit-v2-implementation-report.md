@@ -230,8 +230,8 @@ npm run build
 | npm `0.12.0` | 已发布；registry tarball 已可下载（200） |
 | npm `0.12.1` | 已发布；registry tarball 200 |
 | npm `0.12.2` | 已发布；修复 `CordisMemoryService` 未转发审计方法 |
-| npm `0.12.3` | 已发布，`dist-tags.latest` 已指向 0.12.3；tarball 需等待 registry validating 结束 |
-| GitHub `main` | `4dfa673`（0.12.3 UI 布局）；`0.12.2` 为 `6ebc1a0` |
+| npm `0.12.3` | 已发布，`dist-tags.latest` 已指向 0.12.3，registry tarball 已可下载（200） |
+| GitHub `main` | `3e45621`（docs 收尾）；0.12.3 UI 提交 `4dfa673`，0.12.2 为 `6ebc1a0` |
 | Git tags | `v0.12.0`、`v0.12.1`、`v0.12.2`、`v0.12.3` |
 | 本地 profile | 未升级（按项目约定，发布/推送后不自动改本地插件） |
 
