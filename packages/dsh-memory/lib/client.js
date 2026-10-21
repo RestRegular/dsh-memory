@@ -2167,6 +2167,9 @@ window.__ModuleLoader__.load({
           value: scope.scope.slice(8),
           label: scope.label || `会话 ${scope.scope.slice(8, 16)}`,
         })))
+      if (session && !sessionOptions.some((item) => item.value === session)) {
+        sessionOptions.push({ value: session, label: `会话 ${session.slice(0, 8)}` })
+      }
       const channelOptions = [{ value: '', label: '全部通道' }].concat(Object.keys(AUDIT_CHANNEL_META).map((key) => ({ value: key, label: AUDIT_CHANNEL_META[key] })))
       const outcomeOptions = [{ value: '', label: '全部结果' }].concat(Object.keys(AUDIT_OUTCOME_META).map((key) => ({ value: key, label: AUDIT_OUTCOME_META[key].label })))
 
@@ -2213,12 +2216,12 @@ window.__ModuleLoader__.load({
           onChange: (next) => { setOutcome(next); resetAndReload() },
         }),
         h('input', {
-          type: 'text', placeholder: '触发源 / memory ID / trace:', value: trigger,
+          type: 'text', placeholder: '触发源', value: trigger, 'aria-label': '按触发源筛选',
           onChange: (e) => setTrigger(e.target.value),
           onKeyDown: (e) => { if (e.key === 'Enter') resetAndReload() },
         }),
         h('input', {
-          type: 'text', placeholder: '搜索 memory / trace: / op:', value: search,
+          type: 'text', placeholder: '搜索 memory / trace: / op:', value: search, 'aria-label': '按 memory / trace / operation ID 搜索',
           onChange: (e) => setSearch(e.target.value),
           onKeyDown: (e) => { if (e.key === 'Enter') resetAndReload() },
         }),
@@ -2226,10 +2229,11 @@ window.__ModuleLoader__.load({
           h('input', { type: 'checkbox', checked: problem, onChange: (e) => { setProblem(e.target.checked); resetAndReload() } }),
           '仅看问题',
         ),
-        h('input', { type: 'date', value: since, title: '起始日期', onChange: (e) => { setSince(e.target.value); resetAndReload() } }),
-        h('input', { type: 'date', value: until, title: '结束日期', onChange: (e) => { setUntil(e.target.value); resetAndReload() } }),
+        h('input', { type: 'date', value: since, title: '起始日期', 'aria-label': '起始日期', onChange: (e) => { setSince(e.target.value); resetAndReload() } }),
+        h('input', { type: 'date', value: until, title: '结束日期', 'aria-label': '结束日期', onChange: (e) => { setUntil(e.target.value); resetAndReload() } }),
         h('button', { disabled: loading, onClick: () => setReloadTick((n) => n + 1) }, loading ? '刷新中…' : '刷新'),
         h('button', { disabled: loading, onClick: () => exportAudit('jsonl') }, '导出 JSONL'),
+        h('button', { disabled: loading, onClick: () => exportAudit('json') }, '导出 JSON'),
         (session || channel || outcome || trigger || search || problem || since || until)
           ? h('button', { className: 'linkbtn', onClick: () => {
               setSession(''); writeAuditSession(''); setChannel(''); setOutcome(''); setTrigger(''); setSearch(''); setProblem(false); setSince(''); setUntil(''); resetAndReload()
@@ -2283,7 +2287,7 @@ window.__ModuleLoader__.load({
         const omitted = Array.isArray(selected.omitted) ? selected.omitted : []
         const kv = (label, value) => (value === undefined || value === null || value === '')
           ? null
-          : [h('span', { className: 'k', key: 'k' }, label), h('span', { className: 'v', key: 'v' }, String(value))]
+          : [h('span', { className: 'k', key: `k-${label}` }, label), h('span', { className: 'v', key: `v-${label}` }, String(value))]
         const json = JSON.stringify(selected, null, 2)
         return h('div', { className: 'audit-detail' },
           h('div', { className: 'audit-detail-head' },

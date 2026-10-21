@@ -2,6 +2,13 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.12.1 — 审计 v2 收尾
+
+- 审计详情键值对使用唯一 key；补充日期/搜索/触发源输入的可访问标签；会话选择器回填当前选择。
+- 工具栏增加「导出 JSON」（与 JSONL 同样走当前筛选）；导出仍只包含脱敏字段。
+- 摘要渲染抛错也记 `source_load` 失败（`render_failed`），不再把异常带进 pre-step。
+- 召回有正文但有省略时 outcome 记为 `partial`（`injected_partial`），避免把“部分注入”当成完全成功。
+
 ## 0.12.0 — 注入审计 v2
 
 - **审计 schema v2**：事件统一带 `schemaVersion / id / seq / at / kind / channel / stage / outcome / reasonCode`，

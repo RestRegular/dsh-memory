@@ -615,7 +615,8 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
         parts.push(outcome.value.text)
         messageChannels.add('digest')
         stage(auditBase('digest', {
-          kind: 'evaluation', stage: 'rendered', outcome: 'success', reasonCode: 'rendered',
+          kind: 'evaluation', stage: 'rendered', outcome: digestStats.omitted.length > 0 ? 'partial' : 'success',
+          reasonCode: digestStats.omitted.length > 0 ? 'rendered_partial' : 'rendered',
           trigger: 'turn_start',
           candidates: digestStats.candidates,
           selected: {
@@ -742,9 +743,11 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
         const queryField = sanitizeAuditText(recall.query)
         const omitted = recall.omitted.map((entry) => ({ id: entry.id, reason: entry.reason }))
         const failed = !recall.retrieval.ok
-        const outcome = failed ? 'failed' : recall.text !== undefined ? 'success' : omitted.length > 0 ? 'partial' : 'skipped'
+        const outcome = failed ? 'failed'
+          : recall.text !== undefined ? (omitted.length > 0 ? 'partial' : 'success')
+            : omitted.length > 0 ? 'partial' : 'skipped'
         const reasonCode = failed ? 'retrieval_failed'
-          : recall.text !== undefined ? 'injected'
+          : recall.text !== undefined ? (omitted.length > 0 ? 'injected_partial' : 'injected')
             : omitted.length > 0 ? 'all_omitted'
               : recall.dedupSkipped > 0 ? 'deduped'
                 : 'no_candidates'

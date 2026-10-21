@@ -98,4 +98,8 @@ test('MemoryDigester injects once per session and never retries', async () => {
   assert.equal(await failing.maybeDigest('s2', undefined, render), undefined)
   assert.equal(await failing.maybeDigest('s2', undefined, render), undefined)
   assert.equal(calls, 4)
+
+  const brokenRender = new MemoryDigester(async () => [rec('项目里已有的结论')])
+  const outcome = await brokenRender.maybeDigestOutcome('s3', undefined, () => { throw new Error('bad record') })
+  assert.deepEqual(outcome, { status: 'failed', errorCode: 'render_failed' })
 })

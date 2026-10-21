@@ -493,7 +493,12 @@ export class MemoryDigester {
     } catch {
       return { status: 'failed', errorCode: 'source_load_failed' }
     }
-    const value = render(records)
+    let value          
+    try {
+      value = render(records)
+    } catch {
+      return { status: 'failed', errorCode: 'render_failed' }
+    }
     return {
       status: 'ok',
       ...(value !== null && value !== undefined ? { value } : {}),
