@@ -52,8 +52,8 @@ window.__ModuleLoader__.load({
       '.memp .hint{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.6}',
       '.memp .hint code,.memp .mono code{background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);border-radius:5px;padding:0 4px}',
       // 控件
-      '.memp input[type=text],.memp select,.memp input[type=number]{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 10px;font-size:13px;outline:none}',
-      '.memp input[type=text]:focus,.memp select:focus,.memp textarea:focus{border-color:var(--dsw-alias-brand-primary)}',
+      '.memp input[type=text],.memp input[type=search],.memp select,.memp input[type=number]{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 10px;font-size:13px;outline:none}',
+      '.memp input[type=text]:focus,.memp input[type=search]:focus,.memp select:focus,.memp textarea:focus{border-color:var(--dsw-alias-brand-primary)}',
       '.memp textarea{width:100%;box-sizing:border-box;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:6px 10px;font-size:13px;outline:none;resize:vertical;font-family:inherit}',
       '.memp button{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:5px 12px;font-size:13px;cursor:pointer;transition:border-color .12s ease,color .12s ease}',
       // hover 只改边框与文字颜色。**不要**再叠 box-shadow:那会在边框外多出一圈线
@@ -346,14 +346,26 @@ window.__ModuleLoader__.load({
       '.memp .audit-stat{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);padding:7px 10px;min-width:0}',
       '.memp .audit-stat b{display:block;font-size:17px;line-height:1.3;font-weight:650;font-variant-numeric:tabular-nums}',
       '.memp .audit-stat span{display:block;font-size:10.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
-      '.memp .audit-toolbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}',
-      '.memp .audit-toolbar input[type=text]{min-width:150px;max-width:230px;padding:4px 8px}',
-      '.memp .audit-toolbar .dropbtn{padding:4px 9px}',
-      '.memp .audit-toolbar label{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap}',
-      '.memp .audit-toolbar input[type=checkbox]{accent-color:var(--dsw-alias-brand-primary)}',
-      '.memp .audit-split{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;min-height:0}',
+      '.memp .audit-toolbar{display:flex;flex-direction:column;gap:7px;padding:8px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}',
+      '.memp .audit-filter-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0}',
+      '.memp .audit-filter-row .dropbtn{padding:4px 9px}',
+      '.memp .audit-filter-row .spacer{flex:1;min-width:8px}',
+      '.memp .audit-filter-row input[type=text],.memp .audit-filter-row input[type=search]{min-width:150px;max-width:230px;padding:4px 8px}',
+      '.memp .audit-filter-row input.audit-search{flex:1;min-width:180px;max-width:340px}',
+      '.memp .audit-filter-row input.audit-trigger{max-width:240px}',
+      '.memp .audit-filter-row input.audit-date{width:116px;min-width:0}',
+      '.memp .audit-switch{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap;padding:2px 4px;border-radius:7px}',
+      '.memp .audit-switch .switch{width:30px;height:16px;padding:0;flex:none}',
+      '.memp .audit-switch .switch .knob{width:12px;height:12px;top:2px;left:2px}',
+      '.memp .audit-switch .switch.on .knob{left:16px}',
+      '.memp .audit-filter-sub{padding-top:1px}',
+      '.memp .audit-range-sep{color:var(--dsw-alias-label-secondary);font-size:11px;flex:none}',
+      '.memp .audit-split{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;min-height:0;align-items:start}',
       '.memp .audit-split.has-detail{grid-template-columns:minmax(0,1fr) minmax(300px,360px)}',
-      '.memp .audit-list{display:flex;flex-direction:column;gap:5px;min-width:0}',
+      '.memp .audit-list{display:flex;flex-direction:column;gap:5px;min-width:0;max-height:min(58vh,620px);overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;padding:1px 4px 1px 1px;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dsw-alias-label-secondary) 30%,transparent) transparent}',
+      '.memp .audit-list::-webkit-scrollbar{width:8px}',
+      '.memp .audit-list::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dsw-alias-label-secondary) 28%,transparent);border-radius:999px;border:2px solid transparent;background-clip:padding-box}',
+      '.memp .audit-list::-webkit-scrollbar-track{background:transparent}',
       '.memp .audit-row{display:grid;grid-template-columns:64px 116px minmax(90px,1fr) 92px 104px 84px 74px;gap:8px;align-items:center;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-alias-bg-layer-1);padding:6px 9px;font-size:11.5px;cursor:pointer;text-align:left;color:inherit;width:100%}',
       '.memp .audit-row:hover{border-color:var(--dsw-alias-brand-primary)}',
       '.memp .audit-row.on{border-color:var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 6%,var(--dsw-alias-bg-layer-1))}',
@@ -388,7 +400,7 @@ window.__ModuleLoader__.load({
       '.memp .audit-pager{display:flex;gap:6px;align-items:center;justify-content:flex-end;font-size:11px;color:var(--dsw-alias-label-secondary)}',
       '.memp .audit-flat{display:flex;flex-wrap:wrap;gap:4px}',
       '@media (max-width:900px){.memp .audit-split.has-detail{grid-template-columns:minmax(0,1fr)}.memp .audit-row{grid-template-columns:54px 100px minmax(80px,1fr) 70px 84px}}',
-      '@media (max-width:620px){.memp .audit-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.memp .audit-row{grid-template-columns:minmax(0,1fr) auto;gap:4px 8px}.memp .audit-row .sec{display:none}.memp .audit-toolbar input[type=text]{max-width:none;flex:1}}',
+      '@media (max-width:620px){.memp .audit-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.memp .audit-row{grid-template-columns:minmax(0,1fr) auto;gap:4px 8px}.memp .audit-row .sec{display:none}.memp .audit-filter-row input[type=text],.memp .audit-filter-row input[type=search]{max-width:none;flex:1}.memp .audit-list{max-height:52vh}}',
     ].join('')
 
     async function api(method, body) {
@@ -2091,6 +2103,16 @@ window.__ModuleLoader__.load({
      * 数据全部来自 /memory/api/audit；没有数据就显示真实空状态，不补造。
      * 展示口径：evaluation 的“选中”不等于投递；投递看 delivery 事件的 status。
      */
+    const AUDIT_RANGE_META = [
+      { value: '', label: '全部时间', ms: null },
+      { value: '15m', label: '近 15 分钟', ms: 15 * 60_000 },
+      { value: '1h', label: '近 1 小时', ms: 60 * 60_000 },
+      { value: '24h', label: '近 24 小时', ms: 24 * 60 * 60_000 },
+      { value: '7d', label: '近 7 天', ms: 7 * 24 * 60 * 60_000 },
+      { value: '30d', label: '近 30 天', ms: 30 * 24 * 60 * 60_000 },
+      { value: 'custom', label: '自定义日期…', ms: null },
+    ]
+
     function AuditTab({ scopes }) {
       const [entries, setEntries] = React.useState([])
       const [stats, setStats] = React.useState(null)
@@ -2107,6 +2129,7 @@ window.__ModuleLoader__.load({
       const [trigger, setTrigger] = React.useState('')
       const [search, setSearch] = React.useState('')
       const [problem, setProblem] = React.useState(false)
+      const [range, setRange] = React.useState('')
       const [since, setSince] = React.useState('')
       const [until, setUntil] = React.useState('')
       const [selectedId, setSelectedId] = React.useState(null)
@@ -2125,8 +2148,12 @@ window.__ModuleLoader__.load({
           else params.set('memory', needle)
         }
         if (problem) params.set('problem', '1')
-        if (since) params.set('since', String(new Date(`${since}T00:00:00`).getTime()))
-        if (until) params.set('until', String(new Date(`${until}T23:59:59.999`).getTime()))
+        const rangeMeta = AUDIT_RANGE_META.find((item) => item.value === range)
+        if (rangeMeta && rangeMeta.ms !== null) params.set('since', String(Date.now() - rangeMeta.ms))
+        if (range === 'custom') {
+          if (since) params.set('since', String(new Date(`${since}T00:00:00`).getTime()))
+          if (until) params.set('until', String(new Date(`${until}T23:59:59.999`).getTime()))
+        }
         if (cursorValue) params.set('cursor', cursorValue)
         params.set('limit', '50')
         return params
@@ -2172,6 +2199,7 @@ window.__ModuleLoader__.load({
       }
       const channelOptions = [{ value: '', label: '全部通道' }].concat(Object.keys(AUDIT_CHANNEL_META).map((key) => ({ value: key, label: AUDIT_CHANNEL_META[key] })))
       const outcomeOptions = [{ value: '', label: '全部结果' }].concat(Object.keys(AUDIT_OUTCOME_META).map((key) => ({ value: key, label: AUDIT_OUTCOME_META[key].label })))
+      const rangeOptions = AUDIT_RANGE_META.map((item) => ({ value: item.value, label: item.label }))
 
       const exportAudit = async (format) => {
         setNotice('')
@@ -2202,43 +2230,71 @@ window.__ModuleLoader__.load({
         banner.push(h('div', { className: 'audit-banner bad', key: 'err' }, `审计写入失败 ${writeErrors} 次；面板数据可能不完整。`))
       }
 
+      const filterActive = Boolean(session || channel || outcome || trigger || search || problem || range)
       const toolbar = h('div', { className: 'audit-toolbar' },
-        h(Dropdown, {
-          items: sessionOptions, value: session, disabled: loading,
-          onChange: (next) => { setSession(next); writeAuditSession(next); resetAndReload() },
-        }),
-        h(Dropdown, {
-          items: channelOptions, value: channel, disabled: loading,
-          onChange: (next) => { setChannel(next); resetAndReload() },
-        }),
-        h(Dropdown, {
-          items: outcomeOptions, value: outcome, disabled: loading,
-          onChange: (next) => { setOutcome(next); resetAndReload() },
-        }),
-        h('input', {
-          type: 'text', placeholder: '触发源', value: trigger, 'aria-label': '按触发源筛选',
-          onChange: (e) => setTrigger(e.target.value),
-          onKeyDown: (e) => { if (e.key === 'Enter') resetAndReload() },
-        }),
-        h('input', {
-          type: 'text', placeholder: '搜索 memory / trace: / op:', value: search, 'aria-label': '按 memory / trace / operation ID 搜索',
-          onChange: (e) => setSearch(e.target.value),
-          onKeyDown: (e) => { if (e.key === 'Enter') resetAndReload() },
-        }),
-        h('label', null,
-          h('input', { type: 'checkbox', checked: problem, onChange: (e) => { setProblem(e.target.checked); resetAndReload() } }),
-          '仅看问题',
+        h('div', { className: 'audit-filter-row' },
+          h(Dropdown, {
+            items: sessionOptions, value: session, disabled: loading,
+            onChange: (next) => { setSession(next); writeAuditSession(next); resetAndReload() },
+          }),
+          h(Dropdown, {
+            items: channelOptions, value: channel, disabled: loading,
+            onChange: (next) => { setChannel(next); resetAndReload() },
+          }),
+          h(Dropdown, {
+            items: outcomeOptions, value: outcome, disabled: loading,
+            onChange: (next) => { setOutcome(next); resetAndReload() },
+          }),
+          h(Dropdown, {
+            items: rangeOptions, value: range, disabled: loading,
+            onChange: (next) => { setRange(next); resetAndReload() },
+          }),
+          h('input', {
+            type: 'search', className: 'audit-search', placeholder: '搜索 memory / trace: / op:', value: search,
+            'aria-label': '按 memory / trace / operation ID 搜索',
+            onChange: (e) => setSearch(e.target.value),
+            onKeyDown: (e) => { if (e.key === 'Enter') resetAndReload() },
+          }),
+          h('span', { className: 'audit-switch' },
+            h(Switch, { checked: problem, disabled: loading, label: '仅看问题', onChange: (next) => { setProblem(next); resetAndReload() } }),
+            '仅看问题',
+          ),
+          h('span', { className: 'spacer' }),
+          h('button', { disabled: loading, onClick: () => setReloadTick((n) => n + 1) }, loading ? '刷新中…' : '刷新'),
         ),
-        h('input', { type: 'date', value: since, title: '起始日期', 'aria-label': '起始日期', onChange: (e) => { setSince(e.target.value); resetAndReload() } }),
-        h('input', { type: 'date', value: until, title: '结束日期', 'aria-label': '结束日期', onChange: (e) => { setUntil(e.target.value); resetAndReload() } }),
-        h('button', { disabled: loading, onClick: () => setReloadTick((n) => n + 1) }, loading ? '刷新中…' : '刷新'),
-        h('button', { disabled: loading, onClick: () => exportAudit('jsonl') }, '导出 JSONL'),
-        h('button', { disabled: loading, onClick: () => exportAudit('json') }, '导出 JSON'),
-        (session || channel || outcome || trigger || search || problem || since || until)
-          ? h('button', { className: 'linkbtn', onClick: () => {
-              setSession(''); writeAuditSession(''); setChannel(''); setOutcome(''); setTrigger(''); setSearch(''); setProblem(false); setSince(''); setUntil(''); resetAndReload()
-            } }, '清空筛选')
-          : null,
+        h('div', { className: 'audit-filter-row audit-filter-sub' },
+          h('input', {
+            type: 'text', className: 'audit-trigger', placeholder: '触发源', value: trigger,
+            'aria-label': '按触发源筛选',
+            onChange: (e) => setTrigger(e.target.value),
+            onKeyDown: (e) => { if (e.key === 'Enter') resetAndReload() },
+          }),
+          range === 'custom'
+            ? h('input', {
+                type: 'text', className: 'audit-date', placeholder: '开始 YYYY-MM-DD', value: since,
+                'aria-label': '自定义开始日期', inputMode: 'numeric',
+                onChange: (e) => setSince(e.target.value),
+                onKeyDown: (e) => { if (e.key === 'Enter') resetAndReload() },
+              })
+            : null,
+          range === 'custom' ? h('span', { className: 'audit-range-sep' }, '→') : null,
+          range === 'custom'
+            ? h('input', {
+                type: 'text', className: 'audit-date', placeholder: '结束 YYYY-MM-DD', value: until,
+                'aria-label': '自定义结束日期', inputMode: 'numeric',
+                onChange: (e) => setUntil(e.target.value),
+                onKeyDown: (e) => { if (e.key === 'Enter') resetAndReload() },
+              })
+            : null,
+          filterActive
+            ? h('button', { className: 'linkbtn', onClick: () => {
+                setSession(''); writeAuditSession(''); setChannel(''); setOutcome(''); setTrigger(''); setSearch(''); setProblem(false); setRange(''); setSince(''); setUntil(''); resetAndReload()
+              } }, '清空筛选')
+            : null,
+          h('span', { className: 'spacer' }),
+          h('button', { disabled: loading, onClick: () => exportAudit('jsonl') }, '导出 JSONL'),
+          h('button', { disabled: loading, onClick: () => exportAudit('json') }, '导出 JSON'),
+        ),
       )
 
       const row = (entry) => {
