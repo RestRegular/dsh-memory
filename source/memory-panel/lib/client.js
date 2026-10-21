@@ -364,12 +364,13 @@ window.__ModuleLoader__.load({
       '.memp .audit-split{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;min-height:0;flex:1;overflow:hidden;align-items:stretch}',
       '.memp .audit-split.has-detail{grid-template-columns:minmax(0,1fr) minmax(300px,360px)}',
       '.memp .audit-list-wrap{display:flex;flex-direction:column;min-height:0;min-width:0;overflow:hidden}',
-      '.memp .audit-table-head{display:grid;grid-template-columns:58px 110px 104px minmax(72px,1fr) 92px 106px 84px;gap:8px;align-items:center;padding:0 9px 5px;margin-bottom:2px;font-size:10px;letter-spacing:.03em;color:var(--dsw-alias-label-secondary);border-bottom:1px solid var(--dsw-alias-border-l1)}',
+      '.memp .audit-table-head{display:grid;grid-template-columns:62px 140px minmax(150px,1.3fr) minmax(110px,0.8fr) 112px minmax(108px,0.9fr) 92px;gap:8px;align-items:center;position:sticky;top:0;z-index:2;box-sizing:border-box;padding:6px 9px;margin-bottom:2px;font-size:10px;letter-spacing:.03em;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);border:1px solid transparent;border-bottom-color:var(--dsw-alias-border-l1)}',
+      '.memp .audit-table-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.memp .audit-list{display:flex;flex-direction:column;gap:5px;min-width:0;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;padding:5px 4px 1px 1px;scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--dsw-alias-label-secondary) 30%,transparent) transparent}',
       '.memp .audit-list::-webkit-scrollbar{width:8px}',
       '.memp .audit-list::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dsw-alias-label-secondary) 28%,transparent);border-radius:999px;border:2px solid transparent;background-clip:padding-box}',
       '.memp .audit-list::-webkit-scrollbar-track{background:transparent}',
-      '.memp .audit-row{display:grid;grid-template-columns:58px 110px 104px minmax(72px,1fr) 92px 106px 84px;gap:8px;align-items:center;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-alias-bg-layer-1);padding:6px 9px;font-size:11.5px;cursor:pointer;text-align:left;color:inherit;width:100%}',
+      '.memp .audit-row{display:grid;grid-template-columns:62px 140px minmax(150px,1.3fr) minmax(110px,0.8fr) 112px minmax(108px,0.9fr) 92px;gap:8px;align-items:center;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-alias-bg-layer-1);padding:6px 9px;font-size:11.5px;cursor:pointer;text-align:left;color:inherit;width:100%}',
       '.memp .audit-row:hover{border-color:var(--dsw-alias-brand-primary)}',
       '.memp .audit-row.on{border-color:var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 6%,var(--dsw-alias-bg-layer-1))}',
       '.memp .audit-row .m{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -395,6 +396,11 @@ window.__ModuleLoader__.load({
       '.memp .audit-sec{border-top:1px solid var(--dsw-alias-border-l1);padding-top:8px;display:flex;flex-direction:column;gap:5px}',
       '.memp .audit-sec-title{font-size:10.5px;letter-spacing:.04em;color:var(--dsw-alias-label-secondary)}',
       '.memp .audit-budget{display:grid;grid-template-columns:64px minmax(0,1fr) 92px;gap:7px;align-items:center;font-size:10.5px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .audit-budget-compact{display:flex;align-items:center;gap:5px;min-width:0;font-size:10px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}',
+      '.memp .audit-budget-compact .bar{flex:1;min-width:18px;height:4px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}',
+      '.memp .audit-budget-compact .bar i{display:block;height:100%;border-radius:999px;background:var(--dsw-alias-brand-primary)}',
+      '.memp .audit-budget-compact .bar i.over{background:var(--dsw-alias-label-danger, #e05555)}',
+      '.memp .audit-budget-compact .num{flex:none;white-space:nowrap}',
       '.memp .audit-budget .bar{height:5px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}',
       '.memp .audit-budget .bar i{display:block;height:100%;border-radius:999px;background:var(--dsw-alias-brand-primary)}',
       '.memp .audit-budget .bar i.over{background:var(--dsw-alias-label-danger, #e05555)}',
@@ -402,7 +408,7 @@ window.__ModuleLoader__.load({
       '.memp .audit-json{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:7px;max-height:220px;overflow:auto}',
       '.memp .audit-pager{display:flex;gap:6px;align-items:center;justify-content:flex-end;font-size:11px;color:var(--dsw-alias-label-secondary)}',
       '.memp .audit-flat{display:flex;flex-wrap:wrap;gap:4px}',
-      '@media (max-width:900px){.memp .audit-split.has-detail{grid-template-columns:minmax(0,1fr)}.memp .audit-row{grid-template-columns:54px 96px 92px minmax(60px,1fr) 76px 92px 76px}.memp .audit-table-head{grid-template-columns:54px 96px 92px minmax(60px,1fr) 76px 92px 76px}}',
+      '@media (max-width:900px){.memp .audit-split.has-detail{grid-template-columns:minmax(0,1fr)}.memp .audit-row{grid-template-columns:54px 120px 120px minmax(100px,1fr) 96px 100px 80px}.memp .audit-table-head{grid-template-columns:54px 120px 120px minmax(100px,1fr) 96px 100px 80px}}',
       '@media (max-width:620px){.memp .audit-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.memp .audit-table-head{display:none}.memp .audit-row{display:flex;flex-wrap:wrap;gap:4px 8px}.memp .audit-row .col-trigger,.memp .audit-row .col-budget{display:none}.memp .audit-row .col-nums{margin-left:auto}.memp .audit-row .col-time{order:1}.memp .audit-row .col-channel{order:2}.memp .audit-row .col-delivery{order:3}.memp .audit-row .col-outcome{order:4;margin-left:auto}.memp .audit-filter-row input[type=text],.memp .audit-filter-row input[type=search]{max-width:none;flex:1}.memp .audit{height:calc(100vh - 120px);max-height:calc(100vh - 120px)}}',
     ].join('')
 
@@ -2352,7 +2358,7 @@ window.__ModuleLoader__.load({
             `${entry.trigger || '—'}${entry.phase ? ` / ${entry.phase}` : ''}`),
           h('span', { className: 'm nums col-nums' }, `${candidates} / ${picked} / ${omitted}`),
           h('span', { className: 'm col-budget' }, budget
-            ? h('span', { className: 'audit-budget' },
+            ? h('span', { className: 'audit-budget-compact' },
                 h('span', { className: 'bar' }, h('i', { className: budget.over ? 'over' : '', style: { width: `${budget.budget > 0 ? Math.min(100, Math.round((budget.used / budget.budget) * 100)) : 100}%` } })),
                 h('span', { className: 'num' }, `${budget.used}/${budget.budget}`),
               )
@@ -2465,17 +2471,6 @@ window.__ModuleLoader__.load({
         )
       })() : null
 
-      const listBody = loading
-        ? h('div', { className: 'audit-empty' }, '加载审计事件…')
-        : entries.length === 0
-          ? h('div', { className: 'audit-empty' },
-              error ? '加载失败。' : '当前筛选没有审计事件。',
-              error ? null : h('div', { className: 'muted' }, '开始一轮任务后，这里会出现注入评估与投递记录。'),
-              error ? h('div', { className: 'err' }, error) : null,
-              error ? h('div', null, h('button', { onClick: () => setReloadTick((n) => n + 1) }, '重试')) : null,
-            )
-          : h('div', { className: 'audit-list' }, entries.map(row))
-
       const listHeader = h('div', { className: 'audit-table-head' },
         h('span', null, '时间'),
         h('span', null, '通道 / 事件'),
@@ -2485,10 +2480,17 @@ window.__ModuleLoader__.load({
         h('span', null, '投递'),
         h('span', null, '结果'),
       )
-      const listArea = h('div', { className: 'audit-list-wrap' },
-        entries.length > 0 ? listHeader : null,
-        listBody,
-      )
+      const listBody = loading
+        ? h('div', { className: 'audit-empty' }, '加载审计事件…')
+        : entries.length === 0
+          ? h('div', { className: 'audit-empty' },
+              error ? '加载失败。' : '当前筛选没有审计事件。',
+              error ? null : h('div', { className: 'muted' }, '开始一轮任务后，这里会出现注入评估与投递记录。'),
+              error ? h('div', { className: 'err' }, error) : null,
+              error ? h('div', null, h('button', { onClick: () => setReloadTick((n) => n + 1) }, '重试')) : null,
+            )
+          : h('div', { className: 'audit-list' }, listHeader, entries.map(row))
+      const listArea = h('div', { className: 'audit-list-wrap' }, listBody)
 
       return h('div', { className: 'audit' },
         ...banner,
