@@ -1,6 +1,6 @@
 # dsh-memory 注入审计（Inject Audit）实现审查
 
-> **后续状态**：0.12.0 已按本审查实施审计 v2（schema、评估/投递分离、失败记录、容量/API/UI）；实现详情见 [`docs/audit-v2-implementation-report.md`](audit-v2-implementation-report.md)。本文保留为 v1 基线审查记录。
+> **后续状态**：0.12.1 已按本审查实施审计 v2（schema、评估/投递分离、失败记录、容量/API/UI）；实现详情见 [`docs/audit-v2-implementation-report.md`](audit-v2-implementation-report.md)。本文保留为 v1 基线审查记录。
 
 > **审查对象**：`@restregular/dsh-memory` 0.11.1，提交 `fa5e297`  
 > **审查日期**：2026-10-22  

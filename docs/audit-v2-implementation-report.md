@@ -1,6 +1,6 @@
 # dsh-memory 审计 v2 实施报告
 
-> **版本**：`@restregular/dsh-memory` 0.12.0  
+> **版本**：`@restregular/dsh-memory` 0.12.1  
 > **基线**：`fa5e297`（0.11.1） + `docs/audit-implementation-review.md`  
 > **实施方案**：`dsh-memory-audit-v2-implementation-plan.md`  
 > **完成日期**：2026-10-22  
@@ -208,10 +208,10 @@ npm run build
 ### 5.2 结果
 
 - 全量：**322 项，321 通过，1 跳过，0 失败**（跳过项为既有环境相关用例）。
-- 构建：`@restregular/dsh-memory@0.12.0`，39 个产物文件，`BUILD OK`。
+- 构建：`@restregular/dsh-memory@0.12.1`，39 个产物文件，`BUILD OK`。
 - 新增测试覆盖：
   - pre-step 评估 + delivery（unknown / suppressed / not_attempted）；
-  - digest source load 失败错误码；
+  - digest source load / 渲染失败错误码；
   - 信号 query 脱敏；
   - store 每会话容量、dropped、seq、分页游标、返回副本、筛选/问题视图；
   - API v2 过滤、分页、stats、非法参数、store 解耦、JSONL 导出；
@@ -222,6 +222,16 @@ npm run build
 
 - 没有在运行中的 DSH 桌面实例里做真实点击验证（当前 profile 仍安装 0.11.1）；面板渲染由 `client-render.test.ts` 通过真实 bundle + mock React 验证。
 - 没有做 JSONL 持久化压测（该能力未启用）。
+
+### 5.4 发布状态
+
+| 项 | 状态 |
+| --- | --- |
+| npm `0.12.0` | 已发布；registry tarball 已可下载（200） |
+| npm `0.12.1` | 已发布，`dist-tags.latest` 已指向 0.12.1；tarball 需等待 registry validating 结束 |
+| GitHub `main` | `e490c19`（0.12.1 收尾提交）；0.12.0 为 `7c455db` |
+| Git tags | `v0.12.0`、`v0.12.1` 已推送 |
+| 本地 profile | 未升级（按项目约定，发布/推送后不自动改本地插件） |
 
 ---
 
