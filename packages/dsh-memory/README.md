@@ -141,9 +141,10 @@ memory_save({
 | --- | --- |
 | `<storeDir>/global.jsonl` | global 作用域的记忆,一行一条 |
 | `<storeDir>/projects/<sha1(scope)>.jsonl` | 其它作用域(会话 / 项目 / 自定义)各一个文件;文件名是 scope 键的 SHA-1,所以名字里带路径分隔符也不可能穿越 |
-| `<storeDir>/projects/<sha1(scope)>.vec` | 向量边车。首行是身份头 `#<model>\t<dims>`,后面每行 `id\t<base64 向量>` |
+| `<storeDir>/projects/<sha1(scope)>.vec` | 向量边车。首行是身份头 `#<model>\t<dims>\t<pooling>`(0.10.0 起;老文件只有前两段,仍兼容),后面每行 `id\t<base64 向量>` |
 | `<storeDir>/settings.json` | 面板「设置」里改过的注入开关(配置里的值是默认值,这里覆盖它) |
 | `<storeDir>/scopes.json` | 项目作用域的别名(显示名 → `project:<路径>`),同一路径同名幂等,不同路径同名拒绝 |
+| `<storeDir>/*.lock` | 写入期间的临时锁文件(同一 scope 的跨进程写锁),写完立即删除 |
 | `<installRoot>/llamacpp/` | llama-server 运行时(exe + 依赖 dll + `llama-server.log`) |
 | `<installRoot>/models/` | 下载的 GGUF 模型 |
 | `<installRoot>/selected-model.json` | 面板里选过哪一档(比配置优先级低) |
@@ -154,7 +155,9 @@ scope 键的三种形态:`global`、`project:<cwd>`、`session:<会话 id>`,其�
 
 `installRoot` 默认 `~/.dsh/memory-vector`;显式配了 `storeDir` 时取**它的父目录**(所以手写的 `<root>/llamacpp` + `<root>/models` 布局会被直接认出来)。
 
-> **换模型 = 向量作废重建**。`.vec` 的身份头记录 `model` 与 `dims`,对不上就整份丢弃并重新嵌入;重建期间检索暂时只用词法。面板会在换之前告诉你涉及多少条记忆。
+> **换模型 = 向量作废重建**。`.vec` 的身份头记录 `model`、`dims` 与 `pooling`(0.10.0 起),任一对不上就整份丢弃并重新嵌入;重建期间检索暂时只用词法。面板会在换之前告诉你涉及多少条记忆。老边车只有 `model` + `dims` 两段,按兼容接受,下一次写向量时自动升级成三段。
+
+**多个进程共用一个 `storeDir`**(0.10.0 起):比如插件 + 一个 MCP server,或者同时开两个 DSH 实例。写入按 scope 走锁文件、每次都"锁内重新读盘再合并本次增量",不再用内存快照整份覆盖磁盘;读路径每秒 stat 一次,别的进程刚写的记录不用重启就能看到。实测 4 个进程 × 20 条并发写同一个 scope 零丢失。代价是写路径多了一次读盘 + 一次 stat,量级远小于一次嵌入。已知取舍:同内容去重(`save` 的 dedupe)仍是进程内判断,两个进程同时写**完全相同**的内容理论上会落两条。
 
 ## 配置 / Configuration
 
@@ -349,6 +352,14 @@ tools/build-single-package.mjs   构建(产物契约检查 + 可选加载验证)
 
 ## 版本
 
+- **0.10.0** —— 存储层可多进程共用 + 向量身份带上 pooling(issue #3):
+  - **跨进程安全**:不再"每个 scope 只读盘一次 + 内存快照整份重写"。每个 scope 一把锁文件(`openSync(…, 'wx')`,Windows 上 `EPERM`/`EACCES` 也按"已存在"处理),`flush()` 在锁内**重新读盘**、只把本次的增量(新增/更新/删除)合并进去;tmp 文件名带 pid + 随机后缀,两个进程并发写不会撞名破坏原子性。陈旧锁(持有者已死或 10s 未动)会被接管。
+  - **读路径能看见别的进程的写入**:每 1s 限流 stat 一次,`mtime:size` 变了就重新读盘,不用重启。
+  - **向量边车同样先读后写**:整份重写前先合并磁盘上同身份的条目,不覆盖别人刚追加的向量。
+  - **`pooling` 进身份头**:`.vec` 首行从 `#model\tdims` 变成 `#model\tdims\tpooling`。同一个模型换 `--pooling` 就是一个新的向量空间(实测 qwen3-embedding 上 `last` 与 `cls` 的余弦只有 0.35),以前校验会静默放行。**老边车(两段)按兼容接受**,不做全量重嵌;下一次写向量时自动升级成三段。
+  - **删空 scope 的判定改成"合并之后"**:别的进程写进去的记录不会被误判成"删空"而连文件一起删掉。
+  - 顺手修掉 `wipeAllRecords()` 里的 `store.flushSync()`(MemoryStore 没有这个方法,异常被 catch 吞掉,实际没有同步落盘)。
+  - 新增测试:`multiprocess.test.ts`(两实例交错写、删除不复活、跨实例可见性、**4 个真实子进程并发写零丢失**、不留 `.lock`/`.tmp`)与 `pooling-identity.test.ts`(三段身份、旧头兼容与升级、换 pooling 作废、无头边车丢弃)。
 - **0.9.10** —— 修复 `memory_get` 没有注册:
   - `memoryTools()` 一直有 `memory_get` 的实现，但工具注册层漏了 `register(tools.memory_get, …)`，所以模型侧只能看到 save/search/forget/list 四个工具。
   - 现在注册完整五个工具；`memory_get` 输出完整 id、作用域、类型、标签和全文，找不到的 id 单独列出。

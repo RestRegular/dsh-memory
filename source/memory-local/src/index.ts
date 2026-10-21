@@ -508,7 +508,9 @@ export class LocalMemoryService implements MemoryServiceApi {
     // so loading first would accept vectors from a previous embedding model
     // whenever the dimensions matched — and the next flush would then rewrite the
     // header as the new model, making the mismatch permanent.
-    this.store.setVecIdentity(this.cfg.vector.model, this.cfg.vector.dims)
+    // pooling 也进身份(issue #3):同一个模型换 --pooling 等于换了一个向量空间
+    // (last 与 cls 的余弦只有 0.35),以前它不在 identity 里,校验会静默放行。
+    this.store.setVecIdentity(this.cfg.vector.model, this.cfg.vector.dims, this.cfg.vector.pooling)
     // 会话 scope 是按会话动态生成的,**不能**在这里 eager 加载(加载谁?);只预载
     // project 与 global 这两个稳定作用域。其余按需 peek/loadDiscovered。
     // eager 只加载"已存在"的 scope(peek),不会为不存在的 scope 建空文件。
@@ -993,7 +995,7 @@ export class LocalMemoryService implements MemoryServiceApi {
       removed += local
       scopes.push(scope.scope)
     }
-    try { this.store.flushSync() } catch { /* scheduled flush covers it */ }
+    try { this.store.flush() } catch { /* scheduled flush covers it */ }
     return { removed, scopes }
   }
 
@@ -1357,7 +1359,6 @@ export class LocalMemoryService implements MemoryServiceApi {
         total += 1
       }
       s.vectorsDirty = true
-      s.dirty = true
     }
     this.store.scheduleFlush()
     void this.backfillAll({ throttleMs: 50 }).catch(() => { /* 失败留给 60s 重试 */ })

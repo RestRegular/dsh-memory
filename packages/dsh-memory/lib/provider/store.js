@@ -3,7 +3,7 @@
  * atomic compaction (tmp + rename). Vectors live in memory for M1; the .vec
  * sidecar format arrives in M1.5.
  */
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { Buffer } from 'node:buffer'
 import { dirname, join } from 'node:path'
@@ -76,21 +76,194 @@ export function newId()         {
   return randomUUID()
 }
 
+// ---------------------------------------------------------------- 跨进程写锁
+
+/** 等锁的上限:超过就告警并"不带锁照写"(宁可少一次合并,也不要丢掉这次写入)。 */
+const LOCK_TIMEOUT_MS = 5_000
+/** 超过这个时长没被碰过的锁视为陈旧(进程被 kill -9 时不会自己清理)。 */
+const LOCK_STALE_MS = 10_000
+
+/** 同步睡眠,不占 CPU:锁等待用(必须同步 —— flush/close 的调用方都是同步路径)。 */
+function sleepSync(ms        )       {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+function processAlive(pid        )          {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    // EPERM = 进程存在但没有权限发信号
+    return (err                         ).code === 'EPERM'
+  }
+}
+
+/** 锁是不是陈旧的(拥有者已死 / 太久没动)?是则删掉并返回 true。 */
+function breakStaleLock(lockPath        )          {
+  let age        
+  try {
+    age = Date.now() - statSync(lockPath).mtimeMs
+  } catch {
+    return true // 已经不在了,直接重试
+  }
+  if (age > LOCK_STALE_MS) {
+    try { rmSync(lockPath, { force: true }) } catch { /* 下一轮再试 */ }
+    return true
+  }
+  let pid = 0
+  try { pid = Number.parseInt(readFileSync(lockPath, 'utf8').trim(), 10) } catch { pid = 0 }
+  if (pid > 0 && !processAlive(pid)) {
+    try { rmSync(lockPath, { force: true }) } catch { /* 下一轮再试 */ }
+    return true
+  }
+  return false
+}
+
+/** 本进程已持有的锁(可重入:flush 持锁时会再调 writeSidecar,不能自己把自己锁死)。 */
+const heldLocks = new Map                ()
+
+/**
+ * 取某个 scope 的写锁(锁文件 = `${数据文件}.lock`,`openSync(wx)` 的 O_EXCL 语义)。
+ *
+ * 为什么需要它:`loadScope()` 只读盘一次、`flush()` 又全量重写 —— 两个进程共用一个
+ * storeDir 时,后 flush 的那个会用自己那份旧快照把对方的记录整条抹掉(见 issue #3)。
+ * 现在所有写都是"锁内重新读盘 → 合并增量 → 原子写",锁只是把这两步串起来。
+ *
+ * Windows:`openSync(wx)` 在"文件已存在、但正处于删除过程中"时报 EPERM/EACCES 而不是
+ * EEXIST,所以这两个码也按"已存在"处理,否则并发下会直接崩。
+ */
+function withScopeLock   (lockPath        , fn         , onWarn                      )    {
+  const depth = heldLocks.get(lockPath)
+  if (depth !== undefined) {
+    heldLocks.set(lockPath, depth + 1)
+    try {
+      return fn()
+    } finally {
+      const left = (heldLocks.get(lockPath) ?? 1) - 1
+      if (left <= 0) heldLocks.delete(lockPath)
+      else heldLocks.set(lockPath, left)
+    }
+  }
+  mkdirSync(dirname(lockPath), { recursive: true })
+  let fd                = null
+  let delay = 2
+  const deadline = Date.now() + LOCK_TIMEOUT_MS
+  while (fd === null) {
+    try {
+      fd = openSync(lockPath, 'wx')
+    } catch (err) {
+      const code = (err                         ).code
+      if (code !== 'EEXIST' && code !== 'EPERM' && code !== 'EACCES') throw err
+      const broke = breakStaleLock(lockPath)
+      if (!broke && Date.now() >= deadline) {
+        onWarn?.(`store: lock ${lockPath} timed out after ${LOCK_TIMEOUT_MS}ms; writing without it`)
+        return fn()
+      }
+      if (!broke) {
+        sleepSync(delay)
+        delay = Math.min(delay * 2, 50)
+      }
+    }
+  }
+  try { writeFileSync(fd, String(process.pid), 'utf8') } catch { /* pid 只是给接管用的提示 */ }
+  heldLocks.set(lockPath, 1)
+  try {
+    return fn()
+  } finally {
+    heldLocks.delete(lockPath)
+    try { closeSync(fd) } catch { /* 已经关了 */ }
+    try { rmSync(lockPath, { force: true }) } catch { /* 下一次 breakStale 会兜底 */ }
+  }
+}
+
+/** tmp 名带 pid + 随机后缀:两个进程并发写同一个 scope 时不会撞名破坏原子性。 */
+function tmpPathFor(file        )         {
+  return `${file}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`
+}
+
+/** 原子写整个 JSONL(tmp + rename)。调用方必须持有该 scope 的锁。 */
+function writeJsonlAtomic(file        , records                           )       {
+  mkdirSync(dirname(file), { recursive: true })
+  const tmp = tmpPathFor(file)
+  const lines = [...records.values()].map((r) => JSON.stringify(r))
+  writeFileSync(tmp, lines.length ? `${lines.join('\n')}\n` : '', 'utf8')
+  renameSync(tmp, file)
+}
+
+/** 文件的时间戳快照,用来判断"别的进程有没有改过它"。 */
+function stampOf(file        )         {
+  try {
+    const st = statSync(file)
+    return `${st.mtimeMs}:${st.size}`
+  } catch {
+    return 'missing'
+  }
+}
+
+/** 读一个 scope 文件成 Map(坏行跳过;scope 不符的行忽略,flush 时会清掉)。 */
+function readRecords(file        , scope             , onWarn                      )                            {
+  const out = new Map                      ()
+  let text        
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch (err) {
+    if ((err                         ).code !== 'ENOENT') onWarn?.(`store: cannot read ${file}: ${(err         ).message}`)
+    return out
+  }
+  let lineNo = 0
+  for (const line of text.split('\n')) {
+    lineNo++
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    try {
+      const rec = JSON.parse(trimmed)                
+      if (!rec || typeof rec.id !== 'string' || typeof rec.content !== 'string' || typeof rec.scope !== 'string') {
+        throw new Error('bad shape')
+      }
+      if (rec.scope !== scope) continue
+      out.set(rec.id, rec)
+    } catch {
+      onWarn?.(`store: skipping malformed ${file}:${lineNo}`)
+    }
+  }
+  return out
+}
+
 export class ScopeStore {
            scope             
            records = new Map                      ()
            vectors = new Map                      ()
   /** ids saved while the embed backend was down; retried opportunistically. */
            embedPending = new Set        ()
-  dirty = false
+  /**
+   * 待落盘的**增量**(不是整份快照)。flush 时把它合并进"锁内重新读到的磁盘内容",
+   * 而不是拿内存覆盖磁盘 —— 这是多个进程共用同一个 storeDir 时互不抹数据的前提。
+   */
+           upserts = new Map                      ()
+  /** 本进程删掉的 id;flush 时从磁盘内容里移除。 */
+           deletes = new Set        ()
   /** true once vectors were touched since the last .vec flush. */
   vectorsDirty = false
   /** 数据文件路径(写、以及删空后移除都走它)。 */
            file        
+  /** 最近一次与磁盘同步后的 `mtime:size`;用于发现别的进程改过这个 scope。 */
+  stamp = ''
+  /** 上次检查外部改动的时间(读路径限流用)。 */
+  checkedAt = 0
           vecFile        
           events                  
   /** Embedding identity for sidecar validation; set via setVecIdentity(). */
           vecIdentity = ''
+
+  /** 有增量待写才算脏(只有向量变动时不脏,走 vectorsDirty)。 */
+  get dirty()          {
+    return this.upserts.size > 0 || this.deletes.size > 0
+  }
+
+  /** 这个 scope 的跨进程写锁(JSONL 与 .vec 共用一把,避免两边交叉覆盖)。 */
+  get lockPath()         {
+    return `${this.file}.lock`
+  }
 
   constructor(scope             , root        , events                   = {}) {
     this.scope = scope
@@ -105,8 +278,26 @@ export class ScopeStore {
    * re-enters the embed queue — old vectors for a new model are wrong, not
    * merely stale.
    */
-  setVecIdentity(model        , dims        )       {
-    this.vecIdentity = `${model}\t${dims}`
+  setVecIdentity(model        , dims        , pooling         )       {
+    this.vecIdentity = pooling !== undefined && pooling !== '' && pooling !== 'auto'
+      ? `${model}\t${dims}\t${pooling}`
+      : `${model}\t${dims}`
+  }
+
+  /**
+   * 边车身份对不对。老边车只有 `model\tdims` 两段(0.10.0 之前不记 pooling),
+   * 缺 pooling 时按兼容接受 —— 不能因为多记了一个字段就让所有人的向量全量作废。
+   * 两边都有 pooling 时才严格比:这正是 issue #3 里那条「用错 --pooling 会静默
+   * 把整份边车作废、而且 identity 校验会放行」的修法。
+   */
+          identityMatches(header        )          {
+    if (!this.vecIdentity) return true
+    if (!header) return false
+    const mine = this.vecIdentity.split('\t')
+    const theirs = header.split('\t')
+    if (mine[0] !== theirs[0] || mine[1] !== theirs[1]) return false
+    if (mine[2] !== undefined && theirs[2] !== undefined) return mine[2] === theirs[2]
+    return true
   }
 
   get size()         {
@@ -115,7 +306,8 @@ export class ScopeStore {
 
   insert(record              )       {
     this.records.set(record.id, record)
-    this.dirty = true
+    this.upserts.set(record.id, record)
+    this.deletes.delete(record.id)
   }
 
   remove(id        )          {
@@ -123,10 +315,17 @@ export class ScopeStore {
     if (had) {
       this.vectors.delete(id)
       this.embedPending.delete(id)
-      this.dirty = true
+      this.upserts.delete(id)
+      this.deletes.add(id)
       this.vectorsDirty = true
     }
     return had
+  }
+
+  /** 合并后把缓存换成磁盘上的内容(增量已并入),清掉已落盘的那部分增量。 */
+  replaceRecords(next                           )       {
+    this.records.clear()
+    for (const [id, rec] of next) this.records.set(id, rec)
   }
 
   /**
@@ -165,14 +364,19 @@ export class ScopeStore {
     this.setVector(id, vec)
     try {
       mkdirSync(dirname(this.vecFile), { recursive: true })
-      if (this.vecIdentity && this.readHeader() !== this.vecIdentity) {
-        // missing, legacy, or wrong-model file: rewrite fresh from memory
-        this.writeSidecar()
+      withScopeLock(this.lockPath, () => {
+        const header = this.readHeader()
+        // 缺文件 / 别人的模型 / 旧的两段头(得把 pooling 记进去)→ 整份重写
+        const staleHeader = this.vecIdentity !== '' &&
+          (!this.identityMatches(header) || header.split('\t').length < this.vecIdentity.split('\t').length)
+        if (staleHeader) {
+          this.writeSidecarLocked()
+          this.vectorsDirty = false
+          return
+        }
+        appendFileSync(this.vecFile, `${id}\t${encodeVec(vec)}\n`, 'utf8')
         this.vectorsDirty = false
-        return
-      }
-      appendFileSync(this.vecFile, `${id}\t${encodeVec(vec)}\n`, 'utf8')
-      this.vectorsDirty = false
+      }, this.events.onWarn)
     } catch (err) {
       this.vectorsDirty = true // full rewrite on next flushVectors
       this.events.onWarn?.(`vec: append failed: ${(err         ).message}`)
@@ -190,14 +394,51 @@ export class ScopeStore {
     }
   }
 
-  /** Atomic full rewrite: identity header + every in-memory vector. */
+  /** Atomic full rewrite: identity header + every in-memory vector (merged with disk). */
           writeSidecar()       {
+    withScopeLock(this.lockPath, () => this.writeSidecarLocked(), this.events.onWarn)
+  }
+
+  /** 持锁版本:先读盘上同身份的条目再合并,别的进程刚追加的向量不会被覆盖掉。 */
+          writeSidecarLocked()       {
     mkdirSync(dirname(this.vecFile), { recursive: true })
-    const tmp = `${this.vecFile}.tmp`
-    const lines           = this.vecIdentity ? [`#${this.vecIdentity}`] : []
-    for (const [id, v] of this.vectors) lines.push(`${id}\t${encodeVec(v)}`)
+    const lines           = []
+    if (this.vecIdentity) lines.push(`#${this.vecIdentity}`)
+    const merged = this.readSidecarEntries()
+    for (const [id, v] of this.vectors) merged.set(id, `${id}\t${encodeVec(v)}`)
+    for (const line of merged.values()) lines.push(line)
+    const tmp = tmpPathFor(this.vecFile)
     writeFileSync(tmp, lines.length ? `${lines.join('\n')}\n` : '', 'utf8')
     renameSync(tmp, this.vecFile)
+  }
+
+  /**
+   * 磁盘边车里"身份一致"的条目(id → 原始行)。身份不同就返回空(整份重写),
+   * 没头的旧文件也不合并 —— 那些向量不属于当前模型。
+   */
+          readSidecarEntries()                      {
+    const out = new Map                ()
+    if (!existsSync(this.vecFile)) return out
+    try {
+      const text = readFileSync(this.vecFile, 'utf8')
+      let sawHeader = false
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        if (trimmed.startsWith('#')) {
+          sawHeader = true
+          if (!this.identityMatches(trimmed.slice(1))) return new Map()
+          continue
+        }
+        if (!sawHeader && this.vecIdentity) return new Map()
+        const tab = trimmed.indexOf('\t')
+        if (tab <= 0) continue
+        out.set(trimmed.slice(0, tab), trimmed)
+      }
+    } catch {
+      return new Map()
+    }
+    return out
   }
 
   /** Rewrite the whole sidecar (after deletes / compaction / append failures). */
@@ -231,7 +472,7 @@ export class ScopeStore {
         const trimmed = line.trim()
         if (!trimmed) continue
         if (trimmed.startsWith('#')) {
-          if (this.vecIdentity && trimmed.slice(1) !== this.vecIdentity) {
+          if (!this.identityMatches(trimmed.slice(1))) {
             discard(`identity mismatch (${trimmed.slice(1)} != ${this.vecIdentity})`)
             return
           }
@@ -282,6 +523,11 @@ function decodeVec(text        )                      {
 
                                     
                                 
+     
+                                                
+                                                
+     
+                       
  
 
 export class MemoryStore {
@@ -293,19 +539,23 @@ export class MemoryStore {
           fileNames = new Map                     ()
           flushTimer                                       = null
           events                   
-  /** `model\tdims` handed to every ScopeStore for sidecar validation. */
+          refreshTtlMs        
+  /** `model\tdims[\tpooling]` handed to every ScopeStore for sidecar validation. */
           vecIdentity = ''
 
   constructor(root        , events                    = {}) {
     this.root = root
     this.events = events
+    this.refreshTtlMs = events.refreshTtlMs ?? 1_000
     mkdirSync(join(root, 'projects'), { recursive: true })
   }
 
   /** Declare the embedding identity; applies to existing and future scopes. */
-  setVecIdentity(model        , dims        )       {
-    this.vecIdentity = `${model}\t${dims}`
-    for (const s of this.scopes.values()) s.setVecIdentity(model, dims)
+  setVecIdentity(model        , dims        , pooling         )       {
+    this.vecIdentity = pooling !== undefined && pooling !== '' && pooling !== 'auto'
+      ? `${model}\t${dims}\t${pooling}`
+      : `${model}\t${dims}`
+    for (const s of this.scopes.values()) s.setVecIdentity(model, dims, pooling)
   }
 
   /** Preload specific scopes eagerly (e.g. defaults); others load on first access. */
@@ -315,50 +565,55 @@ export class MemoryStore {
 
           loadScope(scope             )       {
     const file = this.fileFor(scope)
-    if (!fileExists(file)) return
-    let text        
-    try {
-      text = readFileSync(file, 'utf8')
-    } catch (err) {
-      this.events.onWarn?.(`store: cannot read ${file}: ${(err         ).message}`)
+    const store = this.scope(scope)
+    if (!fileExists(file)) {
+      store.stamp = 'missing'
+      store.checkedAt = Date.now()
       return
     }
-    const store = this.scope(scope)
-    let lineNo = 0
-    for (const line of text.split('\n')) {
-      lineNo++
-      const trimmed = line.trim()
-      if (!trimmed) continue
-      try {
-        const rec = JSON.parse(trimmed)                
-        if (!rec || typeof rec.id !== 'string' || typeof rec.content !== 'string' || typeof rec.scope !== 'string') {
-          throw new Error('bad shape')
-        }
-        if (rec.scope !== scope) continue // file/scope mismatch: ignore, will be rewritten on flush
-        store.records.set(rec.id, rec)
-      } catch {
-        this.events.onWarn?.(`store: skipping malformed ${file}:${lineNo}`)
-      }
-    }
+    store.replaceRecords(readRecords(file, scope, (m) => this.events.onWarn?.(m)))
     // sidecar vectors second; anything still un-embedded joins the backfill queue
     store.loadVectors()
     for (const id of store.records.keys()) {
       if (!store.vectors.has(id)) store.embedPending.add(id)
     }
-    store.dirty = false
+    store.stamp = stampOf(file)
+    store.checkedAt = Date.now()
+  }
+
+  /**
+   * 别的进程可能改了同一个 scope:读路径按 refreshTtlMs 限流地 stat 一次,
+   * mtime/size 变了就重新读盘(还没落盘的增量交给 flush 在锁内合并)。
+   */
+          refreshFromDisk(s            )       {
+    if (this.refreshTtlMs <= 0) return
+    const now = Date.now()
+    if (now - s.checkedAt < this.refreshTtlMs) return
+    s.checkedAt = now
+    if (s.dirty) return
+    const file = this.fileFor(s.scope)
+    const stamp = stampOf(file)
+    if (stamp === s.stamp) return
+    s.replaceRecords(stamp === 'missing' ? new Map() : readRecords(file, s.scope, (m) => this.events.onWarn?.(m)))
+    s.stamp = stamp
   }
 
   scope(scope             )             {
     let s = this.scopes.get(scope)
     if (!s) {
       s = new ScopeStore(scope, this.root, this.events)
-      if (this.vecIdentity) s.setVecIdentity(...(this.vecIdentity.split('\t')                    ))
+      if (this.vecIdentity) {
+        const [model, dims, pooling] = this.vecIdentity.split('\t')
+        s.setVecIdentity(model , Number(dims), pooling)
+      }
       this.scopes.set(scope, s)
       this.fileNames.set(scope, scopeFileName(scope))
     }
     if (!this.loaded.has(scope)) {
       this.loaded.add(scope)
       this.loadScope(scope)
+    } else {
+      this.refreshFromDisk(s)
     }
     return s
   }
@@ -372,7 +627,10 @@ export class MemoryStore {
    */
   peek(scope             )                         {
     const existing = this.scopes.get(scope)
-    if (existing) return existing
+    if (existing) {
+      this.refreshFromDisk(existing)
+      return existing
+    }
     const file = join(this.root, scopeFileName(scope))
     if (!fileExists(file)) return undefined
     return this.scope(scope)
@@ -452,31 +710,50 @@ export class MemoryStore {
   }
 
   /**
-   * Write dirty scopes atomically (tmp + rename).
+   * Write the pending deltas of every dirty scope.
    *
-   * 一个被删空的 scope(内存里 0 条记录)**不再落一个 0 字节文件**,而是把它的 .jsonl 与
-   * .vec 一起删掉:空文件没有任何信息,反而在面板里留下一条 `(0)` 的作用域、在磁盘上长期堆积。
-   * 作用域是懒加载的,下次往同一个名字写入时会重新创建。`global` 永不自动删除(见 isRemovable)。
+   * 每个 scope 走一次"锁内重新读盘 → 合并增量 → 原子写":不再用内存快照整份覆盖,
+   * 所以另一个进程(比如把同一个 storeDir 挂在 MCP server 上)刚写的记录不会消失。
+   * 一个被删空的 scope(合并后 0 条记录)**不再落 0 字节文件**,而是把 .jsonl 与 .vec
+   * 一起删掉 —— 但前提是磁盘上确实也空了(别人写的记录不算"删空")。
+   * `global` 永不自动删除(见 isRemovable)。
    */
   flush()       {
     for (const s of this.scopes.values()) {
       if (!s.dirty) continue
-      if (s.records.size === 0 && this.isRemovable(s.scope)) {
-        s.removeFiles()
-        s.dirty = false
-        s.vectorsDirty = false
-        continue
-      }
-      const file = this.fileFor(s.scope)
-      mkdirSync(dirname(file), { recursive: true })
-      const tmp = `${file}.tmp`
-      const lines = [...s.records.values()].map((r) => JSON.stringify(r))
-      writeFileSync(tmp, lines.length ? `${lines.join('\n')}\n` : '', 'utf8')
-      renameSync(tmp, file)
-      s.dirty = false
+      this.flushScope(s)
     }
     // vectors flush too: they are the expensive-to-recompute half
     for (const s of this.scopes.values()) s.flushVectors()
+  }
+
+  /** 锁内合并一个 scope 的增量(同步;调用方不持有这把锁)。 */
+          flushScope(s            )       {
+    const file = this.fileFor(s.scope)
+    // 增量在等锁期间不会变(同步执行),先拷一份,锁里只做合并与写
+    const upserts = new Map(s.upserts)
+    const deletes = new Set(s.deletes)
+    withScopeLock(s.lockPath, () => {
+      const merged = fileExists(file)
+        ? readRecords(file, s.scope, (m) => this.events.onWarn?.(m))
+        : new Map                      ()
+      for (const [id, rec] of upserts) merged.set(id, rec)
+      for (const id of deletes) merged.delete(id)
+      if (merged.size === 0 && this.isRemovable(s.scope)) {
+        s.removeFiles()
+        // 边车已经被一起删掉了;别让随后的 flushVectors 又把它写回来
+        s.vectors.clear()
+        s.embedPending.clear()
+        s.vectorsDirty = false
+      } else {
+        writeJsonlAtomic(file, merged)
+      }
+      s.replaceRecords(merged)
+      for (const id of upserts.keys()) s.upserts.delete(id)
+      for (const id of deletes) s.deletes.delete(id)
+      s.stamp = stampOf(file)
+      s.checkedAt = Date.now()
+    }, this.events.onWarn)
   }
 
   /** Synchronous final flush — call on dispose. */
@@ -504,7 +781,7 @@ export class MemoryStore {
         rec.accessCount += 1
         rec.importance = Math.max(rec.importance, input.importance ?? defaults.importance)
         if (input.supersedes) rec.supersedes = input.supersedes
-        s.dirty = true
+        s.insert(rec) // 去重命中的也是一次写:进增量,flush 时落盘
         return { record: rec, deduped: true }
       }
     }

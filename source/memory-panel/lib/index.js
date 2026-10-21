@@ -456,7 +456,8 @@ async function handle(ctx, routePath, req, res) {
       if (body.tags !== undefined) rec.tags = Array.isArray(body.tags) ? body.tags.map(String) : []
       if (body.supersededBy !== undefined) rec.supersedes = body.supersededBy === null ? undefined : String(body.supersededBy)
       rec.updatedAt = Date.now()
-      s.dirty = true
+      // 改动本身要进增量(flush 只落增量,不再整份快照覆盖);向量作废靠 vectorsDirty。
+      s.insert(rec)
       store.scheduleFlush()
       // 立即重建向量(不等 60s 的定时回填);失败就留在 pending 里由重试兜底。
       if (reindex && typeof memory.reindexRecord === 'function') {
