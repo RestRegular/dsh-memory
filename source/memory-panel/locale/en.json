@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Long-term Memory",
-    "description": "Local long-term memory: automatic recall, hard rules, five memory tools, JSONL storage and local vector search."
+    "title": "Memory System",
+    "description": "Local memory system: automatic recall, hard rules, five memory tools, JSONL storage and local vector search."
   }
 }

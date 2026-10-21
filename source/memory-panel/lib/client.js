@@ -1,5 +1,5 @@
 /**
- * dsh-memory — 客户端半边(设置页「记忆」区块)。
+ * dsh-memory — 客户端半边(设置页「记忆系统」区块)。
  *
  * 合并后本 bundle 与 provider / 工具 / 注入同属一个 npm 包
  * `@restregular/dsh-memory`:一个包名、一条 Loader entry、两侧都在。
@@ -854,7 +854,7 @@ window.__ModuleLoader__.load({
       },
         h('span', { className: 'root-icon' }, h(NavLineIcon, { size: 19 })),
         h('span', null,
-          h('b', null, '记忆'),
+          h('b', null, '记忆系统'),
           h('span', null, `${node.count} 条`),
         ),
       )
@@ -1634,7 +1634,7 @@ window.__ModuleLoader__.load({
       },
       {
         key: 'sidebar', title: '侧栏入口',
-        desc: '在左侧栏「插件」下方显示「记忆」入口，点击在主界面打开面板。',
+        desc: '在左侧栏「插件」下方显示「记忆系统」入口，点击在主界面打开面板。',
         fields: [
           { k: 'enabled', label: '启用', type: 'bool', hint: '关闭只隐藏侧栏入口，设置页仍然可用。' },
         ],
@@ -2331,7 +2331,7 @@ window.__ModuleLoader__.load({
     /** 侧栏入口打开的主界面页面(整块可滚动,内容就是面板本体)。 */
     function MemoryPage() {
       return h('div', { className: 'mem-page' },
-        h('div', { className: 'mem-page-head' }, h('h2', null, '记忆')),
+        h('div', { className: 'mem-page-head' }, h('h2', null, '记忆系统')),
         h(MemoryPanel, {}),
       )
     }
@@ -2380,7 +2380,7 @@ window.__ModuleLoader__.load({
           () => React.createElement(MemoryPanel),
         ))
 
-        // 侧栏入口(可选):开启后在左侧栏「插件」下方多一个「记忆」,点击在主界面打开面板。
+        // 侧栏入口(可选):开启后在左侧栏「插件」下方多一个「记忆系统」,点击在主界面打开面板。
         // 注册契约见 dsh-client-ui-schedule:sidebar.panellist 给 id/label/icon,main 用同一个 key。
         let sidebarDisposers = null
         const syncSidebar = () => {
@@ -2422,10 +2422,10 @@ window.__ModuleLoader__.load({
      * 侧栏这一行的显示名。导航图标覆盖靠"认出自己那一行"来定位,所以文案必须只有一处,
      * 注册与识别共用这个常量(改文案时不会漏改)。
      */
-    const NAV_LABEL = '记忆'
+    const NAV_LABEL = '记忆系统'
 
     /**
-     * 设置侧栏「记忆」那一行的图标 —— 与侧栏入口、插件列表共用同一只年轮。
+     * 设置侧栏「记忆系统」那一行的图标 —— 与侧栏入口、插件列表共用同一只年轮。
      *
      * 宿主把导航图标写死在 `dsh-client-ui-settings-general` 的 `navIcon(id)` 里:只有
      * account / models / agent-presets / plugins / archived-sessions 五个 id 有专属图标
@@ -2482,7 +2482,7 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 在"含「记忆」那一行"上做记号并换图。
+     * 在"含「记忆系统」那一行"上做记号并换图。
      *
      * 关键:记号打在**按钮自己**身上,绝不打在父级 navList 上 —— 整列是同一个容器,
      * 打到父级等于给所有区块都加图标。面板随时可能卸载/重挂(它是 body 上的 portal),

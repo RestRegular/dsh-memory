@@ -58,8 +58,8 @@ test('客户端 bundle 的注册 id 等于包名', () => {
 test('插件列表里显示中文名 / 描述,而不是包名', () => {
   const meta = JSON.parse(need('package.json'))
   const expected = [
-    ['zh', '长期记忆'],
-    ['en', 'Long-term Memory'],
+    ['zh', '记忆系统'],
+    ['en', 'Memory System'],
   ] as const
   for (const [lang, title] of expected) {
     // 宿主用 Node ESM 解析 `<包>/locale/<lang>.json`;exports 少一行就静默回退成包名

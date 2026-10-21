@@ -22,10 +22,10 @@ import type { RulesSettings } from '../../memory-local/src/inject-settings.ts'
 import { supersededIds } from './digest.ts'
 
 export const RULES_HEADER =
-  '以下是必须遵守的硬性规则（来自 kind=rule 的长期记忆；除非用户明确要求破例，否则按它做）：'
+  '以下是必须遵守的硬性规则（来自 kind=rule 的记忆；除非用户明确要求破例，否则按它做）：'
 
 export const RULES_DELTA_HEADER =
-  '以下是新增或变更的硬性规则（来自 kind=rule 的长期记忆；从现在起按它做）：'
+  '以下是新增或变更的硬性规则（来自 kind=rule 的记忆；从现在起按它做）：'
 
 /** mandatory/pinned 是显式的标签约定,不把全部 kind=rule 自动升级。 */
 const MANDATORY_TAGS = new Set(['mandatory', 'pinned', '必含', '强制'])

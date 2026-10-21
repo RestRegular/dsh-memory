@@ -15,7 +15,7 @@ import { estimateTokens } from '../provider/rerank.js'
                                                                                
 
 const HEADER =
-  '以下是本项目 / 全局已有的长期记忆摘要（按重要度挑出的前几条；' +
+  '以下是本项目 / 全局已有的记忆摘要（按重要度挑出的前几条；' +
   '需要原文用 memory_search，删除用 memory_forget）：'
 
 const HINT_HEADER = '相关记忆索引（正文未注入）：'

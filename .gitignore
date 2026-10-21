@@ -5,3 +5,8 @@ dist-npm/
 .DS_Store
 .build/
 .verify/
+.dsh-ops/
+.dsh-probe/
+.tmp/
+.idea/
+package-lock.json

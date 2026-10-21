@@ -98,7 +98,7 @@ test('injector respects disabled config and empty hit list', async () => {
 })
 
 test('hasRecallMessage catches a duplicate recall block from a second activation', () => {
-  const text = '以下是与此请求可能相关的长期记忆，供参考（可用 memory_search 核实，用 memory_forget 删除）：\n- 一条记忆'
+  const text = '以下是与此请求可能相关的记忆，供参考（可用 memory_search 核实，用 memory_forget 删除）：\n- 一条记忆'
   const sourced = (role: string, body: string, kind?: string) => ({
     role,
     content: [{ type: 'text', text: body }],

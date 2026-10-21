@@ -1,8 +1,8 @@
-﻿/**
+/**
  * 「记忆使用策略」常驻段:告诉模型什么时候查、查到怎么用、查不到怎么办。
  * 只写操作口径,不写具体记忆内容 —— 内容由摘要 / 召回 / 规则段负责。
  */
-export const POLICY_TEXT = `## 长期记忆
+export const POLICY_TEXT = `## 记忆系统
 
 本会话挂着一个本地记忆库，工具：memory_search / memory_list / memory_get / memory_save / memory_forget（可按会话、项目、全局等作用域读写）。
 

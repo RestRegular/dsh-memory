@@ -197,6 +197,7 @@ SOFTWARE.
 
 // 包的 README 直接用仓库根目录那份:单一来源,免得 npm 页面上讲的还是旧按钮/旧按钮名。
 const README = readFileSync(join(ROOT, 'README.md'), 'utf8')
+const CHANGELOG = readFileSync(join(ROOT, 'CHANGELOG.md'), 'utf8')
 
 
 // ------------------------------------------------------------------ build
@@ -220,7 +221,7 @@ cpSync(join(panelDir, 'locale'), join(OUT, 'locale'), { recursive: true })
 writeJson(join(OUT, 'package.json'), {
   name: NAME,
   version: VERSION,
-  description: 'DeepSeek Harness 本地长期记忆(单包单入口):JSONL 存储 + 本地向量检索(BGE-M3)+ 五个模型工具 + 自动召回注入 + 管理面板。',
+  description: 'DeepSeek Harness 记忆系统(单包单入口):JSONL 存储 + 本地向量检索(BGE-M3)+ 五个模型工具 + 自动召回注入 + 管理面板。',
   icon: './icon.svg',
   type: 'module',
   exports: {
@@ -230,7 +231,7 @@ writeJson(join(OUT, 'package.json'), {
     './locale/zh.json': './locale/zh.json',
     './package.json': './package.json',
   },
-  files: ['lib/', 'locale/', 'cordis.patch.yml', 'icon.svg', 'README.md', 'LICENSE'],
+  files: ['lib/', 'locale/', 'cordis.patch.yml', 'icon.svg', 'README.md', 'CHANGELOG.md', 'LICENSE'],
   dsh: {
     bundle: { patch: './cordis.patch.yml' },
     client: { inject: ['@deepseek-ai/dsh-client-ui-slots'], platform: 'web' },
@@ -256,6 +257,7 @@ writeJson(join(OUT, 'package.json'), {
 })
 writeFileSync(join(OUT, 'cordis.patch.yml'), PATCH, 'utf8')
 writeFileSync(join(OUT, 'README.md'), README, 'utf8')
+writeFileSync(join(OUT, 'CHANGELOG.md'), CHANGELOG, 'utf8')
 writeFileSync(join(OUT, 'LICENSE'), MIT_LICENSE, 'utf8')
 
 // ------------------------------------------------------------------ checks
