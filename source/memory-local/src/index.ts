@@ -499,7 +499,13 @@ export class LocalMemoryService implements MemoryServiceApi {
   /** 注入设置(面板「设置」标签页可改;落盘在 <storeDir>/settings.json)。 */
   private inject: InjectSettings
   /** 注入半边的审计收集器(可选;没有注入半边时保持 null)。 */
-  private injectAuditSink: { list(sessionId?: string): unknown } | null = null
+  private injectAuditSink: {
+    list?(sessionId?: string): unknown
+    query?(query?: unknown): unknown
+    stats?(): unknown
+    clear?(scope: { sessionId?: string; before?: number }): unknown
+    dispose?(): void
+  } | null = null
 
   constructor(config: MemoryLocalConfig = {}) {
     this.cfg = resolveConfig(config)
@@ -545,13 +551,65 @@ export class LocalMemoryService implements MemoryServiceApi {
   }
 
   /** 注入半边注册审计收集器。重复注册时后一个覆盖前一个(激活重载)。 */
-  attachInjectAudit(sink: { list(sessionId?: string): unknown }): void {
+  attachInjectAudit(sink: {
+    list?(sessionId?: string): unknown
+    query?(query?: unknown): unknown
+    stats?(): unknown
+    clear?(scope: { sessionId?: string; before?: number }): unknown
+    dispose?(): void
+  } | null): void {
+    // 显式解绑:插件半边 dispose 时必须清掉，否则面板会继续读到已停止更新的旧 store。
+    if (sink === null) {
+      try { this.injectAuditSink?.dispose?.() } catch { /* 审计清理失败不影响 provider */ }
+    } else if (this.injectAuditSink !== null && this.injectAuditSink !== sink) {
+      // 多激活实例不应悄悄覆盖：保留诊断日志，查询边界仍以最后注册者为准。
+      console.warn('[dsh-memory-local] audit sink replaced by another activation')
+    }
     this.injectAuditSink = sink
   }
 
-  /** 面板 /memory/api/audit 用:返回注入评估记录(最新在前);没有注入半边时为空。 */
+  /** 显式解绑:只有当前 sink 或未指定 sink 时才清理，避免旧实例卸载误清新实例。 */
+  detachInjectAudit(sink?: unknown): void {
+    if (sink !== undefined && this.injectAuditSink !== null && sink !== this.injectAuditSink) return
+    try { this.injectAuditSink?.dispose?.() } catch { /* 审计清理失败不影响 provider */ }
+    this.injectAuditSink = null
+  }
+
+  /** 兼容旧调用：返回审计条目数组（最新在前）；没有注入半边时为空。 */
   injectAudit(sessionId?: string): unknown {
-    try { return this.injectAuditSink?.list(sessionId) ?? [] } catch { return [] }
+    try { return this.injectAuditSink?.list?.(sessionId) ?? [] } catch { return [] }
+  }
+
+  /** v2 查询：优先用类型化 sink；旧 sink 只有 list 时降级包装成单页。 */
+  injectAuditPage(query?: unknown): unknown {
+    try {
+      const sink = this.injectAuditSink
+      if (sink?.query !== undefined) return sink.query(query)
+      const q = (query && typeof query === 'object' ? query : {}) as { sessionId?: string }
+      const entries = sink?.list?.(q.sessionId) ?? []
+      return {
+        entries,
+        total: Array.isArray(entries) ? entries.length : 0,
+        stats: this.injectAuditStats(),
+      }
+    } catch {
+      return { entries: [], total: 0, stats: this.injectAuditStats() }
+    }
+  }
+
+  /** 审计容量/丢弃/写入错误等健康状态。 */
+  injectAuditStats(): unknown {
+    try {
+      return this.injectAuditSink?.stats?.() ?? {
+        entries: 0, capacity: 0, perSessionCapacity: 0, dropped: 0,
+        writeErrors: 0, persistence: 'memory',
+      }
+    } catch {
+      return {
+        entries: 0, capacity: 0, perSessionCapacity: 0, dropped: 0,
+        writeErrors: 0, persistence: 'degraded',
+      }
+    }
   }
 
   /** 面板改设置:合并补丁 → 落盘 → 返回新值。写盘失败只告警,不影响运行中的设置。 */
@@ -1908,6 +1966,9 @@ export class LocalMemoryService implements MemoryServiceApi {
 
   /** Force a synchronous flush (dispose/HMR path). */
   flushSync(): void {
+    // 审计 sink 属于注入半边：provider 退出时解绑并释放，避免面板继续读旧 store。
+    try { this.injectAuditSink?.dispose?.() } catch { /* 审计清理失败不影响 provider */ }
+    this.injectAuditSink = null
     if (this.maintenanceTimer) {
       clearInterval(this.maintenanceTimer)
       this.maintenanceTimer = null

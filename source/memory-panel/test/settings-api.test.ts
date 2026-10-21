@@ -1,4 +1,4 @@
-﻿import { test } from 'node:test'
+import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -205,3 +205,49 @@ test('面板 /audit:返回注入半边挂载的审计记录,可按 session 过�
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('面板 /audit v2:查询过滤、分页游标、stats 与 store 解耦', async () => {
+  const seen: unknown[] = []
+  const page = {
+    entries: [{ schemaVersion: 2, id: 's1:2', seq: 2, at: 2, sessionId: 's1', kind: 'evaluation', channel: 'recall', stage: 'searched', outcome: 'success' }],
+    total: 9,
+    nextCursor: '2',
+    stats: { entries: 9, capacity: 200, perSessionCapacity: 200, dropped: 1, writeErrors: 0, persistence: 'memory', lastRecordedAt: 2 },
+  }
+  const memory = {
+    // 故意没有 store：审计路由不应被无关的 store 检查挡住。
+    injectAuditPage(query: unknown) { seen.push(query); return page },
+    injectAuditStats() { return page.stats },
+  }
+  const res = fakeRes()
+  await handleRequest(ctxWith(memory), ROUTE, get(`${ROUTE}/audit?session=s1&limit=2&channel=recall&problem=1&since=1`), res)
+  assert.equal(res.out.status, 200)
+  assert.equal(res.out.body.value.total, 9)
+  assert.equal(res.out.body.value.nextCursor, '2')
+  assert.equal(res.out.body.value.stats.dropped, 1)
+  assert.equal(res.out.body.value.query.sessionId, 's1')
+  assert.equal(res.out.body.value.query.limit, 2)
+  assert.equal(res.out.body.value.query.problem, true)
+  assert.deepEqual(seen[0], { sessionId: 's1', channel: 'recall', problem: true, since: 1, limit: 2 })
+
+  const stats = fakeRes()
+  await handleRequest(ctxWith(memory), ROUTE, get(`${ROUTE}/audit/stats`), stats)
+  assert.equal(stats.out.body.value.capacity, 200)
+
+  const badLimit = fakeRes()
+  await handleRequest(ctxWith(memory), ROUTE, get(`${ROUTE}/audit?limit=999`), badLimit)
+  assert.equal(badLimit.out.status, 400)
+  assert.equal(badLimit.out.body.error.code, 'AUDIT_QUERY_INVALID')
+
+  const badCursor = fakeRes()
+  await handleRequest(ctxWith(memory), ROUTE, get(`${ROUTE}/audit?cursor=x`), badCursor)
+  assert.equal(badCursor.out.status, 400)
+  assert.equal(badCursor.out.body.error.code, 'AUDIT_CURSOR_INVALID')
+
+  const exported = fakeRes()
+  await handleRequest(ctxWith(memory), ROUTE, get(`${ROUTE}/audit/export?session=s1&format=jsonl`), exported)
+  assert.equal(exported.out.status, 200)
+  assert.equal(typeof exported.out.body, 'string')
+  assert.ok((exported.out.body as string).includes('"id":"s1:2"'))
+})
+

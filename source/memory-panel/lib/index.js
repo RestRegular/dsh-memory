@@ -221,6 +221,178 @@ function collectScope(scopeStore) {
   return out.sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
+/** 审计时间参数：Unix ms 或可解析的 ISO 字符串。 */
+function parseAuditTime(value, name) {
+  if (value === null || value === undefined || value === '') return undefined
+  const numeric = Number(value)
+  if (Number.isFinite(numeric)) return numeric
+  const parsed = Date.parse(value)
+  if (Number.isFinite(parsed)) return parsed
+  throw new ApiError(400, 'AUDIT_QUERY_INVALID', `${name} 必须是毫秒时间戳或 ISO 时间`)
+}
+
+/** 面板查询参数 → audit sink 的 AuditListQuery。 */
+const AUDIT_CHANNELS = new Set(['digest', 'recall', 'rules', 'rules_delta', 'policy', 'nudge', 'signal', 'lifecycle'])
+const AUDIT_OUTCOMES = new Set(['success', 'failed', 'skipped', 'partial', 'unknown'])
+function parseAuditQuery(url) {
+  const text = (name) => {
+    const value = url.searchParams.get(name)
+    const trimmed = value === null ? '' : value.trim()
+    return trimmed === '' ? undefined : trimmed
+  }
+  const limitRaw = text('limit')
+  let limit
+  if (limitRaw !== undefined) {
+    if (!/^\d+$/.test(limitRaw)) throw new ApiError(400, 'AUDIT_QUERY_INVALID', 'limit 必须是 1..200 的整数')
+    limit = Number(limitRaw)
+    if (limit < 1 || limit > 200) throw new ApiError(400, 'AUDIT_QUERY_INVALID', 'limit 必须在 1..200 之间')
+  }
+  const cursor = text('cursor')
+  if (cursor !== undefined && !/^\d+$/.test(cursor)) {
+    throw new ApiError(400, 'AUDIT_CURSOR_INVALID', 'cursor 必须是 seq 数字')
+  }
+  const channel = text('channel')
+  if (channel !== undefined && !AUDIT_CHANNELS.has(channel)) {
+    throw new ApiError(400, 'AUDIT_QUERY_INVALID', `未知 channel: ${channel}`)
+  }
+  const outcome = text('outcome')
+  if (outcome !== undefined && !AUDIT_OUTCOMES.has(outcome)) {
+    throw new ApiError(400, 'AUDIT_QUERY_INVALID', `未知 outcome: ${outcome}`)
+  }
+  const since = parseAuditTime(text('since'), 'since')
+  const until = parseAuditTime(text('until'), 'until')
+  if (since !== undefined && until !== undefined && since > until) {
+    throw new ApiError(400, 'AUDIT_QUERY_INVALID', 'since 不能晚于 until')
+  }
+  return {
+    ...(text('session') !== undefined ? { sessionId: text('session') } : {}),
+    ...(text('trace') !== undefined ? { traceId: text('trace') } : {}),
+    ...(text('operation') !== undefined ? { operationId: text('operation') } : {}),
+    ...(text('memory') !== undefined ? { memoryId: text('memory') } : {}),
+    ...(channel !== undefined ? { channel } : {}),
+    ...(text('trigger') !== undefined ? { trigger: text('trigger') } : {}),
+    ...(outcome !== undefined ? { outcome } : {}),
+    ...(url.searchParams.get('problem') === '1' ? { problem: true } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    ...(cursor !== undefined ? { cursor } : {}),
+  }
+}
+
+function publicAuditQuery(query) {
+  return {
+    ...(query.sessionId !== undefined ? { sessionId: query.sessionId } : {}),
+    ...(query.traceId !== undefined ? { traceId: query.traceId } : {}),
+    ...(query.operationId !== undefined ? { operationId: query.operationId } : {}),
+    ...(query.memoryId !== undefined ? { memoryId: query.memoryId } : {}),
+    ...(query.channel !== undefined ? { channel: query.channel } : {}),
+    ...(query.trigger !== undefined ? { trigger: query.trigger } : {}),
+    ...(query.outcome !== undefined ? { outcome: query.outcome } : {}),
+    ...(query.problem === true ? { problem: true } : {}),
+    ...(query.since !== undefined ? { since: query.since } : {}),
+    ...(query.until !== undefined ? { until: query.until } : {}),
+    limit: query.limit ?? 50,
+    ...(query.cursor !== undefined ? { cursor: query.cursor } : {}),
+    scope: query.sessionId !== undefined ? 'session' : 'all',
+  }
+}
+
+function emptyAuditStats() {
+  return {
+    entries: 0, capacity: 0, perSessionCapacity: 0, dropped: 0,
+    writeErrors: 0, persistence: 'memory',
+  }
+}
+
+function auditStats(memory) {
+  try {
+    const stats = typeof memory?.injectAuditStats === 'function' ? memory.injectAuditStats() : undefined
+    return stats && typeof stats === 'object' ? stats : emptyAuditStats()
+  } catch {
+    return { ...emptyAuditStats(), persistence: 'degraded' }
+  }
+}
+
+/** 旧 provider 只有 injectAudit(list) 时，在面板侧补最小过滤/分页。 */
+function legacyAuditPage(memory, query) {
+  const all = (() => {
+    try { return typeof memory?.injectAudit === 'function' ? memory.injectAudit(query.sessionId) : [] } catch { return [] }
+  })()
+  const entries = Array.isArray(all) ? all : []
+  const filtered = entries.filter((entry) => {
+    if (!entry || typeof entry !== 'object') return false
+    if (query.channel !== undefined && entry.channel !== query.channel) return false
+    if (query.trigger !== undefined && entry.trigger !== query.trigger) return false
+    if (query.outcome !== undefined && entry.outcome !== query.outcome) return false
+    if (query.problem === true) {
+      const delivery = entry.delivery
+      const omitted = Array.isArray(entry.omitted) ? entry.omitted.length : 0
+      if (!(entry.outcome === 'failed' || entry.outcome === 'partial' || omitted > 0 || (delivery && delivery.status !== 'appended' && delivery.status !== 'unknown'))) return false
+    }
+    if (query.memoryId !== undefined) {
+      const ids = [
+        ...(entry.contentIds ?? []), ...(entry.hintIds ?? []),
+        ...((entry.selected && entry.selected.contentIds) ?? []),
+        ...((entry.omitted ?? []).map((item) => item.id)),
+      ]
+      if (!ids.includes(query.memoryId)) return false
+    }
+    if (query.since !== undefined && !(entry.at >= query.since)) return false
+    if (query.until !== undefined && !(entry.at <= query.until)) return false
+    return true
+  })
+  const limit = query.limit ?? 50
+  const start = query.cursor === undefined ? 0 : Number(query.cursor)
+  const page = filtered.slice(start, start + limit)
+  return {
+    entries: page,
+    total: filtered.length,
+    ...(start + limit < filtered.length ? { nextCursor: String(start + limit) } : {}),
+    stats: emptyAuditStats(),
+  }
+}
+
+function auditPage(memory, query) {
+  if (memory === undefined || memory === null) {
+    throw new ApiError(503, 'AUDIT_UNAVAILABLE', 'memory provider 未加载')
+  }
+  try {
+    if (typeof memory.injectAuditPage === 'function') {
+      const page = memory.injectAuditPage(query)
+      if (page && typeof page === 'object' && Array.isArray(page.entries)) {
+        return {
+          entries: page.entries,
+          total: typeof page.total === 'number' ? page.total : page.entries.length,
+          ...(typeof page.nextCursor === 'string' ? { nextCursor: page.nextCursor } : {}),
+          stats: page.stats && typeof page.stats === 'object' ? page.stats : emptyAuditStats(),
+        }
+      }
+    }
+    if (typeof memory.injectAudit === 'function') return legacyAuditPage(memory, query)
+    throw new ApiError(503, 'AUDIT_UNAVAILABLE', 'provider 未提供注入审计接口（请升级 @restregular/dsh-memory）')
+  } catch (error) {
+    if (error instanceof ApiError) throw error
+    if (error && typeof error.code === 'string' && error.code.startsWith('AUDIT_')) {
+      throw new ApiError(400, error.code, error.message || '审计查询参数无效')
+    }
+    throw error
+  }
+}
+
+/** 导出：按当前筛选循环取页（上限 200/页，最多 50 页 = 10000 条）。 */
+function collectAuditEntries(memory, query) {
+  const out = []
+  let cursor
+  for (let i = 0; i < 50; i++) {
+    const page = auditPage(memory, { ...query, ...(cursor !== undefined ? { cursor } : {}), limit: 200 })
+    out.push(...page.entries)
+    if (page.nextCursor === undefined) break
+    cursor = page.nextCursor
+  }
+  return out
+}
+
 async function handle(ctx, routePath, req, res) {
   const url = new URL(req.url ?? '/', 'http://dsh.local')
   const path = url.pathname.slice(routePath.length) || '/'
@@ -233,6 +405,40 @@ async function handle(ctx, routePath, req, res) {
   }
   try {
     const memory = ctx.get('memory')
+    // 审计路由只依赖注入半边挂载的 sink，不依赖记忆 store；先于 store 检查。
+    if (method === 'GET' && path === '/audit') {
+      const query = parseAuditQuery(url)
+      const value = auditPage(memory, query)
+      writeJson(res, { ok: true, value: { ...value, query: publicAuditQuery(query) } })
+      return
+    }
+    if (method === 'GET' && path === '/audit/stats') {
+      writeJson(res, { ok: true, value: auditStats(memory) })
+      return
+    }
+    if (method === 'GET' && path === '/audit/export') {
+      const query = parseAuditQuery(url)
+      const format = url.searchParams.get('format') === 'jsonl' ? 'jsonl' : 'json'
+      const entries = collectAuditEntries(memory, query)
+      const body = format === 'jsonl'
+        ? entries.map((entry) => JSON.stringify(entry)).join('\n') + (entries.length > 0 ? '\n' : '')
+        : JSON.stringify({
+            schemaVersion: 2,
+            exportedAt: Date.now(),
+            query: publicAuditQuery(query),
+            count: entries.length,
+            entries,
+          }, null, 2) + '\n'
+      try {
+        res.writeHead(200, {
+          'content-type': format === 'jsonl' ? 'application/x-ndjson; charset=utf-8' : 'application/json; charset=utf-8',
+          'content-disposition': `attachment; filename="dsh-memory-audit.${format === 'jsonl' ? 'jsonl' : 'json'}"`,
+          'cache-control': 'no-store',
+        })
+        res.end(body)
+      } catch { /* client disconnected */ }
+      return
+    }
     if (!memory?.store) throw new ApiError(503, 'MEMORY_UNAVAILABLE', 'memory provider 未加载')
     const store = memory.store
     // Scopes are created lazily, so a fresh process only knows the ones it has
@@ -240,12 +446,6 @@ async function handle(ctx, routePath, req, res) {
     // memories from earlier sessions included) — best-effort discovery, cached.
     discoverScopes(memory, store)
 
-    if (method === 'GET' && path === '/audit') {
-      if (typeof memory.injectAudit !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供注入审计接口（请升级 @restregular/dsh-memory）')
-      const session = (url.searchParams.get('session') ?? '').trim()
-      writeJson(res, { ok: true, value: { entries: memory.injectAudit(session === '' ? undefined : session) } })
-      return
-    }
     if (method === 'GET' && path === '/status') {
       const stats = typeof memory.scopeStats === 'function'
         ? memory.scopeStats()

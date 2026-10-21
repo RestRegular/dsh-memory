@@ -40,11 +40,20 @@ import {
                        
 } from './inject.js'
 import { renderDigest,                  } from './digest.js'
-import { renderRules, renderRulesBlock } from './rules.js'
+import { renderRules,                  } from './rules.js'
 import { RulesDeltaInjector } from './rules-delta.js'
 import { POLICY_TEXT } from './policy.js'
 import { InjectionState } from './state.js'
-import { InjectAuditStore, auditBudget, auditQuery,                            } from './audit.js'
+import {
+  InjectAuditStore,
+  auditBudget,
+  hashAuditText,
+  sanitizeAuditTags,
+  sanitizeAuditText,
+                    
+                  
+                 
+} from './audit.js'
 import {
   BehaviorSignalStore,
   assistantVisibleText,
@@ -74,7 +83,8 @@ import { normalizeInjectSettings,                     } from '../provider/inject
                                                         
                                                                                                                      
                                    
-                                                                       
+                                                  
+                                          
  
 
 /** 轮末提醒的文案:短、祈使句,不占预算。 */
@@ -119,6 +129,10 @@ export function apply(ctx         , config                     = {}) {
   const sessionScopes = new Map                  ()
   const sessionAutoScopes = new Map                  ()
   const tagCache = new Map                                        ()
+  /** 系统提示 rules 段的同源渲染缓存：pre-step 算一次，section 回调复用。 */
+  const rulesCache = new Map                                                               ()
+  const rulesStepStart = new Map                ()
+  let systemPromptReady = false
   let attachedMemory          = null
 
   const attachAudit = (memory         )       => {
@@ -130,8 +144,46 @@ export function apply(ctx         , config                     = {}) {
     } catch { /* 审计是可选增强 */ }
   }
 
-  const recordAudit = (entry                                   )       => {
-    audit.record({ at: Date.now(), ...entry })
+  // 插件半边卸载时解绑并释放内存；provider 若已切换到新实例，detachInjectAudit
+  // 会按 sink 身份判断，不会误清掉后来者的 sink。
+  try {
+    ctx.effect(() => () => {
+      const memory = ctx.get('memory')                                
+      try {
+        if (typeof memory?.detachInjectAudit === 'function') memory.detachInjectAudit(audit)
+        else memory?.attachInjectAudit?.(null)
+      } catch { /* 解绑失败不影响卸载 */ }
+      attachedMemory = null
+      audit.dispose()
+    }, 'dsh-memory: audit sink')
+  } catch { /* 老宿主没有 ctx.effect */ }
+
+  const recordAudit = (entry            )       => {
+    audit.record(entry)
+  }
+
+  /** 系统提示 rules 段实际使用的 scope（与 section 回调保持同一口径）。 */
+  const promptScopesFor = (memory                  , agent         )           => {
+    try {
+      const resolved = memory.resolveReadScopes?.(agent)                        
+      if (Array.isArray(resolved) && resolved.length > 0) return resolved
+    } catch { /* fallthrough */ }
+    return ['global']
+  }
+
+  const sameScopes = (a                   , b                   )          =>
+    a.length === b.length && a.every((scope, index) => scope === b[index])
+
+  const renderRulesFor = (
+    memory                  ,
+    scopes                   ,
+    cfg                         ,
+  )                                                                       => {
+    try {
+      return { ok: true, render: renderRules(memory.listSync?.({ scopes: [...scopes], kind: 'rule', limit: 100 }) ?? [], cfg) }
+    } catch {
+      return { ok: false, errorCode: 'source_load_failed' }
+    }
   }
 
   const rememberCallMeta = (callId         , name        , description         )       => {
@@ -226,14 +278,19 @@ export function apply(ctx         , config                     = {}) {
 
   const observeSignal = (sessionId        , signal                            )       => {
     if (!signal || !signals.note(sessionId, signal)) return
+    const query = sanitizeAuditText(signal.query)
     recordAudit({
+      kind: 'signal',
+      channel: 'signal',
+      stage: 'signal_queued',
+      outcome: 'success',
+      reasonCode: 'queued',
       sessionId,
       trigger: signal.reason,
       phase: signal.phase,
-      query: signal.query,
-      candidates: 0, contentIds: [], hintIds: [], omitted: [], dedupSkipped: 0, budgets: {},
-      retrieval: { ok: true, count: 0 },
+      ...(query !== undefined ? { query } : {}),
       signal: {
+        key: signal.key,
         reason: signal.reason,
         ...(signal.errorClass ? { errorClass: signal.errorClass } : {}),
         ...(signal.tool ? { tool: signal.tool } : {}),
@@ -288,11 +345,18 @@ export function apply(ctx         , config                     = {}) {
 
         if (type === 'compaction/start' || type === 'compaction/end') {
           // 上下文重建:旧去重状态不再可信,允许摘要/正文重新进入。
+          // 审计也要留下分界，否则压缩前后的记录会被误读成同一段上下文。
+          recordAudit({
+            kind: 'lifecycle', channel: 'lifecycle', stage: 'compaction',
+            outcome: 'success', reasonCode: 'context_compacted', sessionId,
+          })
           injectionState.clear(sessionId)
           signals.clear(sessionId)
           digester.reset(sessionId)
           sessionScopes.delete(sessionId)
           sessionAutoScopes.delete(sessionId)
+          rulesCache.delete(sessionId)
+          rulesStepStart.delete(sessionId)
           for (const key of tagCache.keys()) if (key.startsWith(`${sessionId}|`)) tagCache.delete(key)
           callMeta.clear()
           return
@@ -372,19 +436,24 @@ export function apply(ctx         , config                     = {}) {
           if (!enabled || !settingsOf().rules.enabled) return ''
           const memory = ctx.get('memory')                                
           if (!memory?.listSync) return ''
-          let scopes           = ['global']
-          try {
-            scopes = (memory.resolveReadScopes?.(context?.agent)                        ) ?? ['global']
-          } catch { scopes = ['global'] }
-          try {
-            return renderRulesBlock(memory.listSync({ scopes, kind: 'rule', limit: 100 }), settingsOf().rules) ?? ''
-          } catch {
-            return ''
+          const scopes = promptScopesFor(memory, context?.agent)
+          const sessionId = sessionIdOf(context?.agent)
+          const started = sessionId === undefined ? undefined : rulesStepStart.get(sessionId)
+          const cached = sessionId === undefined ? undefined : rulesCache.get(sessionId)
+          // pre-step 已经算过同一份渲染时直接复用：审计与系统提示必须是同一份文本。
+          if (cached !== undefined && started !== undefined && cached.at >= started && sameScopes(cached.scopes, scopes)) {
+            return cached.render.text
           }
+          const rendered = renderRulesFor(memory, scopes, settingsOf().rules)
+          if (!rendered.ok) return ''
+          if (sessionId !== undefined) rulesCache.set(sessionId, { at: Date.now(), scopes, render: rendered.render })
+          return rendered.render.text
         },
       })
+      systemPromptReady = true
     } catch {
       /* 重复注册或老宿主没有 section 契约:规则段缺席不影响注入 */
+      systemPromptReady = false
     }
   })
 
@@ -408,10 +477,14 @@ export function apply(ctx         , config                     = {}) {
 
     const agent = (input                       ).agent
     const step = (input                     ).step ?? 1
+    const turnValue = (input                      ).turn
+    const turn = typeof turnValue === 'number' && Number.isFinite(turnValue) ? turnValue : undefined
+    const stepStartedAt = Date.now()
     if (step === 1) maxStep = 0
     maxStep = Math.max(maxStep, step)
 
     const sessionId = sessionIdOf(agent)
+    if (sessionId !== undefined) rulesStepStart.set(sessionId, stepStartedAt)
     const scopes = readScopesFor(memory, agent)
     if (sessionId !== undefined && scopes !== undefined) sessionScopes.set(sessionId, [...scopes])
     let autoScopes                      
@@ -423,131 +496,350 @@ export function apply(ctx         , config                     = {}) {
     const signal = sessionId === undefined ? undefined : signals.take(sessionId)
     const usableSignal = autoScopes === undefined ? undefined : signal
     const userQuery = pickQueryText(input.messages         )
+    const phase = detectPhase(userQuery)
+    const userQueryField = sanitizeAuditText(userQuery)
+    const auditBase = (channel              , extra            )             => ({
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(turn !== undefined ? { turn } : {}),
+      ...(step !== undefined ? { step } : {}),
+      phase,
+      channel,
+      ...extra,
+    })
 
-    // 摘要(每个会话一次)、召回(每轮有新内容时)、轮末提醒(下一轮首步)合成
-    // 同一条消息:内容没变就什么都不加,避免一步两张卡片。
-    const settings = enabled ? settingsOf() : undefined
+    if (!enabled) {
+      if (step === 1) {
+        recordAudit(auditBase('lifecycle', {
+          kind: 'lifecycle', stage: 'disabled', outcome: 'skipped', reasonCode: 'injection_disabled',
+        }))
+      }
+      return decision
+    }
+    const settings = settingsOf()
+
+    // 本步的评估先收集，等最终消息组装/校验完成后再统一写 evaluation + delivery。
+    // 这样可以准确表达“评估选中了 X”与“消息真的追加了吗”两件不同的事。
+    const staged               = []
     const parts           = []
+    const messageChannels = new Set              ()
+    const stage = (entry            )       => { staged.push(entry) }
+
+    if (signal !== undefined && usableSignal === undefined) {
+      recordAudit(auditBase('signal', {
+        kind: 'signal', stage: 'signal_dropped', outcome: 'skipped', reasonCode: 'auto_scope_unavailable',
+        trigger: signal.reason, phase: signal.phase,
+        signal: { key: signal.key, reason: signal.reason, ...(signal.tag ? { tag: signal.tag } : {}), ...(signal.tool ? { tool: signal.tool } : {}) },
+      }))
+    }
+    if (usableSignal !== undefined) {
+      recordAudit(auditBase('signal', {
+        kind: 'signal', stage: 'signal_consumed', outcome: 'success', reasonCode: 'consumed',
+        trigger: usableSignal.reason, phase: usableSignal.phase,
+        signal: { key: usableSignal.key, reason: usableSignal.reason, ...(usableSignal.tag ? { tag: usableSignal.tag } : {}), ...(usableSignal.tool ? { tool: usableSignal.tool } : {}), ...(usableSignal.errorClass ? { errorClass: usableSignal.errorClass } : {}), ...(usableSignal.source ? { source: usableSignal.source } : {}) },
+      }))
+    }
+
     // 规则增量:别的会话新加/改过的规则,在本轮第一步给旧会话补一次。
     // `delta !== false` 而不是 `=== true`:老 provider 的 settings 快照没有这个
     // 字段时要按"开"处理,否则升级当天等于静默关掉。
-    if (settings && step === 1 && settings.rules.enabled && settings.rules.delta !== false) {
-      const delta = rulesDelta.maybeInject(agent, memory, settings.rules)
-      if (delta) parts.push(delta)
-    }
-    if (pendingNudge && step === 1) {
-      pendingNudge = false
-      parts.push(NUDGE_TEXT)
-    }
-    if (settings) {
-      if (settings.digest.enabled) {
-        let digestStats                         
-        const digest = await digester.maybeDigestDetailed(sessionId, scopes, (records) => {
-          const rendered = renderDigest(records, settings.digest)
-          digestStats = rendered?.stats
-          return rendered
-        })
-        if (digest) {
-          if (sessionId !== undefined && digestStats !== undefined) {
-            injectionState.markContent(sessionId, digestStats.bodyEntries)
-            injectionState.markHint(sessionId, digestStats.hintEntries)
-          }
-          parts.push(digest.text)
-          if (digestStats !== undefined) {
-            recordAudit({
-              ...(sessionId !== undefined ? { sessionId } : {}),
-              trigger: 'turn_start', phase: 'unknown',
-              candidates: digestStats.candidates,
-              contentIds: digestStats.bodyIds,
-              hintIds: digestStats.hintIds,
-              omitted: digestStats.omitted.map((entry) => ({ id: entry.id, reason: entry.reason })),
-              dedupSkipped: 0,
-              budgets: {
-                digest: auditBudget(settings.digest.tokenBudget, digest.tokens),
-                hints: auditBudget(settings.digest.hintBudget, digestStats.hint.tokens),
-              },
-              retrieval: { ok: true, count: digestStats.candidates },
-            })
-          }
+    if (step === 1 && settings.rules.enabled) {
+      if (settings.rules.delta === false) {
+        stage(auditBase('rules_delta', {
+          kind: 'evaluation', stage: 'skipped', outcome: 'skipped', reasonCode: 'disabled',
+        }))
+      } else {
+        const delta = rulesDelta.maybeInjectDetailed(agent, memory, settings.rules)
+        if (delta.text !== undefined) {
+          parts.push(delta.text)
+          messageChannels.add('rules_delta')
+          stage(auditBase('rules_delta', {
+            kind: 'evaluation', stage: 'rendered', outcome: 'success', reasonCode: 'delta_rendered',
+            selected: { contentIds: delta.changes.map((change) => change.id), hintIds: [], count: delta.records.length },
+            budgets: { rules_delta: auditBudget(Math.max(settings.rules.tokenBudget, 600), delta.tokens ?? 0) },
+            limits: { maxItems: settings.rules.maxItems, budgets: { rules: settings.rules.tokenBudget } },
+          }))
+        } else {
+          stage(auditBase('rules_delta', {
+            kind: 'evaluation', stage: 'skipped', outcome: 'skipped',
+            reasonCode: delta.changes.length === 0 ? 'no_changes' : 'nothing_to_render',
+          }))
         }
       }
+    }
 
-      // 规则段每步都会在系统提示里重渲染;只在第一步记录一次审计,避免 200 条缓冲被刷爆。
-      if (step === 1 && settings.rules.enabled) {
-        try {
-          const rendered = renderRules(memory.listSync?.({ scopes, kind: 'rule', limit: 100 }) ?? [], settings.rules)
-          if (rendered) {
-            recordAudit({
-              ...(sessionId !== undefined ? { sessionId } : {}),
-              trigger: 'rules', phase: 'unknown',
-              candidates: rendered.stats.candidates,
-              contentIds: [], hintIds: [], omitted: [], dedupSkipped: 0,
-              budgets: { rules: auditBudget(settings.rules.tokenBudget, rendered.tokens) },
-              retrieval: { ok: true, count: rendered.stats.candidates },
-              rules: {
-                injected: rendered.stats.injected,
-                omittedTopK: rendered.stats.omittedTopK,
-                omittedBudget: rendered.stats.omittedBudget,
-                omittedSuperseded: rendered.stats.omittedSuperseded,
-                mandatory: rendered.stats.mandatory,
-                mandatoryOmitted: rendered.stats.mandatoryOmitted,
-              },
-            })
-          }
-        } catch { /* 审计不是注入的前置条件 */ }
+    // 轮末提醒:下一轮第一步附带一句提醒。
+    if (step === 1) {
+      if (!settings.turnEnd.enabled) {
+        stage(auditBase('nudge', { kind: 'evaluation', stage: 'skipped', outcome: 'skipped', reasonCode: 'disabled' }))
+      } else if (pendingNudge) {
+        pendingNudge = false
+        parts.push(NUDGE_TEXT)
+        messageChannels.add('nudge')
+        stage(auditBase('nudge', {
+          kind: 'evaluation', stage: 'rendered', outcome: 'success', reasonCode: 'turn_end',
+          delivery: { status: 'unknown', appended: null, textChars: NUDGE_TEXT.length, textHash: hashAuditText(NUDGE_TEXT) },
+        }))
+      } else {
+        stage(auditBase('nudge', { kind: 'evaluation', stage: 'skipped', outcome: 'skipped', reasonCode: 'not_due' }))
       }
+    }
 
-      // 行为信号优先:发布/推送/失败事件触发定向查询;没有信号才走普通用户消息召回。
-      // 同一轮普通 query 已处理过时跳过重复检索(去重状态仍会兜底)。
-      const skipNormalRecall = usableSignal === undefined && step > 1 && sessionId !== undefined
-        && userQuery !== '' && injectionState.lastQueryOf(sessionId) === userQuery
-      if (!skipNormalRecall) {
-        const recallScopes = usableSignal === undefined ? scopes : autoScopes
-        const recallExclude = usableSignal === undefined ? exclude : excludeAuto
-        const recall = await injector.maybeInjectDetailed(
-          { messages: input.messages         , signal: input.signal, ...(recallScopes !== undefined ? { scopes: recallScopes } : {}), ...(sessionId !== undefined ? { sessionId } : {}) },
-          { messages: decision.messages          },
-          {
-            ...(sessionId !== undefined ? { sessionId } : {}),
-            ...(usableSignal !== undefined ? { query: usableSignal.query, trigger: usableSignal.reason, force: true } : { trigger: 'turn_start' }),
-            ...(usableSignal?.tag ? { tag: usableSignal.tag, requireTag: true } : {}),
-            excludeIds: recallExclude,
+    // 摘要（每个会话一次）。
+    if (settings.digest.enabled) {
+      let digestStats                         
+      const outcome = await digester.maybeDigestOutcome(sessionId, scopes, (records) => {
+        const rendered = renderDigest(records, settings.digest)
+        digestStats = rendered?.stats
+        return rendered
+      })
+      if (outcome.status === 'failed') {
+        stage(auditBase('digest', {
+          kind: 'evaluation', stage: 'source_load', outcome: 'failed', reasonCode: outcome.errorCode,
+          trigger: 'turn_start',
+          sourceLoad: { ok: false, errorCode: outcome.errorCode },
+          error: { stage: 'source_load', code: outcome.errorCode },
+        }))
+      } else if (outcome.status === 'ok' && outcome.empty) {
+        stage(auditBase('digest', {
+          kind: 'evaluation', stage: 'source_load', outcome: 'skipped', reasonCode: 'no_candidates',
+          trigger: 'turn_start',
+          candidates: outcome.candidates,
+          sourceLoad: { ok: true, count: outcome.candidates },
+          limits: { topK: settings.digest.topK, budgets: { digest: settings.digest.tokenBudget, hints: settings.digest.hintBudget } },
+        }))
+      } else if (outcome.status === 'ok' && outcome.value !== undefined && digestStats !== undefined) {
+        if (sessionId !== undefined) {
+          injectionState.markContent(sessionId, digestStats.bodyEntries)
+          injectionState.markHint(sessionId, digestStats.hintEntries)
+        }
+        parts.push(outcome.value.text)
+        messageChannels.add('digest')
+        stage(auditBase('digest', {
+          kind: 'evaluation', stage: 'rendered', outcome: 'success', reasonCode: 'rendered',
+          trigger: 'turn_start',
+          candidates: digestStats.candidates,
+          selected: {
+            contentIds: digestStats.bodyIds,
+            hintIds: digestStats.hintIds,
+            count: digestStats.bodyIds.length,
           },
-        )
-        if (recall?.text) parts.push(recall.text)
-        if (recall) {
-          recordAudit({
-            ...(sessionId !== undefined ? { sessionId } : {}),
-            trigger: usableSignal?.reason ?? 'turn_start',
-            phase: usableSignal?.phase ?? detectPhase(userQuery),
-            ...(auditQuery(recall.query) !== undefined ? { query: auditQuery(recall.query) } : {}),
+          omitted: digestStats.omitted.map((entry) => ({
+            id: entry.id,
+            reason: entry.reason,
+            ...(entry.kind !== undefined ? { kind: entry.kind } : {}),
+            ...(entry.tags !== undefined ? { tags: sanitizeAuditTags(entry.tags) } : {}),
+          })),
+          budgets: {
+            digest: auditBudget(settings.digest.tokenBudget, outcome.value.tokens),
+            hints: auditBudget(settings.digest.hintBudget, digestStats.hint.tokens),
+          },
+          sourceLoad: { ok: true, count: digestStats.candidates },
+          limits: { topK: settings.digest.topK, budgets: { digest: settings.digest.tokenBudget, hints: settings.digest.hintBudget } },
+          scopes: scopes !== undefined ? [...scopes] : undefined,
+        }))
+      }
+    } else if (step === 1) {
+      stage(auditBase('digest', { kind: 'evaluation', stage: 'skipped', outcome: 'skipped', reasonCode: 'disabled' }))
+    }
+
+    // 规则段：只做一次渲染，并把同一份结果交给系统提示（若宿主先跑 pre-step 再 assemble）。
+    if (step === 1) {
+      if (!settings.rules.enabled) {
+        stage(auditBase('rules', { kind: 'evaluation', stage: 'skipped', outcome: 'skipped', reasonCode: 'disabled' }))
+      } else if (!systemPromptReady) {
+        stage(auditBase('rules', { kind: 'evaluation', stage: 'skipped', outcome: 'skipped', reasonCode: 'system_prompt_unavailable' }))
+      } else {
+        const promptScopes = promptScopesFor(memory, agent)
+        const rendered = renderRulesFor(memory, promptScopes, settings.rules)
+        if (!rendered.ok) {
+          stage(auditBase('rules', {
+            kind: 'evaluation', stage: 'source_load', outcome: 'failed', reasonCode: rendered.errorCode,
+            scopes: promptScopes,
+            error: { stage: 'source_load', code: rendered.errorCode },
+          }))
+        } else {
+          if (sessionId !== undefined) rulesCache.set(sessionId, { at: Date.now(), scopes: promptScopes, render: rendered.render })
+          const rulesStats = rendered.render.stats
+          const rulesOutcome = rulesStats.candidates === 0 ? 'skipped' : rulesStats.injected === 0 ? 'partial' : 'success'
+          const rulesReason = rulesStats.candidates === 0 ? 'no_candidates' : rulesStats.injected === 0 ? 'all_omitted' : 'system_prompt_shared_render'
+          stage(auditBase('rules', {
+            kind: 'evaluation', stage: 'rendered', outcome: rulesOutcome, reasonCode: rulesReason,
+            scopes: promptScopes,
+            candidates: rulesStats.candidates,
+            selected: {
+              contentIds: rulesStats.injectedIds,
+              hintIds: [],
+              count: rulesStats.injected,
+            },
+            omitted: rulesStats.omitted.map((entry) => ({ id: entry.id, reason: entry.reason })),
+            budgets: { rules: auditBudget(settings.rules.tokenBudget, rendered.render.tokens) },
+            limits: { maxItems: settings.rules.maxItems, budgets: { rules: settings.rules.tokenBudget } },
+            rules: {
+              active: rulesStats.active,
+              injected: rulesStats.injected,
+              mandatory: rulesStats.mandatory,
+              mandatoryInjected: rulesStats.mandatoryInjected,
+              mandatoryOmitted: rulesStats.mandatoryOmitted,
+              injectedIds: rulesStats.injectedIds,
+              omittedIds: rulesStats.omittedIds,
+            },
+            delivery: { status: 'unknown', appended: null, textChars: rendered.render.text.length, textHash: hashAuditText(rendered.render.text) },
+          }))
+        }
+      }
+    }
+
+    // 策略段是常量系统提示；只记录它存在，不声称“模型读了”。
+    if (step === 1) {
+      if (settings.policy.enabled) {
+        stage(auditBase('policy', {
+          kind: 'evaluation', stage: 'system_prompt', outcome: 'success', reasonCode: 'constant_text',
+          delivery: { status: 'unknown', appended: null, textChars: POLICY_TEXT.length, textHash: hashAuditText(POLICY_TEXT) },
+        }))
+      } else {
+        stage(auditBase('policy', { kind: 'evaluation', stage: 'skipped', outcome: 'skipped', reasonCode: 'disabled' }))
+      }
+    }
+
+    // 行为信号优先:发布/推送/失败事件触发定向查询;没有信号才走普通用户消息召回。
+    // 同一轮普通 query 已处理过时跳过重复检索(去重状态仍会兜底)。
+    const skipNormalRecall = usableSignal === undefined && step > 1 && sessionId !== undefined
+      && userQuery !== '' && injectionState.lastQueryOf(sessionId) === userQuery
+    if (!settings.recall.enabled) {
+      if (step === 1) {
+        stage(auditBase('recall', {
+          kind: 'evaluation', stage: 'skipped', outcome: 'skipped', reasonCode: 'disabled',
+          ...(userQueryField !== undefined ? { query: userQueryField } : {}),
+        }))
+      }
+    } else if (usableSignal === undefined && userQuery === '') {
+      stage(auditBase('recall', {
+        kind: 'evaluation', stage: 'skipped', outcome: 'skipped', reasonCode: 'no_query',
+      }))
+    } else if (skipNormalRecall) {
+      stage(auditBase('recall', {
+        kind: 'evaluation', stage: 'skipped', outcome: 'skipped', reasonCode: 'same_query_dedup',
+        ...(userQueryField !== undefined ? { query: userQueryField } : {}),
+      }))
+    } else {
+      const recallScopes = usableSignal === undefined ? scopes : autoScopes
+      const recallExclude = usableSignal === undefined ? exclude : excludeAuto
+      const recall = await injector.maybeInjectDetailed(
+        { messages: input.messages         , signal: input.signal, ...(recallScopes !== undefined ? { scopes: recallScopes } : {}), ...(sessionId !== undefined ? { sessionId } : {}) },
+        { messages: decision.messages          },
+        {
+          ...(sessionId !== undefined ? { sessionId } : {}),
+          ...(usableSignal !== undefined ? { query: usableSignal.query, trigger: usableSignal.reason, force: true } : { trigger: 'turn_start' }),
+          ...(usableSignal?.tag ? { tag: usableSignal.tag, requireTag: true } : {}),
+          excludeIds: recallExclude,
+        },
+      )
+      if (recall?.text) {
+        parts.push(recall.text)
+        messageChannels.add('recall')
+      }
+      if (recall !== undefined) {
+        const queryField = sanitizeAuditText(recall.query)
+        const omitted = recall.omitted.map((entry) => ({ id: entry.id, reason: entry.reason }))
+        const failed = !recall.retrieval.ok
+        const outcome = failed ? 'failed' : recall.text !== undefined ? 'success' : omitted.length > 0 ? 'partial' : 'skipped'
+        const reasonCode = failed ? 'retrieval_failed'
+          : recall.text !== undefined ? 'injected'
+            : omitted.length > 0 ? 'all_omitted'
+              : recall.dedupSkipped > 0 ? 'deduped'
+                : 'no_candidates'
+        stage(auditBase('recall', {
+          kind: 'evaluation', stage: 'searched', outcome, reasonCode,
+          trigger: usableSignal?.reason ?? 'turn_start',
+          ...(usableSignal !== undefined ? { phase: usableSignal.phase } : {}),
+          ...(queryField !== undefined ? { query: queryField } : {}),
+          candidates: recall.candidates,
+          filter: {
+            rawHits: recall.rawHits ?? recall.retrieval.count,
+            tagFiltered: recall.tagFiltered ?? 0,
+            supersededExcluded: recall.supersededExcluded ?? 0,
             candidates: recall.candidates,
+          },
+          selected: {
             contentIds: recall.ids,
             hintIds: [],
-            omitted: recall.omitted.map((entry) => ({ id: entry.id, reason: entry.reason })),
-            dedupSkipped: recall.dedupSkipped,
-            budgets: { recall: auditBudget(settings.recall.tokenBudget, recall.tokens) },
-            retrieval: recall.retrieval,
-            ...(usableSignal !== undefined
-              ? { signal: { reason: usableSignal.reason, ...(usableSignal.errorClass ? { errorClass: usableSignal.errorClass } : {}), ...(usableSignal.tool ? { tool: usableSignal.tool } : {}), ...(usableSignal.tag ? { tag: usableSignal.tag } : {}), ...(usableSignal.source ? { source: usableSignal.source } : {}) } }
-              : {}),
-          })
-        }
+            newlyAddedIds: recall.newlyAddedIds ?? [],
+            count: recall.ids.length,
+          },
+          omitted,
+          dedup: {
+            skipped: recall.dedupSkipped,
+            updated: recall.updated.length,
+            lastTextSame: recall.lastTextSame === true,
+            ...(recall.dedupIds !== undefined ? { ids: recall.dedupIds } : {}),
+          },
+          budgets: { recall: auditBudget(settings.recall.tokenBudget, recall.tokens) },
+          retrieval: {
+            ok: recall.retrieval.ok,
+            count: recall.retrieval.count,
+            ...(recall.retrieval.errorCode !== undefined ? { errorCode: recall.retrieval.errorCode } : {}),
+          },
+          ...(recallScopes !== undefined ? { scopes: [...recallScopes] } : {}),
+          limits: { topK: settings.recall.topK, maxQueryChars: settings.autoRecall.maxQueryChars },
+          ...(usableSignal !== undefined
+            ? { signal: { key: usableSignal.key, reason: usableSignal.reason, ...(usableSignal.errorClass ? { errorClass: usableSignal.errorClass } : {}), ...(usableSignal.tool ? { tool: usableSignal.tool } : {}), ...(usableSignal.tag ? { tag: usableSignal.tag } : {}), ...(usableSignal.source ? { source: usableSignal.source } : {}) } }
+            : {}),
+        }))
       }
     }
 
     const text = parts.join('\n\n')
-    if (!text) return decision
+    const channels = [...messageChannels]
+    const writeDelivery = (status                                                                      , appended                , suppressedBy                                  )       => {
+      for (const entry of staged) audit.record(entry)
+      if (staged.length === 0 && text === '') return
+      const outcome = status === 'appended' ? 'success'
+        : status === 'rejected' ? 'failed'
+          : status === 'unknown' ? 'unknown' : 'skipped'
+      recordAudit({
+        ...(sessionId !== undefined ? { sessionId } : {}),
+        step,
+        kind: 'delivery',
+        channel: 'lifecycle',
+        stage: status === 'unknown' ? 'delivery_prepared' : 'delivery',
+        outcome,
+        reasonCode: status === 'appended' ? 'appended'
+          : status === 'suppressed' ? 'duplicate_message'
+            : status === 'rejected' ? 'malformed_message'
+              : status === 'unknown' ? 'prepared' : 'empty',
+        ...(channels.length > 0 ? { channels } : {}),
+        delivery: {
+          status,
+          appended,
+          ...(suppressedBy !== undefined ? { suppressedBy } : {}),
+          ...(text !== '' ? { textChars: text.length, textHash: hashAuditText(text) } : {}),
+        },
+      })
+    }
+
+    if (!text) {
+      writeDelivery('not_attempted', false, 'empty')
+      return decision
+    }
     // 幂等:同一段内容已经在 decision 里(另一个激活实例放进去的),不再追加。
     // 宿主把 entry 应用两次时,两个注入器会各自注入一条逐字相同的消息。
-    if (hasRecallMessage(decision.messages         , text)) return decision
+    if (hasRecallMessage(decision.messages         , text)) {
+      writeDelivery('suppressed', false, 'dedup')
+      return decision
+    }
     const message = createUserMessage({
       content: [{ type: 'text', text }],
       source: { kind: 'memory', form: 'recall' },
     })
     // Last-resort guard: a malformed message aborts the whole turn downstream
     // (consumers read message.source.kind), so never publish one.
-    if (!isWellFormedMessage(message)) return decision
+    if (!isWellFormedMessage(message)) {
+      writeDelivery('rejected', false, 'malformed')
+      return decision
+    }
+    // 宿主没有向 middleware 回执“消息已被接受”：这里只能证明已通过本地保护并
+    // 放进 decision，不能证明宿主最终采纳。按方案口径记 unknown，不乐观推断 appended。
+    writeDelivery('unknown', null)
     return { ...decision, messages: [...decision.messages, message] }
   }, { prepend: true })
 }

@@ -20,7 +20,7 @@
 import type { MemoryRecord } from 'dsh-memory'
 import {
   latestSystemText,
-  renderRulesDeltaBlock,
+  renderRulesDelta,
   ruleLine,
   seenRuleLines,
   type HistoryMessageView,
@@ -55,6 +55,13 @@ export function derivedHistoryOf(agent: unknown): HistoryMessageView[] | undefin
   }
 }
 
+export interface RulesDeltaOutcome {
+  text?: string
+  records: MemoryRecord[]
+  changes: Array<{ id: string; reason: 'new' | 'edited' }>
+  tokens?: number
+}
+
 /**
  * 规则增量注入器。一个激活一个实例:它要跨轮记住"每条规则上一轮开始时长什么样",
  * 才能在规则被编辑后补一次、在没变时不重复。
@@ -63,41 +70,59 @@ export class RulesDeltaInjector {
   /** sessionId -> (规则 id -> 上一轮开始时的渲染行) */
   private readonly baselines = new Map<string, Map<string, string>>()
 
-  /**
-   * 本轮第一步的增量正文;没有新增/变更(或这是会话的第一步)时返回 undefined。
-   *
-   * 规则范围与系统提示「硬性规则」段一致(`resolveReadScopes`,拿不到就 global),
-   * 免得提醒了本来就不该进常驻段的规则。只在一轮的第一步调用:增量消息会持久化,
-   * 每一步都算会重复;新会话(还没有系统提示)直接跳过 —— 系统提示这次就带全。
-   */
-  maybeInject(agent: unknown, memory: RulesScopeSource, cfg: RulesSettings): string | undefined {
-    const history = derivedHistoryOf(agent)
-    if (history === undefined || latestSystemText(history) === undefined) return undefined
-    let scopes: string[] = ['global']
-    try {
-      const resolved = memory.resolveReadScopes?.(agent)
-      if (Array.isArray(resolved) && resolved.length > 0) scopes = resolved as string[]
-    } catch { scopes = ['global'] }
-    let records: MemoryRecord[]
-    try {
-      records = memory.listSync?.({ scopes, kind: 'rule', limit: 100 }) ?? []
-    } catch {
-      return undefined
-    }
+/**
+ * 本轮第一步的增量正文；没有新增/变更(或这是会话的第一步)时返回 undefined。
+ *
+ * 规则范围与系统提示「硬性规则」段一致(`resolveReadScopes`,拿不到就 global),
+ * 免得提醒了本来就不该进常驻段的规则。只在一轮的第一步调用:增量消息会持久化,
+ * 每一步都算会重复;新会话(还没有系统提示)直接跳过 —— 系统提示这次就带全。
+ */
+maybeInject(agent: unknown, memory: RulesScopeSource, cfg: RulesSettings): string | undefined {
+  return this.maybeInjectDetailed(agent, memory, cfg).text
+}
 
-    const sessionId = sessionIdOf(agent)
-    const seen = seenRuleLines(history)
-    const baseline = (sessionId === undefined ? undefined : this.baselines.get(sessionId)) ?? seedBaseline(records, seen)
-    const unseen = records.filter((record) => {
-      const line = ruleLine(record)
-      const before = baseline.get(record.id)
-      // 编辑过(同一 id 的行变了)一定要提醒;新规则只在模型还没在历史里见过时才提醒。
-      return before !== undefined ? before !== line : !seen.has(line)
-    })
-
-    if (sessionId !== undefined) this.remember(sessionId, records)
-    return renderRulesDeltaBlock(unseen, cfg) ?? undefined
+/**
+ * 带结构化结果：审计需要知道本次补了哪些规则、原因是新增还是编辑。
+ * 业务渲染仍由 `renderRulesDeltaBlock` 负责，`maybeInject` 保持旧行为。
+ */
+maybeInjectDetailed(agent: unknown, memory: RulesScopeSource, cfg: RulesSettings): RulesDeltaOutcome {
+  const history = derivedHistoryOf(agent)
+  if (history === undefined || latestSystemText(history) === undefined) return { records: [], changes: [] }
+  let scopes: string[] = ['global']
+  try {
+    const resolved = memory.resolveReadScopes?.(agent)
+    if (Array.isArray(resolved) && resolved.length > 0) scopes = resolved as string[]
+  } catch { scopes = ['global'] }
+  let records: MemoryRecord[]
+  try {
+    records = memory.listSync?.({ scopes, kind: 'rule', limit: 100 }) ?? []
+  } catch {
+    return { records: [], changes: [] }
   }
+
+  const sessionId = sessionIdOf(agent)
+  const seen = seenRuleLines(history)
+  const baseline = (sessionId === undefined ? undefined : this.baselines.get(sessionId)) ?? seedBaseline(records, seen)
+  const changes: Array<{ id: string; reason: 'new' | 'edited' }> = []
+  const unseen = records.filter((record) => {
+    const line = ruleLine(record)
+    const before = baseline.get(record.id)
+    // 编辑过(同一 id 的行变了)一定要提醒;新规则只在模型还没在历史里见过时才提醒。
+    const changed = before !== undefined ? before !== line : !seen.has(line)
+    if (changed) changes.push({ id: record.id, reason: before !== undefined ? 'edited' : 'new' })
+    return changed
+  })
+
+  if (sessionId !== undefined) this.remember(sessionId, records)
+  const rendered = renderRulesDelta(unseen, cfg)
+  const text = rendered.text === '' ? undefined : rendered.text
+  return {
+    ...(text !== undefined ? { text } : {}),
+    records: unseen,
+    changes,
+    ...(text !== undefined ? { tokens: rendered.tokens } : {}),
+  }
+}
 
   private remember(sessionId: string, records: readonly MemoryRecord[]): void {
     const snapshot = new Map<string, string>()

@@ -4,7 +4,7 @@ import type { MemoryHit, MemoryRecord } from 'dsh-memory'
 import { renderDigest } from '../src/digest.ts'
 import { renderRules } from '../src/rules.ts'
 import { InjectionState } from '../src/state.ts'
-import { InjectAuditStore, auditQuery } from '../src/audit.ts'
+import { InjectAuditStore, auditQuery, sanitizeAuditText } from '../src/audit.ts'
 import {
   BehaviorSignalStore,
   detectPhase,
@@ -148,27 +148,80 @@ test('会话级注入状态:区分 hint/content、版本更新与跨会话去重
   assert.equal(state.statusOf('s1', 'a'), 'not_seen')
 })
 
-test('审计环:最新在前、按会话过滤、有上限', () => {
+test('审计环:按会话保留、最新在前、可按会话过滤', () => {
   const audit = new InjectAuditStore()
   for (let i = 0; i < 205; i++) {
     audit.record({
-      at: i, sessionId: i % 2 === 0 ? 'even' : 'odd', trigger: 'turn_start', phase: 'unknown',
-      candidates: i, contentIds: [], hintIds: [], omitted: [], dedupSkipped: 0, budgets: {},
+      at: i, sessionId: i % 2 === 0 ? 'even' : 'odd', kind: 'evaluation', channel: 'recall', stage: 'searched',
+      outcome: 'success', trigger: 'turn_start', phase: 'unknown', candidates: i,
+      selected: { contentIds: [], hintIds: [], count: 0 }, omitted: [], dedup: { skipped: 0, updated: 0, lastTextSame: false }, budgets: {},
       retrieval: { ok: true, count: i },
     })
   }
-  assert.equal(audit.list().length, 200)
+  assert.equal(audit.list().length, 205, '全局容量 2000 内全部保留')
   assert.equal(audit.list()[0]!.candidates, 204)
-  assert.equal(audit.list('odd').length, 100)
+  assert.equal(audit.list('odd').length, 102)
   assert.ok(audit.list('odd').every((entry) => entry.sessionId === 'odd'))
 })
 
-test('审计查询脱敏:不把凭据形状写进审计', () => {
+test('审计 v2:每会话容量、丢弃计数、seq 单调、返回副本', () => {
+  const audit = new InjectAuditStore({ capacity: 100, perSessionCapacity: 5 })
+  for (let i = 0; i < 10; i++) {
+    audit.record({
+      sessionId: 's1', kind: 'evaluation', channel: 'recall', stage: 'searched', outcome: 'success',
+      candidates: i, selected: { contentIds: [], hintIds: [], count: 0 }, omitted: [],
+      dedup: { skipped: 0, updated: 0, lastTextSame: false }, budgets: {},
+    })
+  }
+  assert.equal(audit.list('s1').length, 5)
+  assert.equal(audit.stats().dropped, 5)
+  assert.equal(audit.stats().entries, 5)
+  const page = audit.query({ sessionId: 's1', limit: 2 })
+  assert.equal(page.total, 5)
+  assert.equal(page.entries.length, 2)
+  assert.ok(page.nextCursor)
+  assert.ok(page.entries[0]!.seq > page.entries[1]!.seq)
+  // 返回副本：调用方修改不能污染 store。
+  page.entries[0]!.candidates = 999
+  assert.notEqual(audit.list('s1').find((entry) => entry.id === page.entries[0]!.id)!.candidates, 999)
+  const next = audit.query({ sessionId: 's1', limit: 2, cursor: page.nextCursor })
+  assert.ok(next.entries.every((entry) => !page.entries.some((prev) => prev.seq === entry.seq)))
+})
+
+test('审计 v2:筛选、问题视图与稳定游标', () => {
+  const audit = new InjectAuditStore()
+  const record = (extra: Record<string, unknown>) => audit.record({
+    sessionId: 's1', kind: 'evaluation', channel: 'recall', stage: 'searched', outcome: 'success',
+    trigger: 'turn_start', ...extra,
+  } as never)
+  record({ candidates: 3, selected: { contentIds: ['a'], hintIds: [], count: 1 }, omitted: [] })
+  record({ outcome: 'failed', trigger: 'tool_failure', error: { stage: 'search', code: 'retrieval_failed' } })
+  record({ channel: 'digest', outcome: 'skipped', reasonCode: 'no_candidates', omitted: [{ id: 'b', reason: 'budget' }] })
+  assert.equal(audit.query({ channel: 'digest' }).total, 1)
+  assert.equal(audit.query({ trigger: 'tool_failure' }).total, 1)
+  assert.equal(audit.query({ outcome: 'failed' }).total, 1)
+  assert.equal(audit.query({ memoryId: 'a' }).total, 1)
+  assert.equal(audit.query({ memoryId: 'b' }).total, 1)
+  assert.equal(audit.query({ problem: true }).total, 2)
+  assert.throws(() => audit.query({ limit: 0 }), /limit/)
+  assert.throws(() => audit.query({ cursor: 'nope' }), /cursor/)
+})
+
+test('审计查询脱敏:不把凭据形状写进审计,先限长再扫描', () => {
   const query = auditQuery('deploy with token=abcdefgh12345678 and sk-1234567890abcdefghij')
   assert.ok(query)
   assert.ok(!query!.includes('abcdefgh12345678'))
   assert.ok(!query!.includes('sk-1234567890abcdefghij'))
   assert.ok(query!.includes('[REDACTED:'))
+
+  const long = sanitizeAuditText(`${'x'.repeat(5000)} token=abcdefgh12345678`)
+  assert.ok(long)
+  assert.ok((long!.text ?? '').length <= 200, '超长输入只保留 200 字')
+  assert.equal(long!.chars, 5000 + ' token=abcdefgh12345678'.length)
+  const signalLike = sanitizeAuditText('工具描述 token=abcdefgh12345678')
+  assert.ok(signalLike)
+  assert.ok(!(signalLike!.text ?? '').includes('abcdefgh12345678'))
+  assert.equal(signalLike!.redacted, true)
 })
 
 test('行为信号:标签触发、失败分类、description 优先', () => {

@@ -241,7 +241,10 @@ export function renderRecallBlock(
     ids.push(h.record.id)
     tokens += cost
   }
-  if (lines.length === 0) return null
+  if (lines.length === 0) {
+    // 所有候选都超预算时也要保留 omitted 原因：审计需要解释“为什么什么都没注入”。
+    return { text: '', tokens: 0, ids: [], omitted }
+  }
   return { text: `${header}\n${lines.join('\n')}`, tokens, ids, omitted }
 }
 
@@ -270,15 +273,24 @@ export interface RecallTriggerOptions {
 
 export interface RecallResult {
   text?: string
-  /** 正文注入的 id。 */
+  /** 正文注入的 id（评估选中，不必然等于本次新增）。 */
   ids: string[]
+  /** 本次真正新增到文本里的 id；文本与上次相同/去重时为空。 */
+  newlyAddedIds?: string[]
+  /** 被去重跳过的 id。 */
+  dedupIds?: string[]
   candidates: number
   dedupSkipped: number
   updated: string[]
   omitted: RecallOmission[]
   query: string
   tokens: number
-  retrieval: { ok: boolean; count: number; error?: string }
+  /** 阶段计数，供审计核对。 */
+  rawHits?: number
+  tagFiltered?: number
+  supersededExcluded?: number
+  lastTextSame?: boolean
+  retrieval: { ok: boolean; count: number; error?: string; errorCode?: string }
 }
 
 /**
@@ -337,7 +349,8 @@ export class MemoryInjector {
       // 检索失败不能打断 agent 循环;审计会区分"失败"与"成功但无结果"。
       return {
         ids: [], candidates: 0, dedupSkipped: 0, updated: [], omitted: [], query,
-        tokens: 0, retrieval: { ok: false, count: 0, error: 'retrieval_failed' },
+        tokens: 0, rawHits: 0, tagFiltered: 0, supersededExcluded: 0,
+        retrieval: { ok: false, count: 0, error: 'retrieval_failed', errorCode: 'retrieval_failed' },
       }
     }
     // 成功检索后记住查询(即使没有新正文):同一 query 的后续 step 不再重复全量检索。
@@ -352,8 +365,10 @@ export class MemoryInjector {
     const taggedHits = requiredTag === ''
       ? hits
       : hits.filter((hit) => (hit.record.tags ?? []).some((tag) => textHasTag(String(tag), requiredTag)))
+    const tagFiltered = hits.length - taggedHits.length
     const seenIds = options.excludeIds
     const candidates = seenIds === undefined ? taggedHits : taggedHits.filter((hit) => !seenIds.has(hit.record.id))
+    const supersededExcluded = taggedHits.length - candidates.length
     const { fresh, deduplicated, updated } = this.state.filterNewContent(
       sessionId,
       candidates.map((hit) => hit.record),
@@ -364,11 +379,25 @@ export class MemoryInjector {
     const block = renderRecallBlock(freshHits, cfg, optionsForRender)
     const base: RecallResult = {
       ids: [], candidates: candidates.length, dedupSkipped: deduplicated.length, updated, omitted: [], query,
-      tokens: 0, retrieval: { ok: true, count: hits.length },
+      tokens: 0, rawHits: hits.length, tagFiltered, supersededExcluded,
+      retrieval: { ok: true, count: hits.length },
     }
     if (!block) return base
+    if (block.text === '') {
+      // 有候选但全部被 top_k/预算省略：保留原因，但不标记已注入。
+      return { ...base, omitted: block.omitted }
+    }
     if (block.text === this.state.lastTextOf(sessionId)) {
-      return { ...base, ids: block.ids, omitted: block.omitted, tokens: block.tokens, dedupSkipped: deduplicated.length + block.ids.length }
+      return {
+        ...base,
+        ids: block.ids,
+        newlyAddedIds: [],
+        dedupIds: [...deduplicated, ...block.ids],
+        omitted: block.omitted,
+        tokens: block.tokens,
+        dedupSkipped: deduplicated.length + block.ids.length,
+        lastTextSame: true,
+      }
     }
 
     this.state.markContent(sessionId, block.ids.map((id) => {
@@ -377,7 +406,16 @@ export class MemoryInjector {
     }))
     this.state.setLastText(sessionId, block.text)
     this.state.setLastQuery(sessionId, query)
-    return { ...base, text: block.text, ids: block.ids, omitted: block.omitted, tokens: block.tokens }
+    return {
+      ...base,
+      text: block.text,
+      ids: block.ids,
+      newlyAddedIds: block.ids,
+      dedupIds: deduplicated,
+      omitted: block.omitted,
+      tokens: block.tokens,
+      lastTextSame: false,
+    }
   }
 }
 
@@ -429,15 +467,39 @@ export class MemoryDigester {
     scopes: readonly string[] | undefined,
     render: (records: MemoryRecord[]) => T | null,
   ): Promise<T | undefined> {
-    if (sessionId === undefined || this.done.has(sessionId)) return undefined
+    const outcome = await this.maybeDigestOutcome(sessionId, scopes, render)
+    return outcome.status === 'ok' ? outcome.value : undefined
+  }
+
+  /**
+   * 带状态的摘要评估：审计需要区分“没有会话 / 已经做过 / 加载失败 / 成功但为空”。
+   * 仍然保持旧行为：每个会话只尝试一次（加载失败也不重试），避免每步打网络。
+   */
+  async maybeDigestOutcome<T>(
+    sessionId: string | undefined,
+    scopes: readonly string[] | undefined,
+    render: (records: MemoryRecord[]) => T | null,
+  ): Promise<
+    | { status: 'ok'; value?: T; empty: boolean; candidates: number }
+    | { status: 'failed'; errorCode: string }
+    | { status: 'skipped'; reasonCode: 'no_session' | 'already_done' }
+  > {
+    if (sessionId === undefined) return { status: 'skipped', reasonCode: 'no_session' }
+    if (this.done.has(sessionId)) return { status: 'skipped', reasonCode: 'already_done' }
     this.markDone(sessionId)
     let records: MemoryRecord[]
     try {
       records = await this.list(scopes)
     } catch {
-      return undefined
+      return { status: 'failed', errorCode: 'source_load_failed' }
     }
-    return render(records) ?? undefined
+    const value = render(records)
+    return {
+      status: 'ok',
+      ...(value !== null && value !== undefined ? { value } : {}),
+      empty: value === null || value === undefined,
+      candidates: records.length,
+    }
   }
 
   private markDone(sessionId: string): void {

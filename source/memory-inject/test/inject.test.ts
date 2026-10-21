@@ -54,8 +54,13 @@ test('renderRecallBlock respects token budget and topK', () => {
   assert.equal(block2.text.split('\n').length - 1, 3)
   // empty hits → null
   assert.equal(renderRecallBlock([], defaultInjectConfig), null)
-  // budget smaller than the header alone → null, not a header-only block
-  assert.equal(renderRecallBlock(hits, { ...defaultInjectConfig, tokenBudget: 10 }), null)
+  // budget smaller than the header alone → 空文本，但保留 omitted 原因给审计
+  const tooTight = renderRecallBlock(hits, { ...defaultInjectConfig, tokenBudget: 10 })
+  assert.ok(tooTight)
+  assert.equal(tooTight!.text, '')
+  assert.equal(tooTight!.ids.length, 0)
+  assert.ok(tooTight!.omitted.length > 0)
+  assert.ok(tooTight!.omitted.every((entry) => entry.reason === 'budget' || entry.reason === 'top_k'))
 })
 
 test('injector returns the recall text for the host to wrap into a real message', async () => {

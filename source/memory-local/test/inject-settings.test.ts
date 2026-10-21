@@ -122,7 +122,35 @@ test('provider: injectAudit 由注入半边挂载后可查询,未挂载时为空
     assert.deepEqual(svc.injectAudit(), [])
     svc.attachInjectAudit({ list: (sessionId?: string) => [{ sessionId: sessionId ?? 'all' }] })
     assert.deepEqual(svc.injectAudit('s1'), [{ sessionId: 's1' }])
+    assert.equal((svc.injectAuditPage({ sessionId: 's1', limit: 2 }) as { total: number }).total, 1)
+    assert.equal((svc.injectAuditStats() as { persistence: string }).persistence, 'memory')
+    // 显式解绑：插件半边卸载后不能再读到旧 store。
+    svc.attachInjectAudit(null)
+    assert.deepEqual(svc.injectAudit(), [])
     svc.flushSync()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('provider: 类型化 audit sink 的 query/stats 直接透传,dispose 只调用一次', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-audit-v2-'))
+  try {
+    const svc = fresh(dir)
+    let disposed = 0
+    const page = { entries: [{ id: 'e1' }], total: 1, nextCursor: '1', stats: { capacity: 200 } }
+    svc.attachInjectAudit({
+      list: () => [],
+      query: (query?: unknown) => ({ ...page, query }),
+      stats: () => ({ entries: 1, capacity: 200, dropped: 0, writeErrors: 0, persistence: 'memory' }),
+      dispose: () => { disposed += 1 },
+    })
+    const value = svc.injectAuditPage({ sessionId: 's1' }) as { total: number; query: unknown }
+    assert.equal(value.total, 1)
+    assert.deepEqual(value.query, { sessionId: 's1' })
+    assert.equal((svc.injectAuditStats() as { capacity: number }).capacity, 200)
+    svc.flushSync()
+    assert.equal(disposed, 1)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

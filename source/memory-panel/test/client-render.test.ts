@@ -336,6 +336,69 @@ const installIdle = (over: Record<string, unknown> = {}) => ({
   phase: 'idle', message: '', receivedBytes: 0, totalBytes: null, error: null, installed: false, root: 'D:/stack', ...over,
 })
 
+test('审计标签页:独立入口、真实空状态、不伪造数据', async () => {
+  const { hooks } = await loadBundle()
+  hooks.resetAll()
+  const tree = await mountPanel(hooks, {
+    scopes: [{ scope: 'session:sess-12345678', records: 1, pendingEmbeds: 0, label: '会话标题' }],
+    embedServer: null,
+  }, undefined, '审计')
+  const text = textOf(tree())
+  assert.ok(text.includes('记忆审计'), '审计页有独立标题')
+  assert.ok(text.includes('内存模式'), '如实显示内存模式')
+  assert.ok(text.includes('当前筛选没有审计事件'), '无事件时显示真实空状态')
+  assert.ok(!text.includes('已投递 42'), '不补造统计')
+})
+
+test('审计标签页:真实事件渲染为事件流与详情,评估不等于投递', async () => {
+  const { hooks, exports } = await loadBundle()
+  hooks.resetAll()
+  const entries = [
+    {
+      schemaVersion: 2, id: 's1:2', seq: 2, at: Date.now(), sessionId: 's1', step: 1,
+      kind: 'delivery', channel: 'lifecycle', stage: 'delivery_prepared', outcome: 'unknown',
+      reasonCode: 'prepared', channels: ['recall'], delivery: { status: 'unknown', appended: null, textChars: 42, textHash: 'fnv1a:abc' },
+    },
+    {
+      schemaVersion: 2, id: 's1:1', seq: 1, at: Date.now(), sessionId: 's1', step: 1,
+      kind: 'evaluation', channel: 'recall', stage: 'searched', outcome: 'success', reasonCode: 'injected',
+      trigger: 'before_high_risk_tool', phase: 'release', scopes: ['session:s1', 'project:D:/repo', 'global'],
+      limits: { topK: 5 }, candidates: 12, filter: { rawHits: 15, tagFiltered: 2, supersededExcluded: 1, candidates: 12 },
+      selected: { contentIds: ['mem-1'], hintIds: [], newlyAddedIds: ['mem-1'], count: 1 },
+      omitted: [{ id: 'mem-2', reason: 'top_k', tags: ['release'] }],
+      dedup: { skipped: 3, updated: 0, lastTextSame: false, ids: ['mem-3'] },
+      budgets: { recall: { budget: 500, used: 321, remaining: 179, over: false } },
+      retrieval: { ok: true, count: 15 }, query: { text: '发布 token=[REDACTED:key-assignment]', chars: 32, redacted: true, hash: 'fnv1a:def' },
+    },
+  ]
+  ;(globalThis as Record<string, unknown>).fetch = async () => ({
+    status: 200,
+    json: async () => ({ ok: true, value: { entries, total: 2, stats: { entries: 2, capacity: 2000, perSessionCapacity: 200, dropped: 0, writeErrors: 0, persistence: 'memory' } } }),
+  })
+  const AuditTab = (exports.__test as { AuditTab: (p: Record<string, unknown>) => unknown }).AuditTab
+  const element = () => hooks.React.createElement(AuditTab, { scopes: [{ scope: 'session:s1', label: '测试会话' }] })
+  let current: RenderNode | null = render(element(), hooks)
+  hooks.setRerender(() => { current = render(element(), hooks) })
+  hooks.runEffects()
+  for (let i = 0; i < 8; i++) await Promise.resolve()
+  const text = textOf(current)
+  assert.ok(text.includes('记忆审计'))
+  assert.ok(text.includes('召回'), '通道名渲染')
+  assert.ok(text.includes('已准备（投递未确认）'), 'unknown 投递不冒充已投递')
+  assert.ok(text.includes('发布 token=[REDACTED:key-assignment]') === false, '列表不直接展示 query 原文')
+  const row = collect(current)
+    .filter((n) => String(n.props?.className ?? '').startsWith('audit-row'))
+    .find((n) => textOf(n).includes('召回'))
+  assert.ok(row, '召回事件行存在')
+  ;(row!.props!.onClick as () => void)()
+  for (let i = 0; i < 2; i++) await Promise.resolve()
+  const detail = textOf(current)
+  assert.ok(detail.includes('检索与过滤'))
+  assert.ok(detail.includes('原始命中'))
+  assert.ok(detail.includes('top_k'))
+  assert.ok(detail.includes('fnv1a:def'), '详情展示已脱敏 query 的 hash')
+})
+
 test('作用域下拉用服务端给的 label(会话标题 / project 的 cwd)', async () => {
   const { hooks } = await loadBundle()
   hooks.resetAll()

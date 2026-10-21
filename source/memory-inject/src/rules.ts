@@ -67,6 +67,11 @@ export interface RulesStats {
   mandatoryInjected: number
   mandatoryOmitted: number
   truncated: boolean
+  /** 实际进入规则段的 id。 */
+  injectedIds: string[]
+  /** 被省略的 id 与互斥原因。 */
+  omitted: Array<{ id: string; reason: 'top_k' | 'budget' | 'superseded' }>
+  omittedIds: string[]
 }
 
 export interface RulesRender {
@@ -85,13 +90,19 @@ function renderLines(
   const retired = supersededIds(records)
   const active: MemoryRecord[] = []
   let omittedSuperseded = 0
+  const omitted: Array<{ id: string; reason: 'top_k' | 'budget' | 'superseded' }> = []
   for (const record of records) {
-    if (retired.has(record.id)) { omittedSuperseded += 1; continue }
+    if (retired.has(record.id)) {
+      omittedSuperseded += 1
+      omitted.push({ id: record.id, reason: 'superseded' })
+      continue
+    }
     active.push(record)
   }
 
   let tokens = estimateTokens(header) + 4
   const lines: string[] = []
+  const injectedIds: string[] = []
   let omittedTopK = 0
   let omittedBudget = 0
   let budgetExhausted = false
@@ -103,11 +114,13 @@ function renderLines(
     const mandatory = isMandatoryRule(record)
     if (index >= cfg.maxItems) {
       omittedTopK += 1
+      omitted.push({ id: record.id, reason: 'top_k' })
       if (mandatory) mandatoryOmitted += 1
       continue
     }
     if (budgetExhausted) {
       omittedBudget += 1
+      omitted.push({ id: record.id, reason: 'budget' })
       if (mandatory) mandatoryOmitted += 1
       continue
     }
@@ -116,35 +129,46 @@ function renderLines(
     if (tokens + cost > budget) {
       budgetExhausted = true
       omittedBudget += 1
+      omitted.push({ id: record.id, reason: 'budget' })
       if (mandatory) mandatoryOmitted += 1
       continue
     }
     lines.push(line)
+    injectedIds.push(record.id)
     tokens += cost
     if (mandatory) mandatoryInjected += 1
   }
 
+  const statsBase = {
+    candidates: records.length,
+    active: active.length,
+    injected: lines.length,
+    omittedTopK,
+    omittedBudget,
+    omittedSuperseded,
+    mandatory: mandatoryTotal,
+    mandatoryInjected,
+    mandatoryOmitted,
+    truncated: omitted.length > 0,
+    injectedIds,
+    omitted,
+    omittedIds: omitted.map((entry) => entry.id),
+  }
+
   if (lines.length === 0 && active.length === 0) {
-    return {
-      text: '', tokens: 0, count: 0,
-      stats: {
-        candidates: records.length, active: 0, injected: 0,
-        omittedTopK, omittedBudget, omittedSuperseded,
-        mandatory: 0, mandatoryInjected: 0, mandatoryOmitted: 0, truncated: omittedSuperseded > 0,
-      },
-    }
+    return { text: '', tokens: 0, count: 0, stats: statsBase }
   }
   // 一条都装不下且不是 mandatory 溢出的情况:文本为空,但统计仍保留给审计。
   // 系统提示的调用方(renderRulesBlock)会把空文本转成 null,保持旧行为。
 
   const notes: string[] = []
   const noBody = lines.length === 0 && mandatoryOmitted === 0
-  const omitted = omittedTopK + omittedBudget
-  if (!noBody && omitted > 0) {
+  const omittedCount = omittedTopK + omittedBudget
+  if (!noBody && omittedCount > 0) {
     const parts: string[] = []
     if (omittedTopK > 0) parts.push(`条数上限 ${omittedTopK}`)
     if (omittedBudget > 0) parts.push(`预算 ${omittedBudget}`)
-    notes.push(`（另有 ${omitted} 条规则未展示：${parts.join(' / ')}；需要时用 memory_search 查 kind=rule）`)
+    notes.push(`（另有 ${omittedCount} 条规则未展示：${parts.join(' / ')}；需要时用 memory_search 查 kind=rule）`)
   }
   if (!noBody && mandatoryOmitted > 0) {
     notes.push(`（警告：${mandatoryOmitted} 条 mandatory / pinned 规则未展示，当前规则不完整）`)
@@ -157,16 +181,8 @@ function renderLines(
     tokens: tokens + extraTokens,
     count: lines.length,
     stats: {
-      candidates: records.length,
-      active: active.length,
-      injected: lines.length,
-      omittedTopK,
-      omittedBudget,
-      omittedSuperseded,
-      mandatory: mandatoryTotal,
-      mandatoryInjected,
-      mandatoryOmitted,
-      truncated: omitted > 0,
+      ...statsBase,
+      truncated: omittedCount > 0,
     },
   }
 }
@@ -186,8 +202,12 @@ export function renderRulesBlock(records: readonly MemoryRecord[], cfg: RulesSet
  * 渲染"新增/变更的规则"块。预算比常驻段留宽一点:增量块本来就是常驻段装不下
  * 时才需要的补充,用同一个 300 token 的上限容易把最该提醒的一条又截掉。
  */
+export function renderRulesDelta(records: readonly MemoryRecord[], cfg: RulesSettings): RulesRender {
+  return renderLines(records, RULES_DELTA_HEADER, cfg, Math.max(cfg.tokenBudget, 600))
+}
+
 export function renderRulesDeltaBlock(records: readonly MemoryRecord[], cfg: RulesSettings): string | null {
-  const text = renderLines(records, RULES_DELTA_HEADER, cfg, Math.max(cfg.tokenBudget, 600)).text
+  const text = renderRulesDelta(records, cfg).text
   return text === '' ? null : text
 }
 

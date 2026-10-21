@@ -334,6 +334,61 @@ window.__ModuleLoader__.load({
       '.memp .td-rel-dir{flex:none;color:color-mix(in srgb,#D9A441 62%,var(--dsw-alias-label-primary));font-weight:600}',
       '.memp .td-rel-text{color:var(--dsw-alias-label-secondary);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}',
       '@media (max-width:620px){.memp .tree-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.memp .tree-toolbar input[type=text]{max-width:none}}',
+      // ===== 审计 =====
+      '.memp .audit{display:flex;flex-direction:column;gap:12px;min-height:0}',
+      '.memp .audit-head{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}',
+      '.memp .audit-title{font-size:16px;font-weight:650;line-height:1.35}',
+      '.memp .audit-sub{font-size:11.5px;color:var(--dsw-alias-label-secondary);line-height:1.55;margin-top:2px}',
+      '.memp .audit-mode{margin-left:auto;display:flex;gap:6px;align-items:center;flex-wrap:wrap}',
+      '.memp .audit-banner{border:1px solid color-mix(in srgb,#D9A441 42%,var(--dsw-alias-border-l1));background:color-mix(in srgb,#D9A441 9%,transparent);border-radius:9px;padding:7px 10px;font-size:11.5px;line-height:1.55;color:var(--dsw-alias-label-secondary)}',
+      '.memp .audit-banner.bad{border-color:color-mix(in srgb,var(--dsw-alias-label-danger, #e05555) 45%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-label-danger, #e05555) 8%,transparent)}',
+      '.memp .audit-stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}',
+      '.memp .audit-stat{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);padding:7px 10px;min-width:0}',
+      '.memp .audit-stat b{display:block;font-size:17px;line-height:1.3;font-weight:650;font-variant-numeric:tabular-nums}',
+      '.memp .audit-stat span{display:block;font-size:10.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      '.memp .audit-toolbar{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:8px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}',
+      '.memp .audit-toolbar input[type=text]{min-width:150px;max-width:230px;padding:4px 8px}',
+      '.memp .audit-toolbar .dropbtn{padding:4px 9px}',
+      '.memp .audit-toolbar label{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--dsw-alias-label-secondary);white-space:nowrap}',
+      '.memp .audit-toolbar input[type=checkbox]{accent-color:var(--dsw-alias-brand-primary)}',
+      '.memp .audit-split{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;min-height:0}',
+      '.memp .audit-split.has-detail{grid-template-columns:minmax(0,1fr) minmax(300px,360px)}',
+      '.memp .audit-list{display:flex;flex-direction:column;gap:5px;min-width:0}',
+      '.memp .audit-row{display:grid;grid-template-columns:64px 116px minmax(90px,1fr) 92px 104px 84px 74px;gap:8px;align-items:center;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-alias-bg-layer-1);padding:6px 9px;font-size:11.5px;cursor:pointer;text-align:left;color:inherit;width:100%}',
+      '.memp .audit-row:hover{border-color:var(--dsw-alias-brand-primary)}',
+      '.memp .audit-row.on{border-color:var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 6%,var(--dsw-alias-bg-layer-1))}',
+      '.memp .audit-row .m{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.memp .audit-row .t{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10.5px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .audit-row .ch{font-weight:600}',
+      '.memp .audit-row .trig{color:var(--dsw-alias-label-secondary);font-size:10.5px}',
+      '.memp .audit-row .nums{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary)}',
+      '.memp .audit-row .del{font-size:10.5px}',
+      '.memp .audit-pill{display:inline-flex;align-items:center;gap:4px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);padding:0 6px;line-height:1.65;font-size:10px;white-space:nowrap;max-width:100%}',
+      '.memp .audit-pill.ok{color:color-mix(in srgb,#2E9B68 78%,var(--dsw-alias-label-primary));border-color:color-mix(in srgb,#2E9B68 38%,var(--dsw-alias-border-l1))}',
+      '.memp .audit-pill.warn{color:color-mix(in srgb,#D9A441 82%,var(--dsw-alias-label-primary));border-color:color-mix(in srgb,#D9A441 42%,var(--dsw-alias-border-l1))}',
+      '.memp .audit-pill.bad{color:var(--dsw-alias-label-danger, #e05555);border-color:color-mix(in srgb,var(--dsw-alias-label-danger, #e05555) 42%,var(--dsw-alias-border-l1))}',
+      '.memp .audit-pill.mute{color:var(--dsw-alias-label-secondary)}',
+      '.memp .audit-empty{border:1px dashed var(--dsw-alias-border-l1);border-radius:10px;padding:26px 16px;text-align:center;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.65}',
+      '.memp .audit-detail{border:1px solid var(--dsw-alias-border-l1);border-radius:11px;background:var(--dsw-alias-bg-layer-1);padding:10px 11px;display:flex;flex-direction:column;gap:9px;max-height:min(560px,68vh);overflow:auto;scrollbar-width:thin}',
+      '.memp .audit-detail-head{display:flex;gap:7px;align-items:center}',
+      '.memp .audit-detail-head b{font-size:12.5px}',
+      '.memp .audit-detail-head .spacer{flex:1}',
+      '.memp .audit-close{background:none;border:0;padding:0 4px;font-size:15px;line-height:1;color:var(--dsw-alias-label-secondary)}',
+      '.memp .audit-kv{display:grid;grid-template-columns:74px minmax(0,1fr);gap:4px 8px;font-size:11px;line-height:1.5}',
+      '.memp .audit-kv .k{color:var(--dsw-alias-label-secondary)}',
+      '.memp .audit-kv .v{min-width:0;overflow-wrap:anywhere}',
+      '.memp .audit-sec{border-top:1px solid var(--dsw-alias-border-l1);padding-top:8px;display:flex;flex-direction:column;gap:5px}',
+      '.memp .audit-sec-title{font-size:10.5px;letter-spacing:.04em;color:var(--dsw-alias-label-secondary)}',
+      '.memp .audit-budget{display:grid;grid-template-columns:64px minmax(0,1fr) 92px;gap:7px;align-items:center;font-size:10.5px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .audit-budget .bar{height:5px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);overflow:hidden}',
+      '.memp .audit-budget .bar i{display:block;height:100%;border-radius:999px;background:var(--dsw-alias-brand-primary)}',
+      '.memp .audit-budget .bar i.over{background:var(--dsw-alias-label-danger, #e05555)}',
+      '.memp .audit-budget .num{text-align:right;font-variant-numeric:tabular-nums}',
+      '.memp .audit-json{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px;line-height:1.45;white-space:pre-wrap;word-break:break-word;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:7px;max-height:220px;overflow:auto}',
+      '.memp .audit-pager{display:flex;gap:6px;align-items:center;justify-content:flex-end;font-size:11px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .audit-flat{display:flex;flex-wrap:wrap;gap:4px}',
+      '@media (max-width:900px){.memp .audit-split.has-detail{grid-template-columns:minmax(0,1fr)}.memp .audit-row{grid-template-columns:54px 100px minmax(80px,1fr) 70px 84px}}',
+      '@media (max-width:620px){.memp .audit-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.memp .audit-row{grid-template-columns:minmax(0,1fr) auto;gap:4px 8px}.memp .audit-row .sec{display:none}.memp .audit-toolbar input[type=text]{max-width:none;flex:1}}',
     ].join('')
 
     async function api(method, body) {
@@ -1947,6 +2002,427 @@ window.__ModuleLoader__.load({
       )
     }
 
+    // ===== 审计标签页 =====
+    const AUDIT_CHANNEL_META = {
+      digest: '摘要', recall: '召回', rules: '规则', rules_delta: '规则增量',
+      policy: '策略', nudge: '提醒', signal: '信号', lifecycle: '生命周期',
+    }
+    const AUDIT_OUTCOME_META = {
+      success: { label: '成功', tone: 'ok' },
+      failed: { label: '失败', tone: 'bad' },
+      skipped: { label: '跳过', tone: 'mute' },
+      partial: { label: '部分', tone: 'warn' },
+      unknown: { label: '未知', tone: 'mute' },
+    }
+    const AUDIT_DELIVERY_META = {
+      appended: { label: '已投递', tone: 'ok' },
+      suppressed: { label: '被抑制', tone: 'warn' },
+      rejected: { label: '被拒绝', tone: 'bad' },
+      not_attempted: { label: '未尝试', tone: 'mute' },
+      unknown: { label: '未确认', tone: 'mute' },
+    }
+
+    function readAuditSession() {
+      try { return window.localStorage.getItem('dsh-memory:audit-session') || '' } catch { return '' }
+    }
+    function writeAuditSession(value) {
+      try {
+        if (value) window.localStorage.setItem('dsh-memory:audit-session', value)
+        else window.localStorage.removeItem('dsh-memory:audit-session')
+      } catch { /* 隐私模式等 */ }
+    }
+    function auditChannelLabel(channel) {
+      return AUDIT_CHANNEL_META[channel] || String(channel || '未知')
+    }
+    function auditOutcomeMeta(outcome) {
+      return AUDIT_OUTCOME_META[outcome] || { label: String(outcome || '未知'), tone: 'mute' }
+    }
+    function auditDeliveryMeta(entry) {
+      const delivery = entry && entry.delivery
+      if (!delivery || !delivery.status) return { label: '未记录', tone: 'mute', detail: '' }
+      let meta = AUDIT_DELIVERY_META[delivery.status] || { label: String(delivery.status), tone: 'mute' }
+      if (delivery.status === 'unknown' && entry.reasonCode === 'prepared') {
+        meta = { label: '已准备（投递未确认）', tone: 'warn' }
+      }
+      const reason = delivery.suppressedBy ? `（${delivery.suppressedBy}）` : ''
+      return { ...meta, detail: reason }
+    }
+    function auditPill(text, tone, title) {
+      return h('span', { className: `audit-pill ${tone || 'mute'}`, ...(title ? { title } : {}) }, text)
+    }
+    function auditBudgetOf(entry) {
+      const budgets = entry && entry.budgets ? entry.budgets : null
+      if (!budgets) return null
+      const name = Object.keys(budgets)[0]
+      return name ? { name, ...budgets[name] } : null
+    }
+    function auditSummaryLine(entry) {
+      if (!entry) return ''
+      if (entry.kind === 'delivery') {
+        const meta = auditDeliveryMeta(entry)
+        return `${meta.label}${meta.detail}${entry.delivery && entry.delivery.textChars ? ` · ${entry.delivery.textChars} 字符` : ''}`
+      }
+      if (entry.kind === 'signal') {
+        const stage = entry.stage === 'signal_consumed' ? '信号已消费' : entry.stage === 'signal_dropped' ? '信号被丢弃' : '信号已排队'
+        return `${stage}${entry.signal && entry.signal.reason ? ` · ${entry.signal.reason}` : ''}`
+      }
+      if (entry.error) return `失败：${entry.error.code}（${entry.error.stage}）`
+      if (entry.reasonCode === 'no_candidates') return '没有候选'
+      if (entry.reasonCode === 'all_omitted') return '候选全部被省略'
+      if (entry.reasonCode === 'deduped') return '全部命中已注入去重'
+      if (entry.reasonCode === 'retrieval_failed') return '检索失败'
+      if (entry.selected && entry.selected.count > 0) return `选中 ${entry.selected.count} 条`
+      return entry.reasonCode || '—'
+    }
+    async function copyAuditText(text, setNotice) {
+      try {
+        if (navigator?.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text)
+          setNotice('已复制')
+          return
+        }
+      } catch { /* fallthrough */ }
+      setNotice('复制失败：浏览器不允许访问剪贴板')
+    }
+
+    /**
+     * 独立“审计”标签页：事件流 + 详情 + 健康状态。
+     *
+     * 数据全部来自 /memory/api/audit；没有数据就显示真实空状态，不补造。
+     * 展示口径：evaluation 的“选中”不等于投递；投递看 delivery 事件的 status。
+     */
+    function AuditTab({ scopes }) {
+      const [entries, setEntries] = React.useState([])
+      const [stats, setStats] = React.useState(null)
+      const [total, setTotal] = React.useState(0)
+      const [nextCursor, setNextCursor] = React.useState(null)
+      const [cursorStack, setCursorStack] = React.useState([])
+      const [cursor, setCursor] = React.useState('')
+      const [loading, setLoading] = React.useState(true)
+      const [error, setError] = React.useState('')
+      const [notice, setNotice] = React.useState('')
+      const [session, setSession] = React.useState(readAuditSession())
+      const [channel, setChannel] = React.useState('')
+      const [outcome, setOutcome] = React.useState('')
+      const [trigger, setTrigger] = React.useState('')
+      const [search, setSearch] = React.useState('')
+      const [problem, setProblem] = React.useState(false)
+      const [since, setSince] = React.useState('')
+      const [until, setUntil] = React.useState('')
+      const [selectedId, setSelectedId] = React.useState(null)
+      const [reloadTick, setReloadTick] = React.useState(0)
+
+      function queryParams(cursorValue) {
+        const params = new URLSearchParams()
+        if (session) params.set('session', session)
+        if (channel) params.set('channel', channel)
+        if (outcome) params.set('outcome', outcome)
+        if (trigger.trim()) params.set('trigger', trigger.trim())
+        const needle = search.trim()
+        if (needle) {
+          if (needle.startsWith('trace:')) params.set('trace', needle.slice(6).trim())
+          else if (needle.startsWith('op:')) params.set('operation', needle.slice(3).trim())
+          else params.set('memory', needle)
+        }
+        if (problem) params.set('problem', '1')
+        if (since) params.set('since', String(new Date(`${since}T00:00:00`).getTime()))
+        if (until) params.set('until', String(new Date(`${until}T23:59:59.999`).getTime()))
+        if (cursorValue) params.set('cursor', cursorValue)
+        params.set('limit', '50')
+        return params
+      }
+
+      async function load(cursorValue, stack) {
+        setLoading(true); setError(''); setNotice('')
+        try {
+          const value = await api(`audit?${queryParams(cursorValue)}`)
+          const list = Array.isArray(value.entries) ? value.entries : []
+          setEntries(list)
+          setStats(value.stats || null)
+          setTotal(typeof value.total === 'number' ? value.total : list.length)
+          setNextCursor(typeof value.nextCursor === 'string' ? value.nextCursor : null)
+          setCursor(cursorValue || '')
+          if (stack !== undefined) setCursorStack(stack)
+          if (selectedId !== null && !list.some((entry) => entry.id === selectedId)) setSelectedId(null)
+        } catch (e) {
+          setError(String(e.message || e))
+          setEntries([])
+        }
+        setLoading(false)
+      }
+
+      React.useEffect(() => { load('', []) }, [reloadTick])
+
+      const resetAndReload = () => { setCursor(''); setCursorStack([]); setReloadTick((n) => n + 1) }
+      const selected = selectedId === null ? null : entries.find((entry) => entry.id === selectedId) || null
+      const prepared = entries.filter((entry) => entry.delivery && entry.delivery.status === 'unknown' && entry.reasonCode === 'prepared').length
+      const suppressed = entries.filter((entry) => entry.delivery && (entry.delivery.status === 'suppressed' || entry.delivery.status === 'not_attempted')).length
+      const failed = entries.filter((entry) => entry.outcome === 'failed').length
+      const persistence = stats && stats.persistence ? stats.persistence : 'memory'
+      const capacity = stats && typeof stats.capacity === 'number' ? stats.capacity : null
+      const dropped = stats && typeof stats.dropped === 'number' ? stats.dropped : 0
+      const writeErrors = stats && typeof stats.writeErrors === 'number' ? stats.writeErrors : 0
+      const sessionOptions = [{ value: '', label: '全部会话（显式）' }]
+        .concat((scopes || []).filter((scope) => scope.scope?.startsWith('session:')).map((scope) => ({
+          value: scope.scope.slice(8),
+          label: scope.label || `会话 ${scope.scope.slice(8, 16)}`,
+        })))
+      const channelOptions = [{ value: '', label: '全部通道' }].concat(Object.keys(AUDIT_CHANNEL_META).map((key) => ({ value: key, label: AUDIT_CHANNEL_META[key] })))
+      const outcomeOptions = [{ value: '', label: '全部结果' }].concat(Object.keys(AUDIT_OUTCOME_META).map((key) => ({ value: key, label: AUDIT_OUTCOME_META[key].label })))
+
+      const exportAudit = async (format) => {
+        setNotice('')
+        try {
+          const res = await fetch(`${API}/audit/export?${queryParams('')}&format=${format}`)
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const blob = await res.blob()
+          const url = URL.createObjectURL(blob)
+          const link = document.createElement('a')
+          link.href = url
+          link.download = `dsh-memory-audit.${format}`
+          link.click()
+          setTimeout(() => URL.revokeObjectURL(url), 1000)
+          setNotice(`已导出当前筛选（${format.toUpperCase()}）。`)
+        } catch (e) {
+          setNotice(`导出失败：${String(e.message || e)}`)
+        }
+      }
+
+      const banner = []
+      if (persistence === 'memory') {
+        banner.push(h('div', { className: 'audit-banner', key: 'mem' },
+          `内存模式：重启后记录不会保留${capacity === null ? '' : `；当前容量 ${capacity} 条`}${dropped > 0 ? `，已有 ${dropped} 条被容量策略丢弃` : ''}。`))
+      } else if (persistence === 'degraded') {
+        banner.push(h('div', { className: 'audit-banner bad', key: 'deg' }, '审计存储处于降级状态：部分记录可能缺失。'))
+      }
+      if (writeErrors > 0) {
+        banner.push(h('div', { className: 'audit-banner bad', key: 'err' }, `审计写入失败 ${writeErrors} 次；面板数据可能不完整。`))
+      }
+
+      const toolbar = h('div', { className: 'audit-toolbar' },
+        h(Dropdown, {
+          items: sessionOptions, value: session, disabled: loading,
+          onChange: (next) => { setSession(next); writeAuditSession(next); resetAndReload() },
+        }),
+        h(Dropdown, {
+          items: channelOptions, value: channel, disabled: loading,
+          onChange: (next) => { setChannel(next); resetAndReload() },
+        }),
+        h(Dropdown, {
+          items: outcomeOptions, value: outcome, disabled: loading,
+          onChange: (next) => { setOutcome(next); resetAndReload() },
+        }),
+        h('input', {
+          type: 'text', placeholder: '触发源 / memory ID / trace:', value: trigger,
+          onChange: (e) => setTrigger(e.target.value),
+          onKeyDown: (e) => { if (e.key === 'Enter') resetAndReload() },
+        }),
+        h('input', {
+          type: 'text', placeholder: '搜索 memory / trace: / op:', value: search,
+          onChange: (e) => setSearch(e.target.value),
+          onKeyDown: (e) => { if (e.key === 'Enter') resetAndReload() },
+        }),
+        h('label', null,
+          h('input', { type: 'checkbox', checked: problem, onChange: (e) => { setProblem(e.target.checked); resetAndReload() } }),
+          '仅看问题',
+        ),
+        h('input', { type: 'date', value: since, title: '起始日期', onChange: (e) => { setSince(e.target.value); resetAndReload() } }),
+        h('input', { type: 'date', value: until, title: '结束日期', onChange: (e) => { setUntil(e.target.value); resetAndReload() } }),
+        h('button', { disabled: loading, onClick: () => setReloadTick((n) => n + 1) }, loading ? '刷新中…' : '刷新'),
+        h('button', { disabled: loading, onClick: () => exportAudit('jsonl') }, '导出 JSONL'),
+        (session || channel || outcome || trigger || search || problem || since || until)
+          ? h('button', { className: 'linkbtn', onClick: () => {
+              setSession(''); writeAuditSession(''); setChannel(''); setOutcome(''); setTrigger(''); setSearch(''); setProblem(false); setSince(''); setUntil(''); resetAndReload()
+            } }, '清空筛选')
+          : null,
+      )
+
+      const row = (entry) => {
+        const delivery = auditDeliveryMeta(entry)
+        const outcomeMeta = auditOutcomeMeta(entry.outcome)
+        const budget = auditBudgetOf(entry)
+        const picked = entry.selected ? entry.selected.count : 0
+        const omitted = Array.isArray(entry.omitted) ? entry.omitted.length : 0
+        const candidates = typeof entry.candidates === 'number' ? entry.candidates : '—'
+        return h('button', {
+          key: entry.id,
+          className: 'audit-row' + (entry.id === selectedId ? ' on' : ''),
+          onClick: () => setSelectedId(entry.id),
+        },
+          h('span', { className: 'm t', title: fmtTime(entry.at) }, shortTime(entry.at)),
+          h('span', { className: 'm' },
+            h('b', { className: 'ch' }, auditChannelLabel(entry.channel)),
+            h('span', { className: 'trig' }, ` · ${entry.kind || 'event'}`),
+          ),
+          h('span', { className: 'm trig', title: `${entry.trigger || ''} ${entry.phase || ''}` },
+            `${entry.trigger || '—'}${entry.phase ? ` / ${entry.phase}` : ''}`),
+          h('span', { className: 'm nums' }, `${candidates} / ${picked} / ${omitted}`),
+          h('span', { className: 'm' }, budget
+            ? h('span', { className: 'audit-budget' },
+                h('span', { className: 'bar' }, h('i', { className: budget.over ? 'over' : '', style: { width: `${budget.budget > 0 ? Math.min(100, Math.round((budget.used / budget.budget) * 100)) : 100}%` } })),
+                h('span', { className: 'num' }, `${budget.used}/${budget.budget}`),
+              )
+            : h('span', { className: 'muted' }, '—')),
+          h('span', { className: 'm del' }, auditPill(delivery.label + delivery.detail, delivery.tone, delivery.detail || undefined)),
+          h('span', { className: 'm' }, auditPill(outcomeMeta.label, outcomeMeta.tone)),
+        )
+      }
+
+      const detail = selected ? (() => {
+        const delivery = auditDeliveryMeta(selected)
+        const budgetRows = Object.entries(selected.budgets || {}).map(([name, budget]) => {
+          const pct = budget.budget > 0 ? Math.min(100, Math.round((budget.used / budget.budget) * 100)) : 100
+          return h('div', { className: 'audit-budget', key: name },
+            h('span', null, name),
+            h('span', { className: 'bar' }, h('i', { className: budget.over ? 'over' : '', style: { width: `${pct}%` } })),
+            h('span', { className: 'num' }, `${budget.used}/${budget.budget}${budget.over ? ' 超' : ''}`),
+          )
+        })
+        const selectedIds = selected.selected ? selected.selected.contentIds : (selected.contentIds || [])
+        const hintIds = selected.selected ? selected.selected.hintIds : (selected.hintIds || [])
+        const omitted = Array.isArray(selected.omitted) ? selected.omitted : []
+        const kv = (label, value) => (value === undefined || value === null || value === '')
+          ? null
+          : [h('span', { className: 'k', key: 'k' }, label), h('span', { className: 'v', key: 'v' }, String(value))]
+        const json = JSON.stringify(selected, null, 2)
+        return h('div', { className: 'audit-detail' },
+          h('div', { className: 'audit-detail-head' },
+            h('b', null, auditSummaryLine(selected)),
+            h('span', { className: 'spacer' }),
+            h('button', { className: 'linkbtn', onClick: () => copyAuditText(selected.id, setNotice) }, '复制 ID'),
+            h('button', { className: 'audit-close', title: '关闭', onClick: () => setSelectedId(null) }, '×'),
+          ),
+          h('div', { className: 'audit-kv' },
+            kv('事件', selected.id),
+            kv('序号', selected.seq),
+            kv('时间', fmtTime(selected.at)),
+            kv('schema', selected.schemaVersion || '旧版'),
+            kv('会话', selected.sessionId),
+            kv('step', selected.step),
+            kv('通道', `${auditChannelLabel(selected.channel)} / ${selected.kind}`),
+            kv('阶段', selected.stage),
+            kv('触发', selected.trigger),
+            kv('phase', selected.phase),
+            kv('原因', selected.reasonCode),
+            kv('作用域', (selected.scopes || []).join(' → ')),
+          ),
+          selected.query ? h('div', { className: 'audit-sec' },
+            h('div', { className: 'audit-sec-title' }, '查询（已脱敏）'),
+            h('div', null, selected.query.text || '（文本已脱敏/为空）'),
+            h('div', { className: 'muted' }, `${selected.query.chars} 字符${selected.query.redacted ? ' · 命中凭据脱敏' : ''}${selected.query.hash ? ` · ${selected.query.hash}` : ''}`),
+          ) : null,
+          selected.filter ? h('div', { className: 'audit-sec' },
+            h('div', { className: 'audit-sec-title' }, '检索与过滤'),
+            h('div', { className: 'audit-kv' },
+              kv('原始命中', selected.filter.rawHits),
+              kv('标签过滤', selected.filter.tagFiltered),
+              kv('退役排除', selected.filter.supersededExcluded),
+              kv('最终候选', selected.filter.candidates),
+            ),
+          ) : null,
+          h('div', { className: 'audit-sec' },
+            h('div', { className: 'audit-sec-title' }, '选择与省略'),
+            h('div', { className: 'audit-kv' },
+              kv('候选', selected.candidates),
+              kv('选中', selectedIds.length),
+              kv('新增', selected.selected && selected.selected.newlyAddedIds ? selected.selected.newlyAddedIds.length : '—'),
+              kv('hint', hintIds.length),
+              kv('去重跳过', selected.dedup ? selected.dedup.skipped : '—'),
+            ),
+            selectedIds.length > 0 ? h('div', { className: 'audit-flat' }, selectedIds.map((id) => h('span', { className: 'tag', key: id }, id))) : null,
+            omitted.length > 0 ? h('div', { className: 'audit-flat' }, omitted.map((item, i) => h('span', { className: 'tag', key: `${item.id}-${i}`, title: item.tags ? item.tags.join(', ') : '' }, `${item.id.slice(0, 8)} · ${item.reason}`))) : null,
+          ),
+          budgetRows.length > 0 ? h('div', { className: 'audit-sec' },
+            h('div', { className: 'audit-sec-title' }, '预算'),
+            ...budgetRows,
+          ) : null,
+          selected.delivery ? h('div', { className: 'audit-sec' },
+            h('div', { className: 'audit-sec-title' }, '投递'),
+            h('div', { className: 'audit-kv' },
+              kv('状态', delivery.label + delivery.detail),
+              kv('appended', selected.delivery.appended === null ? '未知' : String(selected.delivery.appended)),
+              kv('抑制原因', selected.delivery.suppressedBy),
+              kv('字符数', selected.delivery.textChars),
+              kv('内容 hash', selected.delivery.textHash),
+            ),
+          ) : null,
+          selected.error ? h('div', { className: 'audit-sec' },
+            h('div', { className: 'audit-sec-title' }, '失败'),
+            h('div', null, `${selected.error.stage} / ${selected.error.code}`),
+            h('div', { className: 'muted' }, '审计只保留稳定错误码，不包含堆栈或异常原文。'),
+          ) : null,
+          selected.signal ? h('div', { className: 'audit-sec' },
+            h('div', { className: 'audit-sec-title' }, '信号'),
+            h('div', { className: 'audit-kv' },
+              kv('key', selected.signal.key),
+              kv('reason', selected.signal.reason),
+              kv('tool', selected.signal.tool),
+              kv('tag', selected.signal.tag),
+              kv('errorClass', selected.signal.errorClass),
+              kv('source', selected.signal.source),
+            ),
+          ) : null,
+          h('details', { className: 'audit-sec' },
+            h('summary', { className: 'audit-sec-title' }, '原始结构化事件'),
+            h('pre', { className: 'audit-json' }, json),
+            h('div', { className: 'row' }, h('button', { className: 'linkbtn', onClick: () => copyAuditText(json, setNotice) }, '复制 JSON')),
+          ),
+        )
+      })() : null
+
+      const listBody = loading
+        ? h('div', { className: 'audit-empty' }, '加载审计事件…')
+        : entries.length === 0
+          ? h('div', { className: 'audit-empty' },
+              error ? '加载失败。' : '当前筛选没有审计事件。',
+              error ? null : h('div', { className: 'muted' }, '开始一轮任务后，这里会出现注入评估与投递记录。'),
+              error ? h('div', { className: 'err' }, error) : null,
+              error ? h('div', null, h('button', { onClick: () => setReloadTick((n) => n + 1) }, '重试')) : null,
+            )
+          : h('div', { className: 'audit-list' }, entries.map(row))
+
+      return h('div', { className: 'audit' },
+        h('div', { className: 'audit-head' },
+          h('div', null,
+            h('div', { className: 'audit-title' }, '记忆审计'),
+            h('div', { className: 'audit-sub' }, '追踪记忆注入的触发、筛选、预算、投递与失败原因；评估选中 ≠ 已投递。'),
+          ),
+          h('div', { className: 'audit-mode' },
+            auditPill(persistence === 'memory' ? '内存模式 · 重启后不保留' : persistence === 'jsonl' ? '持久化正常' : '记录不完整', persistence === 'degraded' ? 'bad' : persistence === 'memory' ? 'warn' : 'ok'),
+            notice ? h('span', { className: 'muted' }, notice) : null,
+          ),
+        ),
+        ...banner,
+        h('div', { className: 'audit-stats' },
+          h('div', { className: 'audit-stat' }, h('b', null, String(total)), h('span', null, '筛选内事件')),
+          h('div', { className: 'audit-stat' }, h('b', null, String(prepared)), h('span', null, '本页已准备（投递未确认）')),
+          h('div', { className: 'audit-stat' }, h('b', null, String(suppressed)), h('span', null, '本页被抑制/未尝试')),
+          h('div', { className: 'audit-stat' }, h('b', null, String(failed)), h('span', null, '本页失败')),
+          h('div', { className: 'audit-stat' }, h('b', null, dropped > 0 ? String(dropped) : '0'), h('span', null, capacity === null ? '已丢弃' : `已丢弃 / 容量 ${capacity}`)),
+        ),
+        toolbar,
+        error && entries.length > 0 ? h('div', { className: 'err' }, error) : null,
+        h('div', { className: 'audit-split' + (selected ? ' has-detail' : '') },
+          h('div', null, listBody),
+          detail,
+        ),
+        h('div', { className: 'audit-pager' },
+          h('button', { disabled: loading || cursorStack.length === 0, onClick: () => {
+            const stack = cursorStack.slice()
+            const prev = stack.pop() || ''
+            setCursorStack(stack)
+            load(prev, stack)
+          } }, '上一页'),
+          h('span', null, `${total} 条${nextCursor ? '' : ' · 已到末页'}`),
+          h('button', { disabled: loading || !nextCursor, onClick: () => {
+            const stack = cursorStack.concat(cursor || '')
+            setCursorStack(stack)
+            load(nextCursor, stack)
+          } }, '下一页'),
+        ),
+      )
+    }
+
     /** 待嵌入自动刷新:最多 300 次 × 1.5s(后端挂着时不无限轮询)。 */
     const PENDING_POLL_LIMIT = 300
 
@@ -2315,6 +2791,7 @@ window.__ModuleLoader__.load({
             onClick: () => { if (tab !== 'tree') load('', ''); setTab('tree') },
           }, '记忆树'),
           h('button', { className: 'tab' + (tab === 'settings' ? ' on' : ''), onClick: () => setTab('settings') }, '设置'),
+          h('button', { className: 'tab' + (tab === 'audit' ? ' on' : ''), onClick: () => setTab('audit') }, '审计'),
         ),
         tab === 'settings'
           ? h(SettingsTab, {})
@@ -2322,7 +2799,9 @@ window.__ModuleLoader__.load({
             ? dataBody
             : tab === 'tree'
               ? treeBody
-              : overviewBody,
+              : tab === 'audit'
+                ? h(AuditTab, { scopes })
+                : overviewBody,
       )
     }
 
@@ -2529,6 +3008,7 @@ window.__ModuleLoader__.load({
       MemoryPanel: MemoryPanel,
       MemoryTreeTab: MemoryTreeTab,
       SettingsTab: SettingsTab,
+      AuditTab: AuditTab,
       buildMemoryTree: buildMemoryTree,
       KIND_META: KIND_META,
       CSS: CSS,

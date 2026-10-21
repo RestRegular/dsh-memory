@@ -2,6 +2,30 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.12.0 — 注入审计 v2
+
+- **审计 schema v2**：事件统一带 `schemaVersion / id / seq / at / kind / channel / stage / outcome / reasonCode`，
+  区分 `evaluation / delivery / signal / lifecycle / error`；新增 `filter`、`sourceLoad`、`limits`、`scopes`、
+  `delivery`、`rules.injectedIds/omittedIds` 等可核对字段。旧字段仍保留兼容。
+- **评估与投递分离**：评估先收集，最终消息通过保护检查后再写 `delivery`。宿主没有回执时记
+  `delivery.status="unknown"`（面板显示“已准备（投递未确认）”），不把评估中的“选中”说成“已投递”；
+  被重复保护/格式保护拦下时记 `suppressed` / `rejected` 与原因。
+- **失败与跳过可见**：摘要加载失败、规则加载失败、无候选、全部超预算、标签过滤、退役排除、同一 query 跳过、
+  关闭开关、空 query、compaction 都留下事件或明确计数，不再静默消失。
+- **安全边界统一**：信号观察也走 `sanitizeAuditText`；先限制扫描长度再脱敏，最后截 200 字。审计不再保存原始
+  `signal.query`。面板仍只暴露脱敏后的文本/哈希/字符数。
+- **有界存储**：全局容量 2000、每会话 200，优先保留 digest / rules / delivery / error；暴露
+  `capacity / dropped / writeErrors / persistence`，容量淘汰可解释。仍为内存模式，重启后丢失，文档与 UI 均明确提示。
+- **类型化 sink / 生命周期**：provider 支持 `injectAuditPage / injectAuditStats / detachInjectAudit`；
+  注入半边 dispose 时按 sink 身份解绑，provider 退出时释放，避免面板读到已停止更新的旧 store。
+- **面板 API**：`GET /audit` 支持 `session / trace / operation / memory / channel / trigger / outcome / problem /
+  since / until / limit / cursor`，稳定 `seq` 游标分页；新增 `/audit/stats` 与 `/audit/export`（JSON/JSONL，
+  导出当前筛选）。旧的 `?session=` 调用保持兼容。
+- **独立「审计」标签页**：事件流、概览统计、筛选工具栏、分页、详情抽屉（作用域/限制/过滤/省略/预算/投递/错误/
+  原始 JSON）、复制 ID/JSON、导出、真实空状态与内存模式/丢弃/写入失败提示。
+- **测试**：新增 apply 审计链路测试（stub 宿主 `createUserMessage`）、store v2 / 分页 / 副本 / 脱敏测试、
+  API v2 / 导出 / store 解耦测试、provider 解绑与透传测试、审计标签页渲染测试。全量 322 项中 321 通过（1 跳过）。
+
 ## 0.11.1 — 项目作用域路径写法统一
 
 - **事故**：0.7.0 引入 `memory_save({ path })` 时只削掉末尾分隔符，于是 Windows 上 `D:/repo` 与

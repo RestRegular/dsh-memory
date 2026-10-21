@@ -317,6 +317,37 @@ scope 键有三种形态：`global`、`project:<cwd>`、`session:<会话 id>`，
 - 清空记忆是两步确认 + 接口要求显式 `confirm: "delete"`。
 - 数据默认只在本机：JSONL 不加密，向量端点默认 loopback；请自行保护 store 目录，导出文件也是明文。
 
+## 诊断与审计
+
+面板顶部有独立的「审计」标签页，不需要手工请求 HTTP。它按事件流展示每次注入的评估、过滤、预算、投递与失败原因，并支持按会话 / 通道 / 结果 / 时间筛选、分页、详情抽屉和导出当前筛选。
+
+审计严格区分三件事：
+
+- **评估（evaluation）**：候选、选中、省略、预算、检索/加载结果；
+- **投递（delivery）**：最终消息是否通过本地保护并被放进上下文；
+- **使用/遵守**：Agent 后续是否引用或执行了记忆。当前系统无法可靠证明，面板不会声称已验证。
+
+因此 `selected.contentIds` 只表示“评估选中”，不等于“已投递”。宿主没有向 middleware 回执最终采纳结果时，`delivery.status` 记为 `unknown`（面板显示“已准备（投递未确认）”），不会乐观写成 `appended`。
+
+### API
+
+```text
+GET /memory/api/audit
+  ?session=<id>&trace=<id>&operation=<id>&memory=<id>
+  &channel=digest|recall|rules|rules_delta|policy|nudge|signal|lifecycle
+  &trigger=<trigger>&outcome=success|failed|skipped|partial|unknown
+  &problem=1&since=<ms|ISO>&until=<ms|ISO>&limit=1..200&cursor=<seq>
+
+GET /memory/api/audit/stats
+GET /memory/api/audit/export?format=json|jsonl&<same filters>
+```
+
+响应为 `{ ok: true, value: { entries, total, nextCursor?, stats, query } }`。旧调用 `GET /audit?session=<id>` 仍兼容；不带 `session` 时查询全部会话，`query.scope` 会标记为 `all`。
+
+审计数据默认**只在内存**：容量 2000 条、每会话 200 条，超出时优先保留 digest / rules / delivery / error 等关键通道；`stats` 暴露 `entries / capacity / dropped / writeErrors / persistence`。重启后记录丢失，面板会明确提示。
+
+写入前所有自由文本都经过统一 sanitizer：先限制扫描长度（4000 字符），再做凭据模式脱敏，最后截到 200 字；只保存 ID、计数、枚举原因、字符数和短 hash，不保存记忆正文、原始工具参数、异常堆栈。模式脱敏是保守匹配，不承诺覆盖所有秘密形状。
+
 ## 卸载 / 迁移
 
 ```bash
@@ -371,8 +402,9 @@ npm run verify  # 构建到 .verify/，不落 packages/
 
 **记忆没有自动召回**
 确认 `inject.recall` / `autoRecall` 已开、当前作用域在召回范围内（标签触发的自动召回只含 global + 当前会话 +
-当前工作区，普通每轮召回按 `inject.extraScopes` 配置），并检查标签是否真的命中。用 `GET /memory/api/audit?session=<id>` 可以看到触发原因、
-候选、去重与各通道预算。
+当前工作区，普通每轮召回按 `inject.extraScopes` 配置），并检查标签是否真的命中。打开面板顶部的「审计」标签页，
+按会话/通道/问题筛选即可看到触发原因、候选、过滤、省略、预算和投递状态；也可以直接请求
+`GET /memory/api/audit?session=<id>`。
 
 **作用域列表里出现两个同名路径 / 用 `path` 存的记忆工作区里看不到**
 0.11.0 及以前，`D:/repo` 与 `D:\repo` 会被当成两个项目作用域（写的人用正斜杠、会话读的是宿主给的反斜杠）。
@@ -383,6 +415,7 @@ npm run verify  # 构建到 .verify/，不落 packages/
 
 ## 更新日志
 
+- **0.12.0** —— 注入审计 v2：评估/投递分离、失败与跳过可解释、统一脱敏、有界存储与容量统计、分页筛选 API、独立「审计」标签页与 JSON/JSONL 导出。
 - **0.11.1** —— 修复项目作用域因路径写法不同而分叉：`D:/repo` 与 `D:\repo` 统一成同一个键，历史分叉首次启动自动合并。
 - **0.11.0** —— 插件显示名改为「记忆系统」，重写 README 并更新截图；无 API / 配置 / 数据格式变更。
 - **0.10.1** —— 深色模式开关跟随宿主 token，修复白点融进白轨道。
