@@ -1,6 +1,6 @@
 # dsh-memory 审计 v2 实施报告
 
-> **版本**：`@restregular/dsh-memory` 0.12.5  
+> **版本**：`@restregular/dsh-memory` 0.12.6  
 > **基线**：`fa5e297`（0.11.1） + `docs/audit-implementation-review.md`  
 > **实施方案**：`dsh-memory-audit-v2-implementation-plan.md`  
 > **完成日期**：2026-10-22  
@@ -149,6 +149,8 @@ panel UI
 - 事件流表格：表头在滚动容器内 sticky，与行共享宽度并统一 border-box/padding，列起点严格对齐；列宽按通道/触发/候选/预算/投递/结果重新分配；
 - 审计页固定为视口高度，整页不滚动；详情抽屉独立滚动；行内预算使用紧凑进度条；
 - 详情抽屉：生命周期、查询（脱敏）、检索与过滤、选择与省略、预算条、投递、失败、信号、原始 JSON、复制 ID/JSON；
+- 选择与省略按组展示：选中正文 / 本次新增 / 标签索引 / 省略（按原因分组）/ 去重跳过，并说明候选与可枚举 ID 的关系；
+- 记忆 ID hover 浮窗显示类型/作用域/重要度/标签/原文摘要，点击切到「记录」页并展开；会话 ID hover 显示标题/cwd/更新时间，点击经宿主 `uiWorkspace.openSession` 打开；
 - 分页：上一页/下一页（cursor 栈）；
 - 导出当前筛选 JSONL/JSON；复制/导出反馈就地显示在按钮旁；
 - 加载、空状态、错误重试、内存模式/降级/写入失败提示；
@@ -181,7 +183,7 @@ panel UI
 
 ### 构建 / 文档
 
-- `package.json`（构建版本 0.12.4）
+- `package.json`（构建版本 0.12.6）
 - `packages/dsh-memory/**`（重新构建）
 - `README.md` / `CHANGELOG.md`
 - `docs/audit-implementation-review.md`（基线审查）
@@ -211,7 +213,7 @@ npm run build
 ### 5.2 结果
 
 - 全量：**323 项，322 通过，1 跳过，0 失败**（跳过项为既有环境相关用例）。
-- 构建：`@restregular/dsh-memory@0.12.5`，39 个产物文件，`BUILD OK`。
+- 构建：`@restregular/dsh-memory@0.12.6`，39 个产物文件，`BUILD OK`。
 - 新增测试覆盖：
   - pre-step 评估 + delivery（unknown / suppressed / not_attempted）；
   - digest source load / 渲染失败错误码；
@@ -236,8 +238,9 @@ npm run build
 | npm `0.12.3` | 已发布；两行筛选、自绘时间范围/开关、列表滚动 |
 | npm `0.12.4` | 已发布；自动刷新、视口内布局、表头 |
 | npm `0.12.5` | 已发布；表头与行严格对齐、列宽重分配、行内预算紧凑条 |
-| GitHub `main` | `d10c6cf`（0.12.5 对齐修复）；0.12.4 为 `cd65d93` |
-| Git tags | `v0.12.0`、`v0.12.1`、`v0.12.2`、`v0.12.3`、`v0.12.4`、`v0.12.5` |
+| npm `0.12.6` | 已发布，`npm view` 验证 `latest = 0.12.6`；详情分类/hover/跳转 |
+| GitHub `main` | `2d864f6`（0.12.6 详情与关联跳转）；0.12.5 为 `d10c6cf` |
+| Git tags | `v0.12.0`、`v0.12.1`、`v0.12.2`、`v0.12.3`、`v0.12.4`、`v0.12.5`、`v0.12.6` |
 | 本地 profile | 未升级（按项目约定，发布/推送后不自动改本地插件） |
 
 ---
