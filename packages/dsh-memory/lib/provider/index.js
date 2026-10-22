@@ -478,6 +478,23 @@ export function resolveConfig(config                    = {})                 {
   }
 }
 
+/** 面板语义检索的一次结果:排序规则与 memory_search 相同,但不写访问计数。 */
+                                 
+                      
+               
+ 
+
+                                    
+                        
+                                                            
+                            
+                                   
+                                                                           
+                                 
+                  
+               
+ 
+
 export class LocalMemoryService                             {
            cfg                
            store             
@@ -1455,6 +1472,11 @@ export class LocalMemoryService                             {
     const recallN = query.recallN ?? this.cfg.recallN
     const now = Date.now()
     const queryTokens = [...new Set(tokenize(query.text))]
+    // 面板的语义检索复用这条流水线,但它是"看一眼"的浏览:不写访问计数,也不在
+    // 没有任何向量时白跑一次嵌入请求。这两个开关只给面板的 searchForPanel 用,
+    // 工具 / 注入调用不会传。
+    const internal = query                                                       
+    const allowVector = internal.vector !== false && this.cfg.vector.enabled && this.cfg.vector.configured
 
     // 候选 scope:显式 pin(单值)优先;否则用调用方给的合并集合(query.scopes,
     // 工具 / 注入传"会话 + 项目 + global");两者都没有才退回旧的 project + global。
@@ -1504,7 +1526,7 @@ export class LocalMemoryService                             {
     // --- channel 2: vector recall over embedded records ---
     // Skipped entirely when no backend is configured (lexical recall above
     // already produced the candidates; a request here would just fail).
-    const qvec = this.cfg.vector.enabled && this.cfg.vector.configured
+    const qvec = allowVector
       ? await this.embed.embed([`${this.cfg.vector.queryPrefix ?? ''}${query.text}`], query.signal).catch(() => null)
       : null
     if (qvec?.[0]) {
@@ -1575,10 +1597,71 @@ export class LocalMemoryService                             {
       }
     }
 
-    const hits              = ranked.map((c) => ({ record: touch(c.record), score: round4(finalScores.get(c.id) ) }))
+    const hits              = ranked.map((c) => ({
+      record: internal.touch === false ? c.record : touch(c.record),
+      score: round4(finalScores.get(c.id) ),
+    }))
 
     this.store.scheduleFlush()
     return hits.slice(0, topK)
+  }
+
+  /**
+   * 面板「语义检索」:和 memory_search 走**同一套**双通道召回与打分(向量 + 词法 +
+   * 可选重排),区别只有两点:
+   *   1. 只读浏览器:不 `touch` 记录(访问计数/最近访问时间是检索排序的输入,
+   *      面板里浏览一次不该把排序带偏);
+   *   2. 报告这一次向量通道到底有没有参与 —— 面板得如实写「语义排序」还是
+   *      「向量没跑起来,按关键词排」,而不是把词法结果冒充语义结果。
+   *
+   * `scopes` 由面板显式给出(全部作用域或下拉选中的那个),不做"默认项目"回退。
+   */
+  async searchForPanel(input                                                        )                             {
+    const scopes                = []
+    const seen = new Set             ()
+    let total = 0
+    let embedded = 0
+    for (const raw of input.scopes) {
+      const scope = this.canonicalScope(raw)
+      if (seen.has(scope)) continue
+      seen.add(scope)
+      const store = this.store.peek(scope) // 只读:不创建 scope
+      if (!store) continue
+      scopes.push(scope)
+      total += store.records.size
+      embedded += store.vectors.size
+    }
+    const configured = this.cfg.vector.enabled && this.cfg.vector.configured
+    // 空集合不能交给 search():它在 scopes 为空时会退回"默认项目 + global",
+    // 那等于用户点了一个不存在的 scope 却搜出别的 scope 的记录。
+    if (scopes.length === 0) {
+      return {
+        hits: [],
+        mode: 'lexical',
+        reason: 'no-records',
+        embedded: 0,
+        total: 0,
+      }
+    }
+    // 没有向量 / 嵌入服务已被熔断时不要白打一次请求:直接走词法通道。
+    const vector = configured && embedded > 0 && this.embed.isHealthy
+    const hits = await this.search({
+      text: input.text,
+      scopes,
+      topK: input.topK ?? 20,
+      vector,
+      touch: false,
+    }                                                     )
+    // 嵌入请求失败会被 EmbedClient 熔断(markDown),所以"跑完还健康"就等于向量通道
+    // 真的产出了分数;否则这次只能算词法排序。
+    const vectorRan = vector && this.embed.isHealthy
+    return {
+      hits,
+      mode: vectorRan ? 'vector' : 'lexical',
+      ...(vectorRan ? {} : { reason: !configured ? 'vector-disabled'          : total === 0 ? 'no-records'          : embedded === 0 ? 'no-vectors'          : 'embed-failed'          }),
+      embedded,
+      total,
+    }
   }
 
           findById(id        )                           {

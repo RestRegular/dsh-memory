@@ -119,6 +119,11 @@ export class CordisMemoryService extends Service {
     return this.impl.search(query)
   }
 
+  /** 面板「语义检索」:同一套召回排序,只读且带向量通道状态。 */
+  searchForPanel(input                                                     )                                                   {
+    return this.impl.searchForPanel(input)
+  }
+
   forget(input                                                                              )                                              {
     return this.impl.forget(input)
   }

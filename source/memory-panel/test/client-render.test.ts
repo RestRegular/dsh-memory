@@ -89,6 +89,8 @@ function makeReact() {
       cursor = 0
       pending = null
     },
+    /** 新一轮渲染提交开始:上一轮没来得及跑的 effect 直接丢弃(见 render 的注释)。 */
+    beginPass: () => { effects.length = 0 },
     setRerender: (fn: () => void) => { pending = fn },
     /** Run the effects collected during the last render (mount semantics). */
     runEffects: () => {
@@ -103,7 +105,30 @@ function makeReact() {
 
 interface RenderNode { tag?: unknown; props?: Record<string, unknown>; text?: string; children?: RenderNode[] }
 
+/**
+ * 一次"渲染提交"只保留**这一轮**注册的 effect。
+ *
+ * 不这么做的话 `effects` 会跨多轮渲染累积:测试里每次 await 都会让 load() 的 setState
+ * 触发一轮同步重渲,每轮都重新注册"拉数据"与"自动刷新"effect;下一次 runEffects()
+ * 会把**所有历史轮次**的 effect 一起跑掉(每个 load 又触发新一轮渲染),效应量级按
+ * 轮数指数增长。0.12.7 之后审计页自动刷新把这条放大到 100MB/测试,整套用例在默认
+ * 2GB 堆上直接 OOM。React 里 effect 是按提交轮次执行的,这里只保留最新一轮更贴近
+ * 真实语义;跨组件累积则由 resetAll() 清空。
+ */
+let renderDepth = 0
+
 function render(node: unknown, hooks: ReturnType<typeof makeReact>, path = 'root'): RenderNode | null {
+  const outermost = renderDepth === 0
+  if (outermost) hooks.beginPass()
+  renderDepth += 1
+  try {
+    return renderNode(node, hooks, path)
+  } finally {
+    renderDepth -= 1
+  }
+}
+
+function renderNode(node: unknown, hooks: ReturnType<typeof makeReact>, path = 'root'): RenderNode | null {
   if (node === null || node === undefined || node === false || node === true) return null
   if (typeof node === 'string' || typeof node === 'number') return { text: String(node) }
   if (Array.isArray(node)) return { children: node.map((n, i) => render(n, hooks, `${path}[${i}]`)).filter(Boolean) as RenderNode[] }
@@ -1011,6 +1036,124 @@ test('记录页:点「新建」出现表单,可选 rule 类型;设置页有导�
   assert.ok(text.includes('导出全部'), '设置页有导出按钮')
   assert.ok(text.includes('导入文件'), '设置页有导入入口')
   assert.ok(text.includes('0 条规则'), '设置页显示规则条数')
+})
+
+test('记录页语义检索:开关、/search 请求、结果说明与相关度徽标', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const state = {
+    scopes: [{ scope: 'project:C:/demo', records: 2, pendingEmbeds: 0, label: 'C:/demo' }],
+    embedServer: {
+      enabled: true, configured: true, mode: 'managed', endpoint: 'http://127.0.0.1:8078/v1/embeddings', model: 'bge-m3',
+      modelLabel: 'BGE-M3 · Q4_K_M', presetId: 'bge-m3', variantId: 'q4_k_m', dims: 1024, pooling: 'cls', flavor: 'cpu',
+      spawnConfigured: true, owned: true, pid: 7, baseUrl: 'http://127.0.0.1:8078', reachable: true, pendingEmbeds: 0,
+      install: installIdle({ installed: true }),
+    },
+  }
+  const hits = [{ ...makeRecord({ id: 'mem-1', scope: 'project:C:/demo', content: '发布前检查 devcred 凭据' }), score: 0.8 }]
+  const calls: string[] = []
+  ;(globalThis as Record<string, unknown>).fetch = async (url: unknown) => {
+    const u = String(url)
+    calls.push(u)
+    if (u.includes('/search')) return { status: 200, json: async () => ({ ok: true, value: { hits, mode: 'vector', embedded: 2, total: 2 } }) }
+    if (u.includes('/status')) return { status: 200, json: async () => ({ ok: true, value: state }) }
+    return { status: 200, json: async () => ({ ok: true, value: { records: [] } }) }
+  }
+
+  const MemoryPanel = (exports.__test as { MemoryPanel: (p: Record<string, unknown>) => unknown }).MemoryPanel
+  const element = () => hooks.React.createElement(MemoryPanel, {})
+  let current: RenderNode | null = render(element(), hooks)
+  hooks.setRerender(() => { current = render(element(), hooks) })
+  const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
+  hooks.runEffects(); await flush(); hooks.runEffects(); await flush()
+
+  // 输入查询词(不回车),再打开语义检索 → 有查询词时应立即按新模式重跑
+  const input = collect(current).find((n) => n.tag === 'input')
+  assert.ok(input, '记录页有搜索框')
+  ;(input!.props!.onChange as (e: unknown) => void)({ target: { value: '发布凭据' } })
+  await flush()
+  calls.length = 0
+  const toggle = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '语义检索')
+  assert.ok(toggle, '搜索框旁有「语义检索」开关')
+  assert.equal(toggle!.props?.['aria-pressed'], false, '默认是关键词过滤')
+  ;(toggle!.props!.onClick as () => void)()
+  // 不跑 runEffects:测试脚手架的 mount effect 每次 runEffects 都会重放,
+  // 会把搜索词清空后的 /records 结果覆盖回来(真实 React 里 mount effect 只跑一次)。
+  await flush()
+
+  const searchCall = calls.find((u) => u.includes('/search?'))
+  assert.ok(searchCall, `开启后应请求 /search(实际:${JSON.stringify(calls)})`)
+  assert.ok(searchCall!.includes('q='), '查询词随请求发出')
+  assert.equal(calls.some((u) => u.includes('/records?') || u.endsWith('/records')), false, '语义模式不再走关键词过滤')
+
+  const text = textOf(current)
+  assert.ok(text.includes('语义排序'), `结果说明标出向量参与了排序(${text.slice(0, 200)})`)
+  assert.ok(text.includes('命中 1 条'), '结果条数')
+  assert.ok(text.includes('向量覆盖 2/2 条'), '向量覆盖率')
+  assert.ok(text.includes('相关度 0.80'), '结果卡显示检索得分')
+  assert.match(text, /发布前检查 devcred 凭据/, '命中内容来自 /search')
+  const pressed = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '语义检索')
+  assert.equal(pressed!.props?.['aria-pressed'], true, '开关状态跟随')
+  hooks.resetAll()
+})
+
+test('记录页语义检索:向量不可用时开关禁用;服务端回退时说明原因', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+
+  // 没有配置向量后端:开关可见但不可点(点了也只会给词法结果,容易误解)
+  const offState = {
+    scopes: [{ scope: 'global', records: 1, pendingEmbeds: 0 }],
+    embedServer: {
+      enabled: false, configured: false, mode: 'off', endpoint: '', model: 'bge-m3', spawnConfigured: false,
+      owned: false, pid: null, baseUrl: '', reachable: false, pendingEmbeds: 0, install: installIdle(),
+    },
+  }
+  let current = await mountPanel(hooks, offState)
+  const offToggle = collect(current()).find((n) => n.tag === 'button' && textOf(n).trim() === '语义检索')
+  assert.ok(offToggle, '未配置向量时开关仍然可见')
+  assert.equal(offToggle!.props?.disabled, true, '未配置向量时不可开启')
+  hooks.resetAll()
+
+  // 已配置但这次嵌入失败:服务端返回 lexical + embed-failed,面板要写明回退原因
+  const state = {
+    scopes: [{ scope: 'project:C:/demo', records: 2, pendingEmbeds: 0, label: 'C:/demo' }],
+    embedServer: {
+      enabled: true, configured: true, mode: 'managed', endpoint: 'http://127.0.0.1:8078/v1/embeddings', model: 'bge-m3',
+      spawnConfigured: true, owned: true, pid: 7, baseUrl: 'http://127.0.0.1:8078', reachable: false, pendingEmbeds: 0,
+      install: installIdle({ installed: true }),
+    },
+  }
+  ;(globalThis as Record<string, unknown>).fetch = async (url: unknown) => {
+    const u = String(url)
+    if (u.includes('/search')) {
+      return {
+        status: 200,
+        json: async () => ({ ok: true, value: { hits: [], mode: 'lexical', reason: 'embed-failed', embedded: 2, total: 2 } }),
+      }
+    }
+    if (u.includes('/status')) return { status: 200, json: async () => ({ ok: true, value: state }) }
+    return { status: 200, json: async () => ({ ok: true, value: { records: [] } }) }
+  }
+  const MemoryPanel = (exports.__test as { MemoryPanel: (p: Record<string, unknown>) => unknown }).MemoryPanel
+  const element = () => hooks.React.createElement(MemoryPanel, {})
+  current = render(element(), hooks)
+  hooks.setRerender(() => { current = render(element(), hooks) })
+  const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
+  hooks.runEffects(); await flush(); hooks.runEffects(); await flush()
+
+  const input = collect(current).find((n) => n.tag === 'input')!
+  ;(input.props!.onChange as (e: unknown) => void)({ target: { value: '任何查询' } })
+  await flush()
+  const toggle = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '语义检索')!
+  ;(toggle.props!.onClick as () => void)()
+  await flush()
+
+  const text = textOf(current)
+  assert.ok(text.includes('关键词回退'), `回退结果要有明确标注(${text.slice(0, 200)})`)
+  assert.ok(text.includes('向量服务没有响应'), '说明回退原因是向量服务不可用')
+  assert.ok(text.includes('没有语义相关的记忆'), '零命中时给出语义空状态')
+  hooks.resetAll()
 })
 
 test('记录卡:标签渲染成气泡,修正关系两个方向都有明确徽标', async () => {

@@ -34,3 +34,11 @@ test('CordisMemoryService 暴露面板所需的审计方法', () => {
     )
   }
 })
+
+test('CordisMemoryService 暴露面板语义检索入口', () => {
+  // 面板通过 ctx.get('memory') 拿到的是包装实例:漏转发 = 记录页的「语义检索」
+  // 悄悄退回 provider-lexical 关键词过滤。
+  const proto = CordisMemoryService.prototype as unknown as Record<string, unknown>
+  assert.equal(typeof proto.searchForPanel, 'function', 'ctx.get(\'memory\').searchForPanel 必须存在')
+  assert.equal(typeof proto.search, 'function', '通用检索入口仍然保留')
+})

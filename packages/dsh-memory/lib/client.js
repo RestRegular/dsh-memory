@@ -104,6 +104,13 @@ window.__ModuleLoader__.load({
       '.memp .editrow input[type=number]{width:64px;padding:4px 8px}',
       '.memp .err{color:var(--dsw-alias-label-danger, #e05555);font-size:12px}',
       '.memp .empty{color:var(--dsw-alias-label-secondary);font-size:12.5px;padding:16px 2px;text-align:center}',
+      // 语义检索:搜索框旁的开关 + 结果说明行 + 结果卡上的相关度
+      '.memp .toolbar .semantic{flex:none}',
+      '.memp .toolbar .semantic.on{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 10%,transparent)}',
+      '.memp .search-note{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;font-size:11.5px;line-height:1.55;color:var(--dsw-alias-label-secondary)}',
+      '.memp .search-note b{font-weight:600;color:var(--dsw-alias-label-primary)}',
+      '.memp .search-note .muted{font-size:11.5px}',
+      '.memp .badge.score{color:var(--dsw-alias-brand-primary);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,transparent)}',
       // 维护区（卸载向量服务 / 清空记忆数据）
       '.memp .maint{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}',
       '.memp .maint-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12.5px}',
@@ -725,7 +732,7 @@ window.__ModuleLoader__.load({
       })
     }
 
-    function RecordCard({ rec, vectorOn, labels, onSaved, onDeleted, focus = false }) {
+    function RecordCard({ rec, vectorOn, labels, onSaved, onDeleted, focus = false, score = null }) {
       // collapsed by default: the list stays scannable, full text on demand
       const [expanded, setExpanded] = React.useState(false)
       const [editing, setEditing] = React.useState(false)
@@ -794,6 +801,12 @@ window.__ModuleLoader__.load({
           h('span', { className: open ? 'chev open' : 'chev' }, '▶'),
           h('span', { className: 'badge scope', title: rec.scope }, scopeLabel(rec.scope, labels)),
           h('span', { className: 'badge' }, rec.kind),
+          score !== null && score !== undefined && Number.isFinite(Number(score))
+            ? h('span', {
+                className: 'badge score',
+                title: '检索得分：向量相似度 / 词法命中，再按时效与重要度加权后的排序分',
+              }, `相关度 ${Number(score).toFixed(2)}`)
+            : null,
           rec.supersedes
             ? h('span', {
                 className: 'badge corrected',
@@ -2736,6 +2749,10 @@ window.__ModuleLoader__.load({
       const [dangerAsk, setDangerAsk] = React.useState('')
       const [scopeFilter, setScopeFilter] = React.useState('')
       const [q, setQ] = React.useState('')
+      // 语义检索:默认关(记录页原本是"关键词过滤");开启后搜索走 /search,
+      // 由 provider 用向量 + 词法同一套排序,列表按相关度排。
+      const [semantic, setSemantic] = React.useState(false)
+      const [searchInfo, setSearchInfo] = React.useState(null)
       const [focusRecord, setFocusRecord] = React.useState(null)
       const [loading, setLoading] = React.useState(true)
       const [error, setError] = React.useState('')
@@ -2743,17 +2760,32 @@ window.__ModuleLoader__.load({
       const [pendingTick, setPendingTick] = React.useState(0)
       const [creating, setCreating] = React.useState(false)
 
-      const load = async (query, scopeF) => {
+      const load = async (query, scopeF, semanticF) => {
         setLoading(true); setError('')
         try {
           const params = new URLSearchParams()
           const qq = query !== undefined ? query : q
           const ss = scopeF !== undefined ? scopeF : scopeFilter
+          const sem = semanticF !== undefined ? semanticF : semantic
+          // 空查询在语义模式下没有意义(embedding 空串),直接列全部记录。
+          const semanticSearch = sem && qq.trim() !== ''
           if (ss) params.set('scope', ss)
           if (qq.trim()) params.set('q', qq.trim())
           const suffix = params.toString() ? `?${params}` : ''
-          const [recVal, status] = await Promise.all([api(`records${suffix}`), api('status')])
-          setRecords(recVal.records)
+          const [listVal, status] = await Promise.all([
+            api(`${semanticSearch ? 'search' : 'records'}${suffix}`),
+            api('status'),
+          ])
+          setRecords(semanticSearch ? listVal.hits : listVal.records)
+          setSearchInfo(semanticSearch
+            ? {
+                mode: listVal.mode === 'vector' ? 'vector' : 'lexical',
+                reason: listVal.reason,
+                embedded: Number(listVal.embedded) || 0,
+                total: Number(listVal.total) || 0,
+                query: qq.trim(),
+              }
+            : null)
           setScopes(status.scopes)
           setEmbedServer(status.embedServer ?? null)
         } catch (e) {
@@ -2768,9 +2800,12 @@ window.__ModuleLoader__.load({
         setFocusRecord(id)
         setTab('data')
         setQ('')
+        // 语义模式是按查询排名的:跳转要看到那条记录,必须回到普通列表。
+        setSemantic(false)
+        setSearchInfo(null)
         const nextScope = scope || ''
         setScopeFilter(nextScope)
-        load('', nextScope)
+        load('', nextScope, false)
       }
       // 导入完成后从设置页切换回记录页时,列表要能看到新数据(事件由设置页发出)。
       React.useEffect(() => {
@@ -3037,10 +3072,27 @@ window.__ModuleLoader__.load({
 
       const toolbar = h('div', { className: 'row toolbar' },
         h('input', {
-          type: 'text', placeholder: '搜索内容、类型或标签', value: q,
+          type: 'text',
+          placeholder: semantic ? '描述你要找的记忆，回车语义检索' : '搜索内容、类型或标签',
+          value: q,
           onChange: (e) => setQ(e.target.value),
           onKeyDown: (e) => { if (e.key === 'Enter') load(q, scopeFilter) },
         }),
+        // 语义检索开关:向量没启用时保持可读但不许点(点开只会给出词法结果,容易误解)。
+        h('button', {
+          className: 'semantic' + (semantic ? ' on' : ''),
+          'aria-pressed': semantic,
+          disabled: !(configured && vectorEnabled),
+          title: configured && vectorEnabled
+            ? (semantic ? '语义检索已开启：按语义相似度排序，点击切回关键词过滤' : '按语义相似度检索（向量 + 词法；未命中时结果会标注已回退）')
+            : '需要先在「服务」页配置并启用向量检索',
+          onClick: () => {
+            const next = !semantic
+            setSemantic(next)
+            // 已经有查询词时立刻按新模式重跑一次,不用再敲回车。
+            if (q.trim() !== '') load(q, scopeFilter, next)
+          },
+        }, '语义检索'),
         // 作用域也用同一个自绘下拉(与模型/运行时统一);标签优先用服务端给的 label
         h(Dropdown, {
           items: [
@@ -3053,19 +3105,51 @@ window.__ModuleLoader__.load({
         }),
         h('button', { onClick: () => setCreating((v) => !v), disabled: loading }, creating ? '收起' : '新建'),
         h('button', { onClick: () => load(q, scopeFilter), disabled: loading }, loading ? '刷新中…' : '刷新'),
-        filtering ? h('button', { className: 'linkbtn', onClick: () => { setQ(''); setScopeFilter(''); load('', '') } }, '清空筛选') : null,
+        filtering ? h('button', { className: 'linkbtn', onClick: () => { setQ(''); setScopeFilter(''); setSearchInfo(null); load('', '', semantic) } }, '清空筛选') : null,
       )
+      // 语义检索结果的出处:真跑了向量,还是因为服务/向量缺失退回了词法 —— 明说,
+      // 不把词法结果冒充成"语义找到的"。
+      const fallbackReason = {
+        'vector-disabled': '向量检索未启用',
+        'no-vectors': '记录尚未嵌入向量',
+        'no-records': '没有可检索的记录',
+        'embed-failed': '向量服务没有响应',
+        'provider-lexical': '当前 provider 不支持语义检索',
+      }
+      const searchNoteNode = searchInfo
+        ? h('div', { className: 'search-note' },
+            h('span', { className: 'pill' }, searchInfo.mode === 'vector' ? '语义排序' : '关键词回退'),
+            h('b', null, `「${excerpt(searchInfo.query, 28)}」`),
+            h('span', null, `命中 ${records.length} 条`),
+            searchInfo.mode === 'vector'
+              ? h('span', { className: 'muted' }, `向量覆盖 ${searchInfo.embedded}/${searchInfo.total} 条`)
+              : h('span', { className: 'muted' }, searchInfo.reason === 'no-records'
+                ? '该作用域没有记录'
+                : `${fallbackReason[searchInfo.reason] || '向量不可用'}，本次按关键词排序`),
+          )
+        : semantic
+          ? h('div', { className: 'search-note' },
+              h('span', { className: 'muted' }, '输入一句话描述你要找的记忆，按回车开始语义检索。'))
+          : null
       const createForm = creating
         ? h(CreateForm, {
             scopes,
             onCancel: () => setCreating(false),
-            onCreated: () => { setCreating(false); setPendingTick(0); load('', '') },
+            // 新建完成后回到普通列表:新记录不一定命中当前语义查询,留在搜索结果里会让人以为没保存。
+            onCreated: () => {
+              setCreating(false); setPendingTick(0)
+              setQ(''); setSemantic(false); setSearchInfo(null)
+              load('', '', false)
+            },
           })
         : null
+      const emptyText = searchInfo ? '没有语义相关的记忆' : filtering ? '没有匹配的记忆' : '还没有记忆'
       const listBody = !loading && !error && records.length === 0
-        ? h('div', { className: 'empty' }, filtering ? '没有匹配的记忆' : '还没有记忆')
+        ? h('div', { className: 'empty' },
+            emptyText,
+            searchInfo ? h('div', { className: 'muted' }, '换个说法试试；刚写入的记录可能还没嵌入向量。') : null)
         : h('div', { className: 'list' },
-            records.map((rec) => h(RecordCard, { key: rec.id, rec, focus: focusRecord === rec.id, vectorOn: configured && vectorEnabled, labels: labels, onSaved: () => { setPendingTick(0); load() }, onDeleted: () => { setPendingTick(0); load() } })))
+            records.map((rec) => h(RecordCard, { key: rec.id, rec, score: rec.score, focus: focusRecord === rec.id, vectorOn: configured && vectorEnabled, labels: labels, onSaved: () => { setPendingTick(0); load() }, onDeleted: () => { setPendingTick(0); load() } })))
 
       // 服务页底部:一句号召 + 两个外链(Star / issue)。放在内容最后,不打扰上面的状态卡。
       const footer = h('div', { className: 'footer' },
@@ -3079,6 +3163,7 @@ window.__ModuleLoader__.load({
       const dataBody = h('div', { className: 'memp-body' },
         statsCard,
         toolbar,
+        searchNoteNode,
         createForm,
         error ? h('div', { className: 'err' }, error) : null,
         h('div', { className: 'scroll' + (records.length > 0 || loading ? '' : ' is-empty') }, listBody),

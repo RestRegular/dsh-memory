@@ -12,6 +12,7 @@ JSONL 落盘 · 本机向量检索 · 五个模型工具 · 自动召回 · 硬�
 [![npm downloads](https://img.shields.io/npm/dm/@restregular/dsh-memory.svg)](https://www.npmjs.com/package/@restregular/dsh-memory)
 [![license](https://img.shields.io/npm/l/@restregular/dsh-memory.svg)](https://github.com/RestRegular/dsh-memory/blob/main/LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522.13-5FA04E.svg)](https://nodejs.org/)
+[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/restregular/dsh-memory)
 
 [npm 包](https://www.npmjs.com/package/@restregular/dsh-memory) · [问题反馈](https://github.com/RestRegular/dsh-memory/issues) · [更新日志](https://github.com/RestRegular/dsh-memory/blob/main/CHANGELOG.md)
 
@@ -42,11 +43,22 @@ JSONL 落盘 · 本机向量检索 · 五个模型工具 · 自动召回 · 硬�
 | **自动召回** | 每轮按用户问题召回；新会话第一步注入项目 / global 摘要；发布、部署、工具失败等行为按标签触发定向召回 |
 | **印象形态** | 每轮只给每条记忆的短摘要；模型判断相关但需要细节时再 `memory_get` 取全文，省 token 也不丢信息 |
 | **硬性规则** | `kind: rule` 进系统提示常驻段；旧会话会收到新增 / 编辑提醒；超预算有明确警告，不静默丢弃 |
-| **可视化管理** | 记录浏览 / 搜索 / 新建 / 编辑 / 删除；记忆树展示作用域、类型与修正链；设置改完即存；导入导出 |
+| **可视化管理** | 记录浏览 / 搜索 / 新建 / 编辑 / 删除；**记录页可主动做语义检索**（与 `memory_search` 同一套排序）；记忆树展示作用域、类型与修正链；设置改完即存；导入导出 |
 | **一键向量后端** | 面板里下载 llama.cpp 运行时与内置模型，按 CPU / 内存 / 显卡推荐；换模型自动重建向量 |
 | **跨进程安全** | 每个作用域一把写锁，锁内重新读盘再合并；多个 DSH 实例或 MCP server 共用一个 store 不丢数据 |
 
 ## 界面
+
+### 记录页的语义检索
+
+记录页搜索框旁边有「语义检索」开关。开启后，搜索不再按关键词过滤，而是把这句话交给和
+`memory_search` **同一套**的召回排序（向量 + 词法，必要时再重排），结果按相关度返回并标出得分。
+
+- 开关只在向量后端已配置时可用；没装后端时保持禁用并说明原因。
+- 语义检索是**只读浏览**：不增加访问计数，不会把 `memory_search` 后续的排序带偏。
+- 结果说明会如实写出这次是「语义排序」还是「关键词回退」：例如记录还没嵌入向量、或向量服务
+  没有响应时，不会把词法结果冒充成语义结果。嵌入完成后列表会自动刷新成语义结果。
+- 作用域下拉与新建 / 编辑 / 删除仍然照常工作；从审计页点记忆 ID 跳过来时会自动回到普通列表并展开该条。
 
 ### 记忆树
 
@@ -70,6 +82,14 @@ JSONL 落盘 · 本机向量检索 · 五个模型工具 · 自动召回 · 硬�
 ![向量服务](https://raw.githubusercontent.com/RestRegular/dsh-memory/main/preview/memory-service.png)
 
 ## 安装
+
+一条命令装进 Web profile：
+
+```bash
+dsh plugin --profile web add @restregular/dsh-memory
+```
+
+也可以手动加进 profile 的依赖（桌面端 `~/.dsh/profiles/desktop`，Web 端 `~/.dsh/profiles/web`）：
 
 ```bash
 pnpm add @restregular/dsh-memory
@@ -116,7 +136,8 @@ try/catch——任何一半失败都只记一行日志，绝不让 DSH 启动失
 ### 1. 打开面板
 
 设置页 →「记忆系统」；也可以在「设置 → 侧栏入口」打开左侧栏的「记忆系统」按钮。
-面板分四个标签：**服务 / 记录 / 记忆树 / 设置**。
+面板分四个标签：**服务 / 记录 / 记忆树 / 设置**。记录页的搜索框旁有「语义检索」开关，
+开启后可以直接用一句话主动搜索（需要先配置向量后端）。
 
 ### 2. 存一条记忆
 
@@ -199,6 +220,8 @@ name / description / 参数，以及工具失败描述；**不读取隐藏思维
 - **向量通道**：调用 `llama-server` 的 OpenAI 兼容 `/v1/embeddings`；可用面板一键安装，也可接自己的端点。
 - **可选 LLM 重排**：`retrieval.llm.enabled`，默认关。
 - **自动降级**：端点没配、进程没起、向量身份不匹配时，只走词法，不报错、不阻塞。
+- **面板主动语义检索**：记录页的「语义检索」开关走 `GET /memory/api/search`，用同一套召回排序
+  （只读、不写访问计数），并在结果说明里标明向量通道是否真的参与；旧 provider 会退回关键词过滤并在界面注明。
 
 向量边车 `.vec` 的首行是身份头 `#<model>\t<dims>\t<pooling>`。任一对不上就整份丢弃并重新嵌入；
 重建期间检索暂时只用词法。老边车只有 `model` + `dims` 两段，按兼容接受，下一次写向量时自动升级。

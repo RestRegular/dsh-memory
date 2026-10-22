@@ -10,6 +10,7 @@
  * 提供管理员 API(前缀路由 /memory/api):
  *   GET  /status    各 scope 记录数 + 待嵌入数 + 展示标签
  *   GET  /records   ?scope=&q=  枚举/过滤记录
+ *   GET  /search    ?scope=&q=&topK=  语义检索(向量 + 词法,provider 排序)
  *   POST /update    {id, content?, kind?, importance?, tags?, supersededBy?}
  *   POST /delete    {id}
  * scope 惰性加载是同步的(store.peek(),**读路径不创建**),无需 ready 门。内容编辑会作废旧
@@ -39,6 +40,7 @@ function writeJson(res, body, status = 200) {
 const CLIENT_ERROR_CODES = new Set([
   'SCOPE_INVALID', 'SCOPE_DISABLED', 'CONTENT_EMPTY', 'CONTENT_TOO_LONG',
   'SECRET_DETECTED', 'IMPORT_INVALID', 'IMPORT_TOO_LARGE', 'KIND_INVALID',
+  'QUERY_EMPTY', 'QUERY_INVALID',
 ])
 
 function writeError(res, error) {
@@ -393,6 +395,34 @@ function collectAuditEntries(memory, query) {
   return out
 }
 
+/** scope 选择 → 实际存在的 ScopeStore(读路径只用 peek,绝不通过 store.scope() 创建)。 */
+function selectedStores(store, selection) {
+  if (selection === null) return store.allScopes()
+  return (Array.isArray(selection) ? selection : [selection])
+    .map((s) => store.peek(s))
+    .filter((s) => s !== undefined)
+}
+
+/**
+ * 面板的 scope 参数 → 要看的 scope 集合。
+ *   null      = 全部作用域
+ *   string[]  = 规范化后的 scope 键(current-session / current-project 由 provider 解析)
+ * 非法输入抛 400,合法但不存在的 scope 由 selectedStores 自然过滤成空集合。
+ */
+function resolveScopeSelection(memory, rawScope) {
+  if (rawScope === null || rawScope === undefined || rawScope.trim() === '') return null
+  const normalized = normalizeScopeInput(rawScope)
+  if (!normalized.ok) throw new ApiError(400, normalized.code, normalized.message)
+  if (normalized.kind === 'all') return null
+  if (normalized.kind === 'current-session' || normalized.kind === 'current-project') {
+    // 面板不在某个 agent 里:按 provider 的读取集合解析('project' → 当前项目键);
+    // 解析不出会话时就退化为全部,而不是报错。
+    const refs = typeof memory.resolveReadScopes === 'function' ? memory.resolveReadScopes(undefined) : []
+    return refs.length > 0 ? refs : null
+  }
+  return normalized.scope ?? null
+}
+
 async function handle(ctx, routePath, req, res) {
   const url = new URL(req.url ?? '/', 'http://dsh.local')
   const path = url.pathname.slice(routePath.length) || '/'
@@ -595,28 +625,7 @@ async function handle(ctx, routePath, req, res) {
       const idQuery = (url.searchParams.get('id') ?? '').trim()
       // scope 先过同一套规范化:非法 → 400(而不是当成一个陌生 scope 去建文件);
       // 合法但不存在的 scope → 空列表。`peek`/`peekScope`,**绝不通过 store.scope() 创建**。
-      let scope = null
-      if (rawScope !== null && rawScope.trim() !== '') {
-        const normalized = normalizeScopeInput(rawScope)
-        if (!normalized.ok) throw new ApiError(400, normalized.code, normalized.message)
-        if (normalized.kind === 'all') {
-          scope = null // 全部
-        } else if (normalized.kind === 'current-session' || normalized.kind === 'current-project') {
-          // 面板不在某个 agent 里:按 provider 的读取集合解析('project' → 当前项目键);
-          // 解析不出会话时就退化为全部,而不是报错。
-          const refs = typeof memory.resolveReadScopes === 'function' ? memory.resolveReadScopes(undefined) : []
-          scope = refs.length > 0 ? refs : null
-        } else {
-          scope = normalized.scope ?? null
-        }
-      } else {
-        scope = null
-      }
-      const stores = scope === null
-        ? store.allScopes()
-        : (Array.isArray(scope) ? scope : [scope])
-            .map((s) => store.peek(s))
-            .filter((s) => s !== undefined)
+      const stores = selectedStores(store, resolveScopeSelection(memory, rawScope))
       let records = []
       for (const s of stores) records.push(...collectScope(s))
       if (query) {
@@ -629,6 +638,84 @@ async function handle(ctx, routePath, req, res) {
         records = records.filter((r) => r.id === idQuery || r.id.startsWith(idQuery))
       }
       writeJson(res, { ok: true, value: { records } })
+      return
+    }
+    // 记录页的「语义检索」:和 memory_search 同一套召回排序(向量 + 词法 + 可选重排),
+    // 由 provider 的 searchForPanel 执行 —— 只读、不写访问计数,并报告向量通道是否
+    // 真的参与,面板据此如实标注「语义排序」还是「退回关键词」。
+    if (method === 'GET' && path === '/search') {
+      const text = (url.searchParams.get('q') ?? '').trim()
+      if (text === '') throw new ApiError(400, 'QUERY_EMPTY', '搜索内容不能为空')
+      let topK = 20
+      const rawTopK = (url.searchParams.get('topK') ?? '').trim()
+      if (rawTopK !== '') {
+        if (!/^\d+$/.test(rawTopK)) throw new ApiError(400, 'QUERY_INVALID', 'topK 必须是 1..50 的整数')
+        topK = Number(rawTopK)
+        if (topK < 1 || topK > 50) throw new ApiError(400, 'QUERY_INVALID', 'topK 必须在 1..50 之间')
+      }
+      const scopes = selectedStores(store, resolveScopeSelection(memory, url.searchParams.get('scope')))
+      const keys = scopes.map((s) => s.scope)
+      // 空集合不能交给旧 provider 的 search():它会退回"默认项目 + global",
+      // 等于点了一个不存在的 scope 却搜出别的 scope 的记录。
+      if (keys.length === 0) {
+        writeJson(res, { ok: true, value: { hits: [], mode: 'lexical', reason: 'no-records', embedded: 0, total: 0 } })
+        return
+      }
+      const totalRecords = scopes.reduce((n, s) => n + s.records.size, 0)
+      const wireHit = (hit) => {
+        const scopeStore = store.peek(hit.record.scope)
+        let supersededBy = null
+        if (scopeStore !== undefined) {
+          for (const other of scopeStore.records.values()) {
+            if (other.supersedes === hit.record.id) { supersededBy = other.id; break }
+          }
+        }
+        const record = wireRecord(
+          hit.record,
+          scopeStore ?? { embedPending: new Map(), vectors: new Map() },
+          supersededBy,
+        )
+        return typeof hit.score === 'number' ? { ...record, score: hit.score } : record
+      }
+      let result
+      if (typeof memory.searchForPanel === 'function') {
+        result = await memory.searchForPanel({ text, scopes: keys, topK })
+      } else if (typeof memory.search === 'function') {
+        // 旧 provider 没有面板专用入口:退回通用检索(会写访问计数),向量是否参与
+        // 只能按"有没有向量"来推断。
+        let embedded = 0
+        for (const s of scopes) embedded += s.vectors.size
+        const hits = await memory.search({ text, scopes: keys, topK })
+        result = {
+          hits,
+          mode: embedded > 0 ? 'vector' : 'lexical',
+          ...(embedded > 0 ? {} : { reason: 'no-vectors' }),
+          embedded,
+          total: totalRecords,
+        }
+      } else {
+        // 连检索接口都没有:退回 /records?q= 同口径的关键词过滤,面板不至于空转。
+        const lowercase = text.toLowerCase()
+        const hits = []
+        for (const s of scopes) {
+          for (const r of collectScope(s)) {
+            if (r.content.toLowerCase().includes(lowercase)
+              || r.kind.toLowerCase().includes(lowercase)
+              || r.tags.some((t) => t.toLowerCase().includes(lowercase))) hits.push({ record: r })
+          }
+        }
+        result = { hits: hits.slice(0, topK), mode: 'lexical', reason: 'provider-lexical', embedded: 0, total: totalRecords }
+      }
+      writeJson(res, {
+        ok: true,
+        value: {
+          hits: result.hits.slice(0, topK).map(wireHit),
+          mode: result.mode,
+          ...(result.reason !== undefined ? { reason: result.reason } : {}),
+          embedded: result.embedded ?? 0,
+          total: result.total ?? totalRecords,
+        },
+      })
       return
     }
     if (method === 'POST' && path === '/update') {
