@@ -784,6 +784,9 @@ export class MemoryStore {
         // 同一内容重写 = 刷新状态:TLL 重新计时;显式去掉过期时间时一并清掉。
         if (input.expiredAt !== undefined) rec.expiredAt = input.expiredAt
         else delete rec.expiredAt
+        // 流程触发词是可编辑元数据:重写同一条流程时跟着更新。
+        const triggers = (input                                            ).triggers
+        if (Array.isArray(triggers)) (rec                                          ).triggers = triggers.map(String)
         s.insert(rec) // 去重命中的也是一次写:进增量,flush 时落盘
         return { record: rec, deduped: true }
       }
@@ -803,6 +806,13 @@ export class MemoryStore {
       importance: input.importance ?? defaults.importance,
       ...(input.supersedes ? { supersedes: input.supersedes } : {}),
       ...(input.expiredAt ? { expiredAt: input.expiredAt } : {}),
+      ...(Array.isArray((input                                            ).triggers)
+        ? { triggers: ((input                                            ).triggers             ).map(String) }
+        : {}),
+    }
+    if (record.kind === 'state' && record.expiredAt === undefined) {
+      // provider 已经按默认 TTL 算出 expiredAt;这里只兜底直接调 store 的调用方。
+      record.expiredAt = now + 7 * 86_400_000
     }
     s.insert(record)
     return { record, deduped: false }

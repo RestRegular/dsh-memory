@@ -155,6 +155,8 @@ export interface SaveArgs {
   expiresAt?: number
   /** 相对有效期（毫秒）；与 expiresAt 二选一，显式值优先。 */
   ttlMs?: number
+  /** 流程触发词(kind=procedure)。系统提示里的流程索引按它匹配任务/工具名。 */
+  triggers?: string[]
 }
 
 export interface SaveResult {
@@ -192,6 +194,7 @@ export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, Sav
       supersedes: { type: 'string', description: 'Record id this corrects/replaces' },
       expiresAt: { type: 'number', description: '过期时间(毫秒时间戳)。kind=state 不传时按设置里的默认 TTL(7 天)' },
       ttlMs: { type: 'number', description: '相对有效期(毫秒)。与 expiresAt 二选一，expiresAt 优先' },
+      triggers: { type: 'array', items: { type: 'string' }, description: '流程触发词(kind=procedure)：工具名/关键词/路径；缺省用 tags' },
     },
     async execute(args: SaveArgs, exec?: unknown): Promise<SaveResult> {
       const service = svc(opts)
@@ -241,6 +244,7 @@ export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, Sav
           ...(args.supersedes ? { supersedes: args.supersedes } : {}),
           ...(typeof args.expiresAt === 'number' ? { expiresAt: args.expiresAt } : {}),
           ...(typeof args.ttlMs === 'number' ? { ttlMs: args.ttlMs } : {}),
+          ...(Array.isArray(args.triggers) ? { triggers: args.triggers.map(String) } : {}),
           source: { origin: 'explicit' },
         })
         return { id: record.id, scope: record.scope, ...(alias !== undefined ? { scopeName: alias } : {}), deduped: false }

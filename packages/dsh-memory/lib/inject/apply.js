@@ -40,6 +40,7 @@ import {
                        
 } from './inject.js'
 import { renderDigest,                  } from './digest.js'
+import { renderProcedureIndex } from './procedures.js'
 import { renderRules,                  } from './rules.js'
 import { RulesDeltaInjector } from './rules-delta.js'
 import { POLICY_TEXT } from './policy.js'
@@ -133,6 +134,9 @@ export function apply(ctx         , config                     = {}) {
   const tagCache = new Map                                        ()
   /** 系统提示 rules 段的同源渲染缓存：pre-step 算一次，section 回调复用。 */
   const rulesCache = new Map                                                               ()
+  /** 流程索引的匹配上下文:最近一次用户消息 + 最近调用过的工具名。 */
+  const procedureQuery = new Map                ()
+  const procedureTools = new Map                  ()
   const rulesStepStart = new Map                ()
   let systemPromptReady = false
   let attachedMemory          = null
@@ -195,6 +199,15 @@ export function apply(ctx         , config                     = {}) {
       const oldest = callMeta.keys().next()
       if (!oldest.done) callMeta.delete(oldest.value)
     }
+  }
+
+  /** 记录本会话最近用过的工具名,给流程索引做触发词匹配。 */
+  const rememberProcedureTool = (sessionId        , tool        )       => {
+    const recent = procedureTools.get(sessionId) ?? []
+    if (recent[recent.length - 1] === tool) return
+    recent.push(tool)
+    if (recent.length > 12) recent.shift()
+    procedureTools.set(sessionId, recent)
   }
 
   const excludedIds = (memory                     , scopes                               )                      => {
@@ -398,6 +411,8 @@ export function apply(ctx         , config                     = {}) {
           sessionAutoScopes.delete(sessionId)
           rulesCache.delete(sessionId)
           rulesStepStart.delete(sessionId)
+          procedureQuery.delete(sessionId)
+          procedureTools.delete(sessionId)
           for (const key of tagCache.keys()) if (key.startsWith(`${sessionId}|`)) tagCache.delete(key)
           callMeta.clear()
           return
@@ -412,6 +427,7 @@ export function apply(ctx         , config                     = {}) {
 
         if (type === 'tool/call') {
           const tool = typeof data.name === 'string' ? data.name : 'tool'
+          rememberProcedureTool(sessionId, tool)
           const callId = typeof data.callId === 'string' ? data.callId : undefined
           const args = typeof data.arguments === 'string'
             ? data.arguments
@@ -511,6 +527,29 @@ export function apply(ctx         , config                     = {}) {
           return rendered.render.text
         },
       })
+      systemPrompt.section({
+        name: 'memory:procedures',
+        order: 655,
+        text: (context                     ) => {
+          if (!enabled || !settingsOf().procedures.enabled) return ''
+          const memory = ctx.get('memory')                                
+          if (!memory?.listSync) return ''
+          const scopes = promptScopesFor(memory, context?.agent)
+          const sessionId = sessionIdOf(context?.agent)
+          let records                 = []
+          try {
+            records = memory.listSync({ scopes: [...scopes], kind: 'procedure', limit: 200 })
+          } catch {
+            return ''
+          }
+          const rendered = renderProcedureIndex(records, settingsOf().procedures, {
+            ...(sessionId !== undefined && procedureQuery.has(sessionId) ? { query: procedureQuery.get(sessionId) } : {}),
+            ...(sessionId !== undefined && procedureTools.has(sessionId) ? { tools: procedureTools.get(sessionId) } : {}),
+            projectScopes: scopes.filter((scope) => scope.startsWith('project:')),
+          })
+          return rendered?.text ?? ''
+        },
+      })
       systemPromptReady = true
     } catch {
       /* 重复注册或老宿主没有 section 契约:规则段缺席不影响注入 */
@@ -558,6 +597,7 @@ export function apply(ctx         , config                     = {}) {
     let usableSignal = autoScopes === undefined ? undefined : signal
     const turnKey = turn ?? step
     const userQuery = pickQueryText(input.messages         )
+    if (sessionId !== undefined && userQuery !== '') procedureQuery.set(sessionId, userQuery)
     const phase = detectPhase(userQuery)
     const userQueryField = sanitizeAuditText(userQuery)
     const auditBase = (channel              , extra            )             => ({

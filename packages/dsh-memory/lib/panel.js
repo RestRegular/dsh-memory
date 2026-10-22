@@ -208,6 +208,7 @@ function wireRecord(rec, scopeStore, supersededBy = null) {
     accessCount: rec.accessCount ?? 0,
     supersededBy,
     supersedes: rec.supersedes ?? null,
+    triggers: rec.triggers ?? [],
     expiredAt: rec.expiredAt ?? null,
     expired: rec.expiredAt !== undefined && rec.expiredAt < Date.now(),
     embedded: !scopeStore.embedPending.has(rec.id) && scopeStore.vectors.has(rec.id),
@@ -578,6 +579,7 @@ async function handle(ctx, routePath, req, res) {
         ...(typeof body.importance === 'number' ? { importance: body.importance } : {}),
         ...(typeof body.ttlMs === 'number' ? { ttlMs: body.ttlMs } : {}),
         ...(typeof body.expiresAt === 'number' ? { expiresAt: body.expiresAt } : {}),
+        ...(Array.isArray(body.triggers) ? { triggers: body.triggers.map(String) } : {}),
       })
       console.log(`[dsh-memory-panel] 新建 ${record.kind} @ ${record.scope}: ${record.id}`)
       writeJson(res, { ok: true, value: { record } })
@@ -809,6 +811,7 @@ async function handle(ctx, routePath, req, res) {
       if (body.kind !== undefined) rec.kind = String(body.kind)
       if (body.importance !== undefined) rec.importance = Math.min(1, Math.max(0, Number(body.importance) || 0))
       if (body.tags !== undefined) rec.tags = Array.isArray(body.tags) ? body.tags.map(String) : []
+      if (body.triggers !== undefined) rec.triggers = Array.isArray(body.triggers) ? body.triggers.map(String) : []
       if (body.supersededBy !== undefined) rec.supersedes = body.supersededBy === null ? undefined : String(body.supersededBy)
       // 过期时间:null 清除;expiresAt 绝对时间优先;ttlMs 相对当前时间。
       if (body.expiredAt === null) delete rec.expiredAt

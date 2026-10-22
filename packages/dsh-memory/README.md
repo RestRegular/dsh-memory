@@ -46,6 +46,7 @@ JSONL 落盘 · 本机向量检索 · 五个模型工具 · 自动召回 · 硬�
 | **印象形态** | 每轮只给每条记忆的短摘要；模型判断相关但需要细节时再 `memory_get` 取全文，省 token 也不丢信息 |
 | **硬性规则** | `kind: rule` 进系统提示常驻段；旧会话会收到新增 / 编辑提醒；超预算有明确警告，不静默丢弃 |
 | **状态记忆** | `kind: state` 默认 7 天 TTL；注入带「状态，使用前验证」；过期后默认不进检索 / 摘要 / 召回，但 `memory_get` 与面板仍可取 |
+| **流程索引** | `kind: procedure` 的目录进系统提示：按当前工作区 + 触发词（工具名 / 关键词）列 `id · 触发词 → 标题`，需要时再用 `memory_get` 取全文 |
 | **可视化管理** | 记录浏览 / 搜索 / 新建 / 编辑 / 删除；**记录页可主动做语义检索**（与 `memory_search` 同一套排序）；记忆树展示作用域、类型与修正链；设置改完即存；导入导出 |
 | **一键向量后端** | 面板里下载 llama.cpp 运行时与内置模型，按 CPU / 内存 / 显卡推荐；换模型自动重建向量 |
 | **跨进程安全** | 每个作用域一把写锁，锁内重新读盘再合并；多个 DSH 实例或 MCP server 共用一个 store 不丢数据 |
@@ -74,7 +75,7 @@ JSONL 落盘 · 本机向量检索 · 五个模型工具 · 自动召回 · 硬�
 
 ### 设置
 
-召回、摘要、印象、策略、规则、自动召回逐项开关；每个开关都有可见 label、说明和当前状态。
+召回、摘要、印象、策略、状态、流程索引、规则、自动召回逐项开关；每个开关都有可见 label、说明和当前状态。
 修改立即写入 `settings.json`，不需要点保存。
 
 ![记忆设置](https://raw.githubusercontent.com/RestRegular/dsh-memory/main/preview/memory-settings.png)
@@ -153,6 +154,7 @@ memory_save({
   "content": "本仓库用 pnpm 11 安装依赖；PATH 上的 pnpm 10 会报 ERR_PNPM_UNEXPECTED_STORE。",
   "kind": "procedure",            // fact / decision / preference / procedure / note / rule / state
   "tags": ["pnpm", "toolchain"],
+  "triggers": ["pnpm", "install"], // 可选：流程索引按工具名/关键词匹配；缺省用 tags
   "importance": 0.8,              // 0~1
   "expiresAt": 1793836800000,     // 可选：过期时间(ms)；kind=state 不传时按默认 TTL(7 天)，也可传 ttlMs
   "path": "D:/repositories/dsh-memory" // 可选：写入 project:<该路径>
@@ -201,6 +203,7 @@ memory_forget({ "id": "3f2a9c1d" })          // 按内容删：memory_forget({ q
 | `digest` | 会话第一步 | 注入项目 + global 概览：按重要度 × 新鲜度挑选；`kind=rule` 不进摘要（已常驻系统提示）；正文超预算时附可检索的标签索引 |
 | `policy` | 系统提示常驻 | 什么时候查记忆、查到怎么复用、查不到时低风险推断 / 高风险先问用户 |
 | `rules` | 系统提示常驻 | `kind: rule` 的硬性规则，限量与预算；`mandatory` / `pinned` 排在最前 |
+| `procedures` | 系统提示常驻 | `kind: procedure` 的目录：当前工作区 + 触发词命中的流程，每行 `id · 触发词 → 标题`；正文按需 `memory_get` |
 | `turnEnd` | 每轮结束（默认关） | 下一轮开头提醒「有可复用结论先落盘」 |
 | 行为召回 | 可见文本 / 任务 / 命令 / 工具失败 | 命中标签后，在**下一个** `agent/pre-step` 定向检索；工具失败优先用该工具自己的 description |
 
@@ -213,6 +216,14 @@ memory_forget({ "id": "3f2a9c1d" })          // 按内容删：memory_forget({ q
 新规则可能被更重要的旧规则挤掉。`rules.delta`（默认开）会在每轮第一步比较「该会话上一轮开始时
 的规则快照」与当前规则：新增、以及编辑过（同一 id 的行变了）的规则都补一条提醒，没变化不重复；
 宿主重启用历史里的规则行做种子，不会整批重提醒。关掉它只停提醒，常驻段与检索照旧。
+
+### 流程索引（procedure）
+
+流程通常很长，全部常驻会挤爆系统提示；而注入发生在 `agent/pre-step`，模型决定调用工具之前拿不到工具名。
+所以系统提示里只放一个**目录**：当前工作区的 `procedure` 总是可见；其他作用域的流程必须命中
+`triggers`（缺省用 `tags`），匹配源是本轮用户消息、本会话最近调用过的工具名和当前项目路径。
+每行是 `id · 触发词 → 标题`，模型判断相关后用 `memory_get` 取全文。条数与 token 预算可在设置里调；
+没有命中项时不注入。
 
 ### 去重与修正
 

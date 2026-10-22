@@ -808,6 +808,7 @@ window.__ModuleLoader__.load({
       const [content, setContent] = React.useState(rec.content)
       const [kind, setKind] = React.useState(rec.kind)
       const [tags, setTags] = React.useState(rec.tags.join(', '))
+      const [triggers, setTriggers] = React.useState((rec.triggers ?? []).join(', '))
       const [importance, setImportance] = React.useState(rec.importance)
       const [ttlDays, setTtlDays] = React.useState(
         rec.expiredAt ? Math.max(1, Math.round((Number(rec.expiredAt) - Date.now()) / 86_400_000)) : 7,
@@ -851,6 +852,7 @@ window.__ModuleLoader__.load({
             kind,
             importance: Number(importance) || 0,
             tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
+            ...(kind === 'procedure' ? { triggers: triggers.split(',').map((t) => t.trim()).filter(Boolean) } : {}),
             ...(kind === 'state' ? { ttlMs: Math.max(1, Number(ttlDays) || 7) * 86_400_000 } : {}),
           })
           setEditing(false)
@@ -868,6 +870,7 @@ window.__ModuleLoader__.load({
         setEditing(false)
         setContent(rec.content); setKind(rec.kind)
         setTags(rec.tags.join(', ')); setImportance(rec.importance)
+        setTriggers((rec.triggers ?? []).join(', '))
         setTtlDays(rec.expiredAt ? Math.max(1, Math.round((Number(rec.expiredAt) - Date.now()) / 86_400_000)) : 7)
       }
 
@@ -931,6 +934,9 @@ window.__ModuleLoader__.load({
                         onChange: (next) => setKind(next),
                       }),
                       h('input', { type: 'text', style: { width: 170 }, value: tags, placeholder: '标签, 逗号分隔', onChange: (e) => setTags(e.target.value) }),
+                      kind === 'procedure'
+                        ? h('input', { type: 'text', style: { width: 170 }, value: triggers, placeholder: '触发词(工具名/关键词)', onChange: (e) => setTriggers(e.target.value) })
+                        : null,
                       h('label', null, '重要度 ',
                         h('input', { type: 'number', min: 0, max: 1, step: 0.1, value: importance, onChange: (e) => setImportance(e.target.value) })),
                       kind === 'state'
@@ -952,6 +958,12 @@ window.__ModuleLoader__.load({
                     ),
                     rec.tags && rec.tags.length > 0
                       ? h('div', { className: 'tags' }, rec.tags.map((tag) => h('span', { className: 'tag', key: tag }, tag)))
+                      : null,
+                    rec.triggers && rec.triggers.length > 0
+                      ? h('div', { className: 'tags' },
+                          h('span', { className: 'meta-label' }, '触发'),
+                          rec.triggers.map((trigger) => h('span', { className: 'tag', key: trigger }, trigger)),
+                        )
                       : null,
                     rec.expiredAt
                       ? h('div', { className: 'meta' },
@@ -1100,6 +1112,12 @@ window.__ModuleLoader__.load({
         h('div', { className: 'td-content' }, rec.content),
         rec.tags && rec.tags.length > 0
           ? h('div', { className: 'td-tags' }, rec.tags.map((tag) => h('span', { className: 'tag', key: tag }, tag)))
+          : null,
+        rec.triggers && rec.triggers.length > 0
+          ? h('div', { className: 'td-tags' },
+              h('span', { className: 'meta-label' }, '触发'),
+              rec.triggers.map((trigger) => h('span', { className: 'tag', key: trigger }, trigger)),
+            )
           : null,
         h('div', { className: 'td-meta' },
           h('div', { className: 'rowline' },
@@ -1844,6 +1862,16 @@ window.__ModuleLoader__.load({
         ],
       },
       {
+        key: 'procedures', title: '流程索引',
+        desc: '把当前工作区与任务触发词命中的 procedure 列成目录（id · 触发词 → 标题），需要细节时模型用 memory_get 取全文。',
+        hint: '只在系统提示里占几行，不复制流程正文；没有命中项时不注入。',
+        fields: [
+          { k: 'enabled', label: '启用', type: 'bool', hint: '关闭后流程只能靠 memory_search 主动检索。' },
+          { k: 'maxItems', label: '最多条数', type: 'num', min: 1, max: 30, step: 1, hint: '流程索引最多列几条。' },
+          { k: 'tokenBudget', label: 'token 预算', type: 'num', min: 50, max: 4000, step: 50, hint: '流程索引的 token 上限。' },
+        ],
+      },
+      {
         key: 'autoRecall', title: '自动召回',
         desc: '从可见文本（assistant 输出、任务清单、命令 / 工具描述、失败信息）匹配记忆标签，命中即检索。',
         fields: [
@@ -2107,6 +2135,7 @@ window.__ModuleLoader__.load({
       const [kind, setKind] = React.useState('note')
       const [content, setContent] = React.useState('')
       const [tags, setTags] = React.useState('')
+      const [triggers, setTriggers] = React.useState('')
       const [importance, setImportance] = React.useState(0.6)
       const [ttlDays, setTtlDays] = React.useState(7)
       const [busy, setBusy] = React.useState(false)
@@ -2129,6 +2158,7 @@ window.__ModuleLoader__.load({
             kind,
             content,
             tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
+            ...(kind === 'procedure' ? { triggers: triggers.split(',').map((t) => t.trim()).filter(Boolean) } : {}),
             importance: Number(importance),
             ...(kind === 'state' ? { ttlMs: Math.max(1, Number(ttlDays) || 7) * 86_400_000 } : {}),
           })
@@ -2170,6 +2200,13 @@ window.__ModuleLoader__.load({
               type: 'text', style: { width: 190 }, placeholder: '逗号分隔，例如 pnpm, 工具链',
               value: tags, onChange: (e) => setTags(e.target.value),
             })),
+          kind === 'procedure'
+            ? h('label', { className: 'set-field' }, '触发词 ',
+                h('input', {
+                  type: 'text', style: { width: 190 }, placeholder: '工具名 / 关键词，例如 npm, deploy',
+                  value: triggers, onChange: (e) => setTriggers(e.target.value),
+                }))
+            : null,
           h('label', null, '重要度 ',
             h('input', { type: 'number', min: 0, max: 1, step: 0.1, value: importance, onChange: (e) => setImportance(e.target.value) })),
           kind === 'state'

@@ -302,4 +302,31 @@ test('规则正文写进会话注入状态后,recall 不再重复注入同一条
   assert.deepEqual(recall!.selected?.newlyAddedIds ?? [], [])
 })
 
+test('系统提示流程索引:当前工作区 + 本轮查询命中的 procedure 才会出现', async () => {
+  const settings = {
+    ...defaultInjectSettings,
+    autoRecall: { ...defaultInjectSettings.autoRecall, enabled: false },
+    recall: { ...defaultInjectSettings.recall, enabled: false },
+    digest: { ...defaultInjectSettings.digest, enabled: false },
+    rules: { ...defaultInjectSettings.rules, enabled: false },
+    policy: { ...defaultInjectSettings.policy, enabled: false },
+    turnEnd: { ...defaultInjectSettings.turnEnd, enabled: false },
+    procedures: { ...defaultInjectSettings.procedures, enabled: true },
+  }
+  const local = record('local-proc', '本仓库发布流程', [])
+  const global = record('global-proc', 'npm 发布前先检查凭据', ['publish'])
+  const unrelated = { ...record('other-proc', 'k8s 部署流程', ['kubectl']), scope: 'global' }
+  const { handlers, sections } = setup({
+    settings,
+    listSync: (query) => (query as { kind?: string }).kind === 'procedure' ? [local, global, unrelated] : [],
+  })
+  await runPreStep(handlers, undefined, { turn: 1, step: 1 })
+  const section = sections.find((entry) => entry.name === 'memory:procedures')
+  assert.ok(section)
+  const text = section.text({ agent: { session: { id: 's1', header: { cwd: 'D:/repo' } } } }) as string
+  assert.ok(text.includes('local-proc'.slice(0, 8)), '当前工作区流程不需要触发词')
+  assert.ok(text.includes('global-proc'.slice(0, 8)), '查询命中 publish 别名“发布”')
+  assert.ok(!text.includes('other-proc'.slice(0, 8)))
+})
+
 
