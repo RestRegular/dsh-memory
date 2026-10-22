@@ -1630,23 +1630,33 @@ test('轨迹列表给有审计的调用加产品线条图标', async () => {
   })
   const pane = { getBoundingClientRect: () => rect(0, 100, 700, 700) }
   const head = { getBoundingClientRect: () => rect(0, 100, 700, 30) }
+  const composer = { getBoundingClientRect: () => rect(0, 700, 700, 152) }
+  const root = { querySelector: (selector: string) => selector.includes('_composerSeat') ? composer : null }
   const table = { querySelector: (selector: string) => selector === 'thead' ? head : null }
   const row = (key: string, top: number) => ({
     getAttribute: (name: string) => name === 'data-trajectory-row-key' ? key : null,
     getBoundingClientRect: () => rect(100, top, 700, 30),
-    closest: (selector: string) => selector.includes('_tablePane') ? pane : selector === 'table' ? table : null,
+    closest: (selector: string) => {
+      if (selector.includes('_tablePane')) return pane
+      if (selector === 'table') return table
+      if (selector.includes('_scrollBody')) return root
+      return null
+    },
   })
   const rows = [
     row('tool%00call%00call-1', 200),
     row('tool%00call%00call-2', 240),
     // 已经滚到 sticky 表头上方：即使有审计也不该留下 fixed 图标。
     row('tool%00call%00call-3', 80),
+    // 在 composer 后面：行仍在 tablePane 内，但已被 composer 遮住。
+    row('tool%00call%00call-4', 680),
   ]
   const globals = globalThis as Record<string, unknown>
   const saved = { window: globals.window, document: globals.document, fetch: globals.fetch }
   globals.window = { innerWidth: 1200, innerHeight: 900, addEventListener() {}, removeEventListener() {} }
   globals.document = {
     body: {},
+    querySelector: (selector: string) => selector.includes('_composerSeat') ? composer : null,
     querySelectorAll: (selector: string) => selector.includes('tr[data-trajectory-row-key]') ? rows : [],
   }
   globals.fetch = async () => ({
@@ -1658,9 +1668,10 @@ test('轨迹列表给有审计的调用加产品线条图标', async () => {
           { id: 'a1', seq: 1, at: Date.now(), sessionId: 's1', kind: 'signal', channel: 'signal', stage: 'tool_call', outcome: 'success', operationId: 'call-1' },
           { id: 'a2', seq: 2, at: Date.now(), sessionId: 's1', kind: 'signal', channel: 'signal', stage: 'tool_call', outcome: 'success', operationId: 'call-1' },
           { id: 'a3', seq: 3, at: Date.now(), sessionId: 's1', kind: 'signal', channel: 'signal', stage: 'tool_call', outcome: 'success', operationId: 'call-3' },
+          { id: 'a4', seq: 4, at: Date.now(), sessionId: 's1', kind: 'signal', channel: 'signal', stage: 'tool_call', outcome: 'success', operationId: 'call-4' },
         ],
-        total: 3,
-        stats: { entries: 3, capacity: 2000, perSessionCapacity: 200, dropped: 0, writeErrors: 0, persistence: 'memory' },
+        total: 4,
+        stats: { entries: 4, capacity: 2000, perSessionCapacity: 200, dropped: 0, writeErrors: 0, persistence: 'memory' },
       },
     }),
   })
@@ -1678,7 +1689,7 @@ test('轨迹列表给有审计的调用加产品线条图标', async () => {
     await new Promise((resolve) => setTimeout(resolve, 160))
     for (let i = 0; i < 8; i++) await Promise.resolve()
     const markNodes = collect(current).filter((n) => String(n.props?.className ?? '').split(/\s+/).includes('mem-traj-mark'))
-    assert.equal(markNodes.length, 1, '只有完整可见的 call-1 标记；call-2 无审计、call-3 被表头裁掉')
+    assert.equal(markNodes.length, 1, '只有完整可见的 call-1 标记；call-2 无审计、call-3 被表头裁掉、call-4 被 composer 遮住')
     assert.ok(String(markNodes[0].props?.title ?? '').includes('2 条记忆审计'), '图标 title 带审计条数')
     assert.ok(Number(markNodes[0].props?.style?.top) > 200, '图标跟随行位置')
   } finally {

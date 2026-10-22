@@ -2,6 +2,12 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.14.4 — 轨迹行图标同时按 composer 上沿裁剪
+
+- **根因**：0.14.3 只用 `_tablePane` 的底边做下界。Trajectory 的表格会一直延伸到浮动 composer 后面，`_tablePane` 的底边在 composer 下方；行滚到底部、被 composer 遮住时，fixed 图标仍在表格底边以内，所以继续显示。
+- **修复**：可见区域下界取 `min(tablePane.bottom, composerSeat.top)`（composer 隐藏/高度为 0 时退回 tablePane 底边）；行不完全落在上下界内就不渲染标记。选中行徽标同样裁剪。
+- 回归测试：表头上方的 call-3、composer 后面的 call-4 即使有审计也不标记；完全可见的 call-1 正常标记。
+
 ## 0.14.3 — 轨迹行图标按滚动容器裁剪
 
 - **根因**：行左侧的年轮图标是 `shell.overlay` 里的 `position:fixed` 元素，不受轨迹表格 `overflow` 裁剪。行滚到表头/工具栏上方后，它的 `getBoundingClientRect()` 仍可能落在浏览器视口内，图标就留在原地，看起来“超出范围还显示”。

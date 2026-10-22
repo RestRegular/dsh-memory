@@ -2185,9 +2185,10 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * 轨迹行可见区域：表格滚动容器（`_tablePane`）的上下边界，再扣掉 sticky 表头。
+     * 轨迹行可见区域：表格滚动容器（`_tablePane`）的上下边界，扣掉 sticky 表头，
+     * 底部再扣掉浮动的 composer。
      * fixed 定位的浮层不会被表格的 overflow 裁剪，所以必须自己做这个裁剪；
-     * 否则行滚到表头/工具栏上方后，图标还会留在原地。
+     * 否则行滚到表头/工具栏上方或 composer 后面时，图标还会留在原地。
      */
     function trajectoryRowClip(row) {
       try {
@@ -2199,9 +2200,25 @@ window.__ModuleLoader__.load({
         const table = row.closest('table')
         const head = table && typeof table.querySelector === 'function' ? table.querySelector('thead') : null
         const headRect = head ? head.getBoundingClientRect() : null
+        let bottom = paneRect.bottom
+        // Trajectory 把 composer 浮在 ledger 底部；表格会一直延伸到它后面。
+        // composer 可见时，浮层不应盖在输入框上。
+        const root = typeof row.closest === 'function' ? row.closest('[class*="_scrollBody"]') : null
+        let composer = null
+        try {
+          composer = root && typeof root.querySelector === 'function'
+            ? root.querySelector('[class*="_composerSeat"]')
+            : (typeof document !== 'undefined' ? document.querySelector('[class*="_composerSeat"]') : null)
+        } catch { composer = null }
+        if (composer !== null) {
+          const composerRect = composer.getBoundingClientRect()
+          if (composerRect.height > 0 && composerRect.top > paneRect.top) {
+            bottom = Math.min(bottom, composerRect.top)
+          }
+        }
         return {
           top: Math.max(paneRect.top, headRect ? headRect.bottom : paneRect.top),
-          bottom: paneRect.bottom,
+          bottom,
         }
       } catch {
         return null
