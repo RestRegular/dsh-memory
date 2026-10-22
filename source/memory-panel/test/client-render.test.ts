@@ -1701,6 +1701,73 @@ test('轨迹列表给有审计的调用加产品线条图标', async () => {
   }
 })
 
+test('主面板审计详情走 jumpAuditEntryToTrajectory（不需要 openTrajectory 回调）', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const testApi = exports.__test as {
+    AuditTab: (p: Record<string, unknown>) => unknown
+    setClientCtx: (ctx: unknown) => void
+  }
+  const handle = {}
+  const seen: [string, string | undefined][] = []
+  const opened: string[] = []
+  const store = { actions: { openView: (view: string, focus?: string) => { seen.push([view, focus]) } } }
+  const slots = {
+    entries: (key: string) => key === 'conversation.session' ? [{ store: handle }] : [],
+    _stores: new Map([[handle, { instances: new Map([['s1', store]]) }]]),
+  }
+  testApi.setClientCtx({
+    get: (name: string) => name === 'slots' ? slots : name === 'uiWorkspace' ? {
+      openSession: (id: string) => { opened.push(id) },
+      sessions: { list: { getSnapshot: () => ({ byId: { s1: { id: 's1', retainedBy: { mainView: 1 } } } }) } },
+    } : undefined,
+  })
+  ;(globalThis as Record<string, unknown>).fetch = async () => ({
+    status: 200,
+    json: async () => ({
+      ok: true,
+      value: {
+        entries: [{
+          id: 'audit-1', seq: 1, at: Date.now(), sessionId: 's1', turn: 2, step: 1,
+          kind: 'signal', channel: 'signal', stage: 'tool_call', trigger: 'memory_tool',
+          outcome: 'success', operationId: 'call-9',
+        }],
+        total: 1,
+        stats: { entries: 1, capacity: 2000, perSessionCapacity: 200, dropped: 0, writeErrors: 0, persistence: 'memory' },
+      },
+    }),
+  })
+  const AuditTab = testApi.AuditTab
+  const element = () => hooks.React.createElement(AuditTab, {
+    scopes: [],
+    records: [],
+    lockSession: 's1',
+    audience: 'panel',
+    // 关键：主面板不传 openTrajectory，走模块内的 jumpAuditEntryToTrajectory
+  })
+  let current: RenderNode | null = render(element(), hooks)
+  hooks.setRerender(() => { current = render(element(), hooks) })
+  try {
+    hooks.runEffects()
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    const row = collect(current).find((n) => String(n.props?.className ?? '').startsWith('audit-row'))
+    assert.ok(row)
+    ;(row!.props!.onClick as () => void)()
+    hooks.runEffects()
+    for (let i = 0; i < 4; i++) await Promise.resolve()
+    const jump = collect(current).find((n) => String(n.props?.className ?? '').split(/\s+/).includes('audit-jump'))
+    assert.ok(jump)
+    await (jump!.props!.onClick as () => Promise<void>)()
+    for (let i = 0; i < 4; i++) await Promise.resolve()
+    assert.deepEqual(opened, ['s1'], '先打开会话')
+    assert.deepEqual(seen, [['trajectory', 'call-9']], '再把 trajectory 切到该 callId')
+    assert.ok(textOf(current).includes('已定位到轨迹'))
+  } finally {
+    ;(testApi.setClientCtx as (v: unknown) => void)(null)
+    hooks.resetAll()
+  }
+})
+
 test('审计详情能把 operationId 精确送到轨迹视图', async () => {
   const { exports, hooks } = await loadBundle()
   hooks.resetAll()

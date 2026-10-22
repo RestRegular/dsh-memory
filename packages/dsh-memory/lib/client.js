@@ -2914,8 +2914,11 @@ window.__ModuleLoader__.load({
           try {
             const focus = await resolveAuditFocus(selected)
             if (typeof openTrajectory === 'function') {
-              openTrajectory(focus)
-              setFocusNotice(focus === undefined ? '已切到轨迹页（这条没有精确锚点）' : '已定位到轨迹')
+              const result = await openTrajectory(focus, selected)
+              if (result && result.focused === true) setFocusNotice('已定位到轨迹')
+              else if (result && result.opened === true) setFocusNotice('已切到轨迹页（未找到精确锚点）')
+              else if (result === undefined) setFocusNotice(focus === undefined ? '已切到轨迹页（这条没有精确锚点）' : '已定位到轨迹')
+              else setFocusNotice('定位失败')
               return
             }
             const result = await jumpAuditEntryToTrajectory(selected)
@@ -3137,7 +3140,7 @@ window.__ModuleLoader__.load({
     /** 待嵌入自动刷新:最多 300 次 × 1.5s(后端挂着时不无限轮询)。 */
     const PENDING_POLL_LIMIT = 300
 
-    function MemoryPanel({ openSession, sessionInfo, openTrajectory, audience = 'panel', lockSession } = {}) {
+    function MemoryPanel({ openSession, sessionInfo, audience = 'panel', lockSession } = {}) {
       const [records, setRecords] = React.useState([])
       const [scopes, setScopes] = React.useState([])
       const [embedServer, setEmbedServer] = React.useState(null)
@@ -3625,7 +3628,6 @@ window.__ModuleLoader__.load({
                     sessionInfo,
                     audience,
                     lockSession,
-                    openTrajectory,
                   })
                 : overviewBody,
       )
@@ -3641,8 +3643,12 @@ window.__ModuleLoader__.load({
     function MemoryAuditView({ sessionId, openView, sessionInfo }) {
       const openTrajectory = (focus) => {
         try {
-          if (typeof openView === 'function') openView('trajectory', focus)
+          if (typeof openView === 'function') {
+            openView('trajectory', focus)
+            return { opened: true, focused: focus !== undefined }
+          }
         } catch { /* 视图不可用时保持在本页 */ }
+        return { opened: false, focused: false }
       }
       return h('div', {
         className: 'memp mem-view',
@@ -4148,10 +4154,10 @@ window.__ModuleLoader__.load({
     const inject = ['slots']
 
     /** 侧栏入口打开的主界面页面(整块可滚动,内容就是面板本体)。 */
-    function MemoryPage({ openSession, sessionInfo, openTrajectory } = {}) {
+    function MemoryPage({ openSession, sessionInfo } = {}) {
       return h('div', { className: 'mem-page' },
         h('div', { className: 'mem-page-head' }, h('h2', null, '记忆系统')),
-        h(MemoryPanel, { openSession, sessionInfo, openTrajectory, audience: 'panel' }),
+        h(MemoryPanel, { openSession, sessionInfo, audience: 'panel' }),
       )
     }
 
@@ -4232,7 +4238,6 @@ window.__ModuleLoader__.load({
             openSession,
             sessionInfo,
             audience: 'panel',
-            openTrajectory: jumpAuditEntryToTrajectory,
           }),
         ))
 
@@ -4255,7 +4260,6 @@ window.__ModuleLoader__.load({
                 slots.inject('main', () => slots.register({ name: 'main', key: 'memory' }, () => React.createElement(MemoryPage, {
                   openSession,
                   sessionInfo,
-                  openTrajectory: jumpAuditEntryToTrajectory,
                 }))),
                 slots.inject('sidebar.panellist', () => slots.register(
                   { name: 'sidebar.panellist', id: 'memory', order: 20, label: () => NAV_LABEL },

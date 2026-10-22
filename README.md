@@ -377,7 +377,7 @@ DSH 自带的 Trajectory 面板是一个**纯投影**：它只声明 `conversati
 
 - **轨迹 → 记忆审计**：Trajectory 的选中行带有 `data-trajectory-row-key`。注意它在 DOM 上经过 `encodeURIComponent`（工具行实际是 `tool%00call%00<callId>`），插件会先解码再取 callId。有审计的调用行左侧会显示产品年轮线条图标；选中行右侧另有「记忆 N」徽标，点击按 `op:<callId>` 打开审计。两者都会按轨迹滚动容器（扣除 sticky 表头与底部浮动 composer）裁剪，行滚出可视区后被遮住时不会残留。
 - **轨迹详情页签**：点击轨迹里的任意记录后，右侧详情面板的页签行会多出一个「记忆审计」页签（用 `shell.overlay` 贴着详情面板，不改轨迹的 React 树）。它展示该记录 callId 对应的审计事件，底部按钮直接打开本会话的记忆审计面板；没有 callId 的记录明确提示无法精确过滤。
-- **记忆审计 → 轨迹**：审计详情里的「在轨迹中定位」把条目上的 `operationId`（记忆工具调用、触发召回的工具调用）交给 Trajectory 的 `openView('trajectory', callId)`。没有 `operationId` 的按轮/步事件先请求 `/anchor`，由 Host 从会话事件窗口里找该 turn/step 的第一个 `tool/call`；找不到就只切到轨迹页，不伪造定位。
+- **记忆审计 → 轨迹**：审计详情里的「在轨迹中定位」把条目上的 `operationId`（记忆工具调用、触发召回的工具调用）交给 Trajectory 的 `openView('trajectory', callId)`；主面板会先打开会话，再切换轨迹并选中该记录，右侧详情面板自动打开。没有 `operationId` 的按轮/步事件先请求 `/anchor`，由 Host 从会话事件窗口里找该 turn/step 的第一个 `tool/call`；找不到就只切到轨迹页，不伪造定位。
 - **会话内的「记忆」视图**：与 Chat / 轨迹同一个 view ring，按当前会话展示审计；它直接使用宿主传给每个 view 的 `openView`，因此跳转是官方支持路径。它声明 `data-conversation-composer-overlay` 让壳层压住外层滚动，审计列表在自己的滚动容器里滚动，外层界面不需要跟着滚。主面板不在 view ring 内，通过 `conversation.session` 注册的 per-session store 调同一个 action；拿不到时退化为打开会话/轨迹页。
 - 记忆工具调用（`memory_save/search/list/get/forget`）本身会额外留一条 `stage: tool_call` 的审计锚点：即使自动召回关闭，也能从这条记录精确跳回轨迹里的那次调用。
 

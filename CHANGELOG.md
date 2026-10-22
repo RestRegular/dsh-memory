@@ -2,6 +2,12 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.14.5 — 修复记忆面板审计「在轨迹中定位」不生效
+
+- **根因**：主面板把 `jumpAuditEntryToTrajectory`（签名是 `(entry) => Promise`）当成 `openTrajectory(focus)` 回调传给 `AuditTab`。按钮把 `callId` 字符串传进去，`jumpAuditEntryToTrajectory` 读不到 `entry.sessionId`，直接按 `no_session` 返回，实际什么都没发生；UI 还误报“已定位到轨迹”。
+- **修复**：主面板不再传 `openTrajectory`，`AuditTab` 走模块内的 `jumpAuditEntryToTrajectory(selected)`：先 `openSession`，等 per-session store 可用后 `openView('trajectory', callId)`，Trajectory 会选中该记录并自动打开右侧详情面板。会话内「记忆」视图仍走 `openView` 回调，回调现在返回 `{opened, focused}`，提示文案按真实结果展示。
+- 回归测试：主面板路径断言 `openSession('s1')` + `openView('trajectory','call-9')`。
+
 ## 0.14.4 — 轨迹行图标同时按 composer 上沿裁剪
 
 - **根因**：0.14.3 只用 `_tablePane` 的底边做下界。Trajectory 的表格会一直延伸到浮动 composer 后面，`_tablePane` 的底边在 composer 下方；行滚到底部、被 composer 遮住时，fixed 图标仍在表格底边以内，所以继续显示。
