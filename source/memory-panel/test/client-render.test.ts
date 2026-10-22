@@ -155,6 +155,10 @@ function collect(node: RenderNode | null, out: RenderNode[] = []): RenderNode[] 
   return out
 }
 
+function toggledText(node: RenderNode | null): string {
+  return (node?.children ?? []).map((child) => textOf(child)).join(' ')
+}
+
 function textOf(node: RenderNode | null): string {
   const parts: string[] = []
   for (const n of collect(node)) if (n.text !== undefined) parts.push(n.text)
@@ -1067,15 +1071,25 @@ test('记录页语义检索:开关、/search 请求、结果说明与相关度�
   const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve() }
   hooks.runEffects(); await flush(); hooks.runEffects(); await flush()
 
+  /** 语义检索控件是一个真正的 toggle(轨道 + 圆点 + 可见状态),不是普通按钮。 */
+  const findSemanticToggle = () => collect(current)
+    .find((n) => n.tag === 'button' && n.props?.role === 'switch' && textOf(n).includes('语义检索'))
+
   // 输入查询词(不回车),再打开语义检索 → 有查询词时应立即按新模式重跑
   const input = collect(current).find((n) => n.tag === 'input')
   assert.ok(input, '记录页有搜索框')
   ;(input!.props!.onChange as (e: unknown) => void)({ target: { value: '发布凭据' } })
   await flush()
   calls.length = 0
-  const toggle = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '语义检索')
+  const toggle = findSemanticToggle()
   assert.ok(toggle, '搜索框旁有「语义检索」开关')
-  assert.equal(toggle!.props?.['aria-pressed'], false, '默认是关键词过滤')
+  assert.equal(toggle!.props?.role, 'switch', '控件是 switch,不是普通按钮')
+  assert.equal(toggle!.props?.['aria-checked'], false, '默认关闭(关键词过滤)')
+  assert.ok(String(toggle!.props?.className).split(/\s+/).includes('toggle'), '沿用向量服务的 toggle 造型')
+  const toggleClassNames = collect(toggle).map((n) => String(n.props?.className ?? ''))
+  assert.ok(toggleClassNames.includes('toggle-track'), '有轨道')
+  assert.ok(toggleClassNames.includes('toggle-knob'), '有圆点')
+  assert.ok(toggledText(toggle).includes('已关闭'), '关闭态有可见状态文案')
   ;(toggle!.props!.onClick as () => void)()
   // 不跑 runEffects:测试脚手架的 mount effect 每次 runEffects 都会重放,
   // 会把搜索词清空后的 /records 结果覆盖回来(真实 React 里 mount effect 只跑一次)。
@@ -1092,8 +1106,17 @@ test('记录页语义检索:开关、/search 请求、结果说明与相关度�
   assert.ok(text.includes('向量覆盖 2/2 条'), '向量覆盖率')
   assert.ok(text.includes('相关度 0.80'), '结果卡显示检索得分')
   assert.match(text, /发布前检查 devcred 凭据/, '命中内容来自 /search')
-  const pressed = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '语义检索')
-  assert.equal(pressed!.props?.['aria-pressed'], true, '开关状态跟随')
+  const pressed = findSemanticToggle()
+  assert.equal(pressed!.props?.['aria-checked'], true, '开关状态跟随')
+  assert.ok(String(pressed!.props?.className).split(/\s+/).includes('on'), '开启态加上 .on(轨道变品牌色)')
+  assert.ok(toggledText(pressed).includes('已开启'), '开启态有可见状态文案')
+  // 深色模式:颜色全部来自宿主 token,不能写死色值
+  const css = (exports.__test as { CSS: string }).CSS
+  const stateRule = /\.memp \.toolbar \.semantic-state\{([^}]*)\}/.exec(css)?.[1] ?? ''
+  const stateOnRule = /\.memp \.toolbar \.semantic\.on \.semantic-state\{([^}]*)\}/.exec(css)?.[1] ?? ''
+  assert.match(stateRule, /var\(--dsw-alias-label-secondary\)/, `关闭态状态文字用次要标题色:${stateRule}`)
+  assert.match(stateOnRule, /var\(--dsw-alias-brand-primary\)/, `开启态状态文字用品牌色:${stateOnRule}`)
+  assert.doesNotMatch(stateRule + stateOnRule, /#[0-9a-f]{3,8}/i, '语义开关的状态文字不能写死颜色')
   hooks.resetAll()
 })
 
@@ -1110,9 +1133,10 @@ test('记录页语义检索:向量不可用时开关禁用;服务端回退时说
     },
   }
   let current = await mountPanel(hooks, offState)
-  const offToggle = collect(current()).find((n) => n.tag === 'button' && textOf(n).trim() === '语义检索')
+  const offToggle = collect(current()).find((n) => n.tag === 'button' && n.props?.role === 'switch' && textOf(n).includes('语义检索'))
   assert.ok(offToggle, '未配置向量时开关仍然可见')
   assert.equal(offToggle!.props?.disabled, true, '未配置向量时不可开启')
+  assert.equal(offToggle!.props?.['aria-checked'], false, '禁用时仍如实报告关闭')
   hooks.resetAll()
 
   // 已配置但这次嵌入失败:服务端返回 lexical + embed-failed,面板要写明回退原因
@@ -1145,7 +1169,7 @@ test('记录页语义检索:向量不可用时开关禁用;服务端回退时说
   const input = collect(current).find((n) => n.tag === 'input')!
   ;(input.props!.onChange as (e: unknown) => void)({ target: { value: '任何查询' } })
   await flush()
-  const toggle = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '语义检索')!
+  const toggle = collect(current).find((n) => n.tag === 'button' && n.props?.role === 'switch' && textOf(n).includes('语义检索'))!
   ;(toggle.props!.onClick as () => void)()
   await flush()
 

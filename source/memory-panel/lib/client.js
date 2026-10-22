@@ -104,9 +104,13 @@ window.__ModuleLoader__.load({
       '.memp .editrow input[type=number]{width:64px;padding:4px 8px}',
       '.memp .err{color:var(--dsw-alias-label-danger, #e05555);font-size:12px}',
       '.memp .empty{color:var(--dsw-alias-label-secondary);font-size:12.5px;padding:16px 2px;text-align:center}',
-      // 语义检索:搜索框旁的开关 + 结果说明行 + 结果卡上的相关度
-      '.memp .toolbar .semantic{flex:none}',
-      '.memp .toolbar .semantic.on{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 10%,transparent)}',
+      // 语义检索:搜索框旁的 toggle(轨道 + 圆点,沿用 .toggle 的宿主 token 配色,
+      // 深浅色都由 --dsw-alias-switch-thumb / brand-primary / label-primary-foreground
+      // 决定,不再写死颜色)+ 结果说明行 + 结果卡上的相关度
+      '.memp .toolbar .semantic{flex:none;padding:4px 10px 4px 5px}',
+      '.memp .toolbar .semantic-label{font-size:12px;line-height:1.6}',
+      '.memp .toolbar .semantic-state{font-size:11px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .toolbar .semantic.on .semantic-state{color:var(--dsw-alias-brand-primary)}',
       '.memp .search-note{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;font-size:11.5px;line-height:1.55;color:var(--dsw-alias-label-secondary)}',
       '.memp .search-note b{font-weight:600;color:var(--dsw-alias-label-primary)}',
       '.memp .search-note .muted{font-size:11.5px}',
@@ -3078,10 +3082,14 @@ window.__ModuleLoader__.load({
           onChange: (e) => setQ(e.target.value),
           onKeyDown: (e) => { if (e.key === 'Enter') load(q, scopeFilter) },
         }),
-        // 语义检索开关:向量没启用时保持可读但不许点(点开只会给出词法结果,容易误解)。
+        // 语义检索开关:与「向量服务」同一套 toggle(轨道 + 圆点)。轨道/圆点/文字颜色
+        // 全部走宿主 token,深色主题下关闭态轨道用 border-l3、圆点用 switch-thumb,
+        // 开启态轨道用 brand-primary、圆点用 label-primary-foreground。
         h('button', {
-          className: 'semantic' + (semantic ? ' on' : ''),
-          'aria-pressed': semantic,
+          type: 'button',
+          className: 'toggle semantic' + (semantic ? ' on' : ''),
+          role: 'switch',
+          'aria-checked': semantic,
           disabled: !(configured && vectorEnabled),
           title: configured && vectorEnabled
             ? (semantic ? '语义检索已开启：按语义相似度排序，点击切回关键词过滤' : '按语义相似度检索（向量 + 词法；未命中时结果会标注已回退）')
@@ -3092,7 +3100,11 @@ window.__ModuleLoader__.load({
             // 已经有查询词时立刻按新模式重跑一次,不用再敲回车。
             if (q.trim() !== '') load(q, scopeFilter, next)
           },
-        }, '语义检索'),
+        },
+          h('span', { className: 'toggle-track' }, h('span', { className: 'toggle-knob' })),
+          h('span', { className: 'semantic-label' }, '语义检索'),
+          h('span', { className: 'semantic-state' }, semantic ? '已开启' : '已关闭'),
+        ),
         // 作用域也用同一个自绘下拉(与模型/运行时统一);标签优先用服务端给的 label
         h(Dropdown, {
           items: [

@@ -2,6 +2,18 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.13.1 — 语义检索改成 toggle 开关
+
+- 记录页的「语义检索」从普通文字按钮改成真正的 **toggle 开关**：轨道 + 圆点 + 可见的
+  「已开启 / 已关闭」，`role="switch"` + `aria-checked`，不再只靠按钮高亮表示状态。
+- 造型与「向量服务」开关完全一致，配色全部走宿主主题 token：关闭态轨道 `--dsw-alias-border-l3`
+  （不是几乎透明的 border-l1）、圆点 `--dsw-alias-switch-thumb`；开启态轨道
+  `--dsw-alias-brand-primary`、圆点 `--dsw-alias-label-primary-foreground`。深色主题下
+  轨道与圆点都有足够对比度，没有写死任何色值。
+- 向量未配置时开关保持可见但禁用（半透明、轨道仍可辨认），`aria-checked` 仍如实报告 `false`。
+- 测试补充：语义控件必须是 `role="switch"`、含 `toggle-track` / `toggle-knob`、开启态带 `.on`，
+  状态文案随开关变化；并断言开关文字颜色来自主题 token、不含硬编码色值。
+
 ## 0.13.0 — 记录页语义检索与测试内存修复
 
 - **记录页可以主动做语义检索**：搜索框旁边新增「语义检索」开关。开启后搜索不再做关键词过滤，
