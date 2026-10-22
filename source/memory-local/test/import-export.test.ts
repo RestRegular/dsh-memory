@@ -66,6 +66,34 @@ test('importRecords: 往返导入 + 重复按内容跳过', async () => {
   }
 })
 
+test('importRecords: 状态过期时间与流程触发词随导出往返', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-import-'))
+  const other = mkdtempSync(join(tmpdir(), 'dsh-memory-import-'))
+  const a = fresh(dir)
+  const b = fresh(other)
+  try {
+    const state = await a.save({
+      scope: 'project:C:\\w', kind: 'state', content: '部署在测试环境',
+      expiresAt: Date.now() + 86_400_000,
+    })
+    await a.save({
+      scope: 'global', kind: 'procedure', content: '发布流程',
+      triggers: ['npm', 'publish'],
+    })
+    const doc = a.exportAll()
+    const imported = await b.importRecords(doc)
+    assert.deepEqual({ imported: imported.imported, rejected: imported.rejected }, { imported: 2, rejected: 0 })
+    const records = b.listSync({ scopes: ['global', 'project:C:\\w'], includeExpired: true })
+    const restoredState = records.find((r) => r.kind === 'state')!
+    assert.equal(restoredState.expiredAt, state.expiredAt)
+    const restoredProcedure = records.find((r) => r.kind === 'procedure')!
+    assert.deepEqual((restoredProcedure as never as { triggers?: string[] }).triggers, ['npm', 'publish'])
+  } finally {
+    a.flushSync(); b.flushSync()
+    rmSync(dir, { recursive: true, force: true }); rmSync(other, { recursive: true, force: true })
+  }
+})
+
 test('importRecords: 坏条目计入 rejected,不中断其余条目', async () => {
   await withDir(async (svc) => {
     const result = await svc.importRecords({

@@ -1845,6 +1845,10 @@ export class LocalMemoryService                             {
                         
                        
                        
+                               
+                         
+                                   
+                        
       
     {
     this.discoverScopes()
@@ -1859,6 +1863,10 @@ export class LocalMemoryService                             {
           importance: rec.importance,
           createdAt: rec.createdAt,
           updatedAt: rec.updatedAt,
+          ...(Array.isArray((rec                                         ).triggers)
+            ? { triggers: ((rec                                         ).triggers             ).map(String) }
+            : {}),
+          ...(rec.expiredAt !== undefined ? { expiredAt: rec.expiredAt } : {}),
         })
       }
     }
@@ -1885,7 +1893,10 @@ export class LocalMemoryService                             {
     const errors           = []
     for (const [index, raw] of list.entries()) {
       try {
-        const rec = raw                                                                                                
+        const rec = raw     
+                                                                                                  
+                                                 
+         
         const content = typeof rec.content === 'string' ? rec.content : ''
         if (content.trim().length === 0) throw new Error('content 为空')
         const normalized = normalizeScopeInput(typeof rec.scope === 'string' ? rec.scope : undefined)
@@ -1902,7 +1913,9 @@ export class LocalMemoryService                             {
           content,
           ...(Array.isArray(rec.tags) ? { tags: rec.tags.map(String) } : {}),
           ...(typeof rec.importance === 'number' ? { importance: rec.importance } : {}),
-        })
+          ...(Array.isArray(rec.triggers) ? { triggers: rec.triggers.map(String) } : {}),
+          ...(typeof rec.expiredAt === 'number' && Number.isFinite(rec.expiredAt) ? { expiresAt: rec.expiredAt } : {}),
+        }                   )
         imported += 1
       } catch (error) {
         rejected += 1

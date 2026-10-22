@@ -1845,6 +1845,10 @@ export class LocalMemoryService implements MemoryServiceApi {
       importance: number
       createdAt: number
       updatedAt: number
+      /** 流程触发词(0.15.1 起导出)。 */
+      triggers?: string[]
+      /** 状态记忆的过期时间(0.15.0 起导出)。 */
+      expiredAt?: number
     }>
   } {
     this.discoverScopes()
@@ -1859,6 +1863,10 @@ export class LocalMemoryService implements MemoryServiceApi {
           importance: rec.importance,
           createdAt: rec.createdAt,
           updatedAt: rec.updatedAt,
+          ...(Array.isArray((rec as MemoryRecord & { triggers?: unknown }).triggers)
+            ? { triggers: ((rec as MemoryRecord & { triggers?: unknown }).triggers as unknown[]).map(String) }
+            : {}),
+          ...(rec.expiredAt !== undefined ? { expiredAt: rec.expiredAt } : {}),
         })
       }
     }
@@ -1885,7 +1893,10 @@ export class LocalMemoryService implements MemoryServiceApi {
     const errors: string[] = []
     for (const [index, raw] of list.entries()) {
       try {
-        const rec = raw as { scope?: unknown; kind?: unknown; content?: unknown; tags?: unknown; importance?: unknown }
+        const rec = raw as {
+          scope?: unknown; kind?: unknown; content?: unknown; tags?: unknown; importance?: unknown
+          triggers?: unknown; expiredAt?: unknown
+        }
         const content = typeof rec.content === 'string' ? rec.content : ''
         if (content.trim().length === 0) throw new Error('content 为空')
         const normalized = normalizeScopeInput(typeof rec.scope === 'string' ? rec.scope : undefined)
@@ -1902,7 +1913,9 @@ export class LocalMemoryService implements MemoryServiceApi {
           content,
           ...(Array.isArray(rec.tags) ? { tags: rec.tags.map(String) } : {}),
           ...(typeof rec.importance === 'number' ? { importance: rec.importance } : {}),
-        })
+          ...(Array.isArray(rec.triggers) ? { triggers: rec.triggers.map(String) } : {}),
+          ...(typeof rec.expiredAt === 'number' && Number.isFinite(rec.expiredAt) ? { expiresAt: rec.expiredAt } : {}),
+        } as MemorySaveInput)
         imported += 1
       } catch (error) {
         rejected += 1
