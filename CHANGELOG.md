@@ -2,6 +2,12 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.14.2 — 修复轨迹 callId 解析，审计页签不再全空；行内有审计图标
+
+- **根因**：Trajectory 把 `trajectoryVirtualRecordKey()` 的结果写入 `data-trajectory-row-key`，而该函数会先 `encodeURIComponent`，DOM 上实际是 `tool%00call%00<callId>`。旧解析按原始 `\0call\0` 分隔符找，永远拿不到 callId，详情页签就用空锚点查询，所以无论点哪条记录都没有审计内容；行徽标也因此从不出现。现在先 `decodeURIComponent` 再解析，并剥掉 `\0summary\0<kind>` 后缀；未编码的旧格式也继续兼容。
+- **轨迹行图标**：有记忆审计的调用行左侧显示产品年轮线条图标（12px、`fill:none`、1.3 描边、跟随 currentColor），点击直接打开该调用的记忆审计；没有审计的行不显示。图标用 `shell.overlay` 固定定位，不插轨迹表格 DOM。
+- 回归测试：编码 key / 未编码 key / collapsed summary 后缀；详情页签能拿到 call-1；行标记只命中 call-1、不命中 call-2。
+
 ## 0.14.1 — 移除头部入口，记忆视图内滚，轨迹详情加审计页签
 
 - **移除会话头部的「记忆审计」按钮**：入口收敛到会话内的「记忆」视图和轨迹详情页签，不再占用标题行。

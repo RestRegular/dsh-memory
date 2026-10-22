@@ -477,6 +477,10 @@ window.__ModuleLoader__.load({
       '.mem-traj-chip{position:fixed;z-index:70;display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 42%,var(--dsw-alias-border-l1));border-radius:999px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-brand-primary);font-size:10px;line-height:1;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.18);white-space:nowrap}',
       '.mem-traj-chip:hover{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 10%,var(--dsw-alias-bg-layer-1))}',
       '.mem-traj-chip .dot{width:5px;height:5px;border-radius:50%;background:currentColor}',
+      // 轨迹行左侧的线条图标标记（年轮）。只做指示，点击直接打开该调用的审计。
+      '.mem-traj-mark{position:fixed;z-index:69;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;padding:0;border:0;border-radius:4px;background:transparent;color:color-mix(in srgb,var(--dsw-alias-brand-primary) 74%,var(--dsw-alias-label-secondary));cursor:pointer;pointer-events:auto;opacity:.9}',
+      '.mem-traj-mark:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-brand-primary);opacity:1}',
+      '.mem-traj-mark:focus-visible{outline:1px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
       '@media (max-width:900px){.memp .audit-split.has-detail{grid-template-columns:minmax(0,1fr)}.memp .audit-row{grid-template-columns:54px 120px 120px minmax(100px,1fr) 96px 100px 80px}.memp .audit-table-head{grid-template-columns:54px 120px 120px minmax(100px,1fr) 96px 100px 80px}}',
       '@media (max-width:620px){.memp .audit-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.memp .audit-table-head{display:none}.memp .audit-row{display:flex;flex-wrap:wrap;gap:4px 8px}.memp .audit-row .col-trigger,.memp .audit-row .col-budget{display:none}.memp .audit-row .col-nums{margin-left:auto}.memp .audit-row .col-time{order:1}.memp .audit-row .col-channel{order:2}.memp .audit-row .col-delivery{order:3}.memp .audit-row .col-outcome{order:4;margin-left:auto}.memp .audit-filter-row input[type=text],.memp .audit-filter-row input[type=search]{max-width:none;flex:1}.memp .audit{height:calc(100vh - 150px);max-height:calc(100vh - 150px)}.memp .audit-detail{max-height:calc(100vh - 280px)}}',
     ].join('')
@@ -2157,14 +2161,24 @@ window.__ModuleLoader__.load({
       return signalCall !== '' ? signalCall : undefined
     }
 
-    /** Trajectory 的行 key 形如 `tool\0call\0<callId>`；解析失败返回 undefined。 */
+    /**
+     * Trajectory 的行 key 形如 `tool\0call\0<callId>`，但 DOM 上看到的是
+     * `trajectoryVirtualRecordKey()` 返回的 **URI 编码**（`tool%00call%00callId`）。
+     * 必须 decode 一次再解析；collapsed summary 还会追加 `\0summary\0<kind>`。
+     */
     function trajectoryRowCallId(row) {
       try {
-        const key = row && typeof row.getAttribute === 'function' ? row.getAttribute('data-trajectory-row-key') : ''
-        if (typeof key !== 'string') return undefined
+        const raw = row && typeof row.getAttribute === 'function' ? row.getAttribute('data-trajectory-row-key') : ''
+        if (typeof raw !== 'string' || raw === '') return undefined
+        let key = raw
+        try { key = decodeURIComponent(raw) } catch { /* 不是合法编码时按原文解析 */ }
         const sep = '\u0000call\u0000'
         const at = key.indexOf(sep)
-        return at >= 0 ? key.slice(at + sep.length) : undefined
+        if (at < 0) return undefined
+        const rest = key.slice(at + sep.length)
+        const cut = rest.indexOf('\u0000')
+        const callId = cut < 0 ? rest : rest.slice(0, cut)
+        return callId === '' ? undefined : callId
       } catch {
         return undefined
       }
@@ -3715,6 +3729,121 @@ window.__ModuleLoader__.load({
       }, h('span', { className: 'dot' }), `记忆 ${badge.entries.length}`)
     }
 
+    /** 轨迹行左侧的「产品线条图标」标记：有记忆审计的调用才显示。 */
+    function TrajectoryMemoryMarks() {
+      const [marks, setMarks] = React.useState([])
+      const cacheRef = React.useRef(new Map())
+      React.useEffect(() => {
+        let disposed = false
+        let raf = 0
+        const rafFn = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : ((fn) => setTimeout(fn, 16))
+        const cancelFn = typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : ((id) => clearTimeout(id))
+        const same = (a, b) => a.length === b.length && a.every((mark, index) => {
+          const other = b[index]
+          return other !== undefined
+            && mark.callId === other.callId
+            && Math.abs(mark.top - other.top) < 1
+            && Math.abs(mark.left - other.left) < 1
+            && mark.count === other.count
+        })
+        const tick = () => {
+          try {
+            if (disposed || typeof document === 'undefined' || typeof window === 'undefined') return
+            const sessionId = currentSessionId()
+            if (sessionId === undefined) { setMarks([]); return }
+            const rows = [...document.querySelectorAll('tr[data-trajectory-row-key]')]
+            if (rows.length === 0) { setMarks([]); return }
+            const visible = new Map()
+            for (const row of rows) {
+              const callId = trajectoryRowCallId(row)
+              if (callId === undefined) continue
+              const rect = row.getBoundingClientRect()
+              if (rect.bottom < 0 || rect.top > window.innerHeight || rect.height <= 0) continue
+              visible.set(callId, rect)
+            }
+            if (visible.size === 0) { setMarks([]); return }
+            const cached = cacheRef.current.get(sessionId)
+            const now = Date.now()
+            if (cached && cached.pending === true) return
+            if (!cached || now - cached.at > 3000) {
+              cacheRef.current.set(sessionId, { at: now, pending: true, byOp: new Map() })
+              api(`audit?session=${encodeURIComponent(sessionId)}&limit=200`)
+                .then((value) => {
+                  const byOp = new Map()
+                  const entries = value && Array.isArray(value.entries) ? value.entries : []
+                  for (const entry of entries) {
+                    const callId = auditEntryCallId(entry)
+                    if (callId !== undefined) byOp.set(callId, (byOp.get(callId) ?? 0) + 1)
+                  }
+                  cacheRef.current.set(sessionId, { at: Date.now(), pending: false, byOp })
+                  if (!disposed) schedule()
+                })
+                .catch(() => {
+                  cacheRef.current.set(sessionId, { at: Date.now(), pending: false, byOp: new Map() })
+                })
+              if (!cached) return
+            }
+            const byOp = cached && cached.byOp instanceof Map ? cached.byOp : null
+            if (byOp === null) return
+            const next = []
+            for (const [callId, rect] of visible) {
+              const count = byOp.get(callId)
+              if (count === undefined) continue
+              next.push({
+                callId,
+                count,
+                top: Math.max(2, rect.top + (rect.height - 16) / 2),
+                left: Math.max(2, rect.left + 22),
+                sessionId,
+              })
+            }
+            setMarks((prev) => same(prev, next) ? prev : next)
+          } catch { /* 观察失败：保持现状 */ }
+        }
+        const schedule = () => {
+          if (disposed || raf !== 0) return
+          raf = rafFn(() => { raf = 0; tick() })
+        }
+        let observer = null
+        try {
+          observer = new MutationObserver(schedule)
+          observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-selected'] })
+        } catch { observer = null }
+        const onScroll = () => schedule()
+        let timer = null
+        try {
+          window.addEventListener('scroll', onScroll, true)
+          window.addEventListener('resize', onScroll)
+          timer = setInterval(tick, 800)
+        } catch { /* 非浏览器环境 */ }
+        schedule()
+        return () => {
+          disposed = true
+          if (raf !== 0) cancelFn(raf)
+          if (timer !== null) clearInterval(timer)
+          try { observer?.disconnect() } catch { /* 已断开 */ }
+          try {
+            window.removeEventListener('scroll', onScroll, true)
+            window.removeEventListener('resize', onScroll)
+          } catch { /* 非浏览器环境 */ }
+        }
+      }, [])
+      if (marks.length === 0) return null
+      return h(React.Fragment, null, marks.map((mark) => h('button', {
+        key: `${mark.sessionId}:${mark.callId}`,
+        className: 'mem-traj-mark',
+        style: { top: mark.top, left: mark.left },
+        title: `这次调用有 ${mark.count} 条记忆审计；点击在记忆面板里查看`,
+        onClick: (event) => {
+          try { event.stopPropagation() } catch { /* 忽略 */ }
+          openMemoryAuditPanel({ sessionId: mark.sessionId, callId: mark.callId })
+        },
+      }, h('svg', { width: 12, height: 12, viewBox: NAV_VIEW_BOX, fill: 'none', 'aria-hidden': 'true' },
+        h('rect', { ...NAV_FRAME, fill: 'none', stroke: 'currentColor', strokeWidth: 1.3 }),
+        h('path', { d: NAV_RING, fill: 'none', stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round', strokeLinejoin: 'round' }),
+      ))))
+    }
+
     /**
      * 轨迹详情面板里的「记忆审计」页签。
      *
@@ -4112,6 +4241,15 @@ window.__ModuleLoader__.load({
         try {
           slots.inject('shell.overlay', () => slots.register({
             name: 'shell.overlay',
+            id: 'memory-audit-marks',
+            order: 59,
+          }, () => React.createElement(TrajectoryMemoryMarks)))
+        } catch (error) {
+          console.warn('[dsh-memory] 轨迹行记忆标记注册失败:', error?.message)
+        }
+        try {
+          slots.inject('shell.overlay', () => slots.register({
+            name: 'shell.overlay',
             id: 'memory-audit-badge',
             order: 60,
           }, () => React.createElement(TrajectoryMemoryBadge)))
@@ -4255,6 +4393,7 @@ window.__ModuleLoader__.load({
       // 审计 ↔ 轨迹桥（测试只覆盖纯解析/焦点总线，不碰宿主 slot 实例）
       MemoryAuditView: MemoryAuditView,
       TrajectoryMemoryBadge: TrajectoryMemoryBadge,
+      TrajectoryMemoryMarks: TrajectoryMemoryMarks,
       TrajectoryDetailAudit: TrajectoryDetailAudit,
       auditEntryCallId: auditEntryCallId,
       trajectoryRowCallId: trajectoryRowCallId,

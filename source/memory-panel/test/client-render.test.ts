@@ -1403,11 +1403,17 @@ test('审计条目的轨迹锚点解析：operationId 优先，其次 signal.cal
   assert.equal(testApi.auditEntryCallId({ signal: { callId: 'call-3' } }), 'call-3')
   assert.equal(testApi.auditEntryCallId({}), undefined)
 
-  // Trajectory 的行 key：kind\0call\0<callId>；非 call 行不产生锚点。
+  // Trajectory 的行 key：kind\0call\0<callId>，但 DOM 属性经过 encodeURIComponent。
+  assert.equal(testApi.trajectoryRowCallId({
+    getAttribute: (name: string) => name === 'data-trajectory-row-key' ? 'tool%00call%00call-9' : null,
+  }), 'call-9')
   assert.equal(testApi.trajectoryRowCallId({
     getAttribute: (name: string) => name === 'data-trajectory-row-key' ? 'tool\u0000call\u0000call-9' : null,
-  }), 'call-9')
-  assert.equal(testApi.trajectoryRowCallId({ getAttribute: () => 'message\u0000abc' }), undefined)
+  }), 'call-9', '未编码的旧格式也认')
+  assert.equal(testApi.trajectoryRowCallId({
+    getAttribute: () => 'tool%00call%00call-9%00summary%00turn',
+  }), 'call-9', 'collapsed summary 后缀不影响 callId')
+  assert.equal(testApi.trajectoryRowCallId({ getAttribute: () => 'message%00abc' }), undefined)
   assert.equal(testApi.trajectoryRowCallId(null), undefined)
 
   // 焦点总线只把目标交给匹配的受众（主面板 vs 会话内视图）。
@@ -1508,7 +1514,7 @@ test('client apply 注册记忆视图、轨迹徽标与详情页签', async () =
   assert.equal(spec('conversation.view')?.id, 'memory', '会话内「记忆」视图已注册')
   assert.ok(!registered.some((entry) => entry.spec.name === 'conversation.session.header.actions'), '会话头部不再注册记忆按钮')
   const overlays = registered.filter((entry) => entry.spec.name === 'shell.overlay').map((entry) => entry.spec.id)
-  assert.deepEqual(overlays.sort(), ['memory-audit-badge', 'memory-audit-detail'], '轨迹徽标 + 轨迹详情页签浮层已注册')
+  assert.deepEqual(overlays.sort(), ['memory-audit-badge', 'memory-audit-detail', 'memory-audit-marks'], '轨迹标记/徽标/详情页签浮层已注册')
   assert.ok(injected.includes('conversation.view'))
   assert.ok(!injected.includes('conversation.session.header.actions'))
   assert.ok(injected.includes('shell.overlay'))
@@ -1549,7 +1555,7 @@ test('轨迹详情页签展示该 callId 的审计并可打开本会话面板', 
     querySelector: (selector: string) => selector.includes('_detailTabs') ? tabs : selector.includes('_detailBody') ? body : null,
   }
   const row = {
-    getAttribute: (name: string) => name === 'data-trajectory-row-key' ? 'tool\u0000call\u0000call-9' : null,
+    getAttribute: (name: string) => name === 'data-trajectory-row-key' ? 'tool%00call%00call-9' : null,
     getBoundingClientRect: () => rect(0, 180, 700, 30),
   }
   const fakeDocument = {
@@ -1610,6 +1616,68 @@ test('轨迹详情页签展示该 callId 的审计并可打开本会话面板', 
   globals.document = saved.document
   globals.fetch = saved.fetch
   hooks.resetAll()
+})
+
+test('轨迹列表给有审计的调用加产品线条图标', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const testApi = exports.__test as {
+    TrajectoryMemoryMarks: (p: Record<string, unknown>) => unknown
+    setClientCtx: (ctx: unknown) => void
+  }
+  const rect = (left: number, top: number, width: number, height: number) => ({
+    left, top, right: left + width, bottom: top + height, width, height,
+  })
+  const row = (key: string, top: number) => ({
+    getAttribute: (name: string) => name === 'data-trajectory-row-key' ? key : null,
+    getBoundingClientRect: () => rect(100, top, 700, 30),
+  })
+  const rows = [row('tool%00call%00call-1', 200), row('tool%00call%00call-2', 240)]
+  const globals = globalThis as Record<string, unknown>
+  const saved = { window: globals.window, document: globals.document, fetch: globals.fetch }
+  globals.window = { innerWidth: 1200, innerHeight: 900, addEventListener() {}, removeEventListener() {} }
+  globals.document = {
+    body: {},
+    querySelectorAll: (selector: string) => selector.includes('tr[data-trajectory-row-key]') ? rows : [],
+  }
+  globals.fetch = async () => ({
+    status: 200,
+    json: async () => ({
+      ok: true,
+      value: {
+        entries: [
+          { id: 'a1', seq: 1, at: Date.now(), sessionId: 's1', kind: 'signal', channel: 'signal', stage: 'tool_call', outcome: 'success', operationId: 'call-1' },
+          { id: 'a2', seq: 2, at: Date.now(), sessionId: 's1', kind: 'signal', channel: 'signal', stage: 'tool_call', outcome: 'success', operationId: 'call-1' },
+        ],
+        total: 2,
+        stats: { entries: 2, capacity: 2000, perSessionCapacity: 200, dropped: 0, writeErrors: 0, persistence: 'memory' },
+      },
+    }),
+  })
+  testApi.setClientCtx({
+    get: (name: string) => name === 'uiWorkspace'
+      ? { sessions: { list: { getSnapshot: () => ({ byId: { s1: { id: 's1', retainedBy: { mainView: 1 } } } }) } } }
+      : undefined,
+  })
+  const Component = testApi.TrajectoryMemoryMarks
+  const element = () => hooks.React.createElement(Component, {})
+  let current: RenderNode | null = render(element(), hooks)
+  hooks.setRerender(() => { current = render(element(), hooks) })
+  try {
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 160))
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    const markNodes = collect(current).filter((n) => String(n.props?.className ?? '').split(/\s+/).includes('mem-traj-mark'))
+    assert.equal(markNodes.length, 1, '只有 call-1 有审计，call-2 不标记')
+    assert.ok(String(markNodes[0].props?.title ?? '').includes('2 条记忆审计'), '图标 title 带审计条数')
+    assert.ok(Number(markNodes[0].props?.style?.top) > 200, '图标跟随行位置')
+  } finally {
+    ;(testApi.setClientCtx as (v: unknown) => void)(null)
+    globals.window = saved.window
+    globals.document = saved.document
+    globals.fetch = saved.fetch
+    hooks.resetAll()
+  }
 })
 
 test('审计详情能把 operationId 精确送到轨迹视图', async () => {
