@@ -413,20 +413,27 @@ export function apply(ctx         , config                     = {}) {
           const args = typeof data.arguments === 'string'
             ? data.arguments
             : (() => { try { return JSON.stringify(data.arguments ?? '') } catch { return '' } })()
-          const description = auto.useToolDescription ? toolCallDescription(data.arguments) : undefined
+          // 工具调用必须有显式的 description 才允许触发高风险召回：
+          // 没有 description 的工具（memory_search、memory_*、以及其它不带该字段的
+          // 工具）不应该因为参数/工具名里恰好出现标签就再注入一次记忆——尤其
+          // memory_search 本身就是取记忆，再触发一次会把摘要/正文重复塞进上下文。
+          const rawDescription = toolCallDescription(data.arguments)
+          const description = auto.useToolDescription ? rawDescription : undefined
           rememberCallMeta(data.callId, tool, description)
           const turn = typeof data.turn === 'number' ? data.turn : undefined
           const step = typeof data.step === 'number' ? data.step : undefined
-          observeSignal(sessionId, highRiskSignal(tool, args, {
-            tags,
-            ...(description !== undefined ? { description } : {}),
-            ...(callId !== undefined ? { callId } : {}),
-            useToolDescription: auto.useToolDescription,
-            maxQueryChars: auto.maxQueryChars,
-          }), {
-            ...(turn !== undefined ? { turn } : {}),
-            ...(step !== undefined ? { step } : {}),
-          })
+          if (!MEMORY_TOOL_NAMES.has(tool) && rawDescription !== undefined && rawDescription !== '') {
+            observeSignal(sessionId, highRiskSignal(tool, args, {
+              tags,
+              ...(description !== undefined ? { description } : {}),
+              ...(callId !== undefined ? { callId } : {}),
+              useToolDescription: auto.useToolDescription,
+              maxQueryChars: auto.maxQueryChars,
+            }), {
+              ...(turn !== undefined ? { turn } : {}),
+              ...(step !== undefined ? { step } : {}),
+            })
+          }
           return
         }
         if (type === 'tool/result') {

@@ -200,8 +200,7 @@ memory_forget({ "id": "3f2a9c1d" })          // 按内容删：memory_forget({ q
 | 行为召回 | 可见文本 / 任务 / 命令 / 工具失败 | 命中标签后，在**下一个** `agent/pre-step` 定向检索；工具失败优先用该工具自己的 description |
 
 行为召回只检索 **global + 当前会话 + 当前工作区**，不把自定义作用域或 fork 父会话带进来。
-匹配源包括可见 assistant 文本、todo、`command/run`、`goal/change`、`tool/call` 的
-name / description / 参数，以及工具失败描述；**不读取隐藏思维链**。
+匹配源包括可见 assistant 文本、todo、`command/run`、`goal/change`、带 `description` 的 `tool/call`，以及工具失败描述；**没有 `description` 的工具调用不触发**，`memory_*` 工具一律不触发（`memory_search` 本身在取记忆，再召回一次只会重复注入）。**不读取隐藏思维链**。
 
 ### 规则会跟进旧会话
 

@@ -190,7 +190,7 @@ test('工具信号携带 operationId/turn/step，审计可以直接锚回轨迹'
   assert.equal(signal!.signal?.callId, 'call-9')
 })
 
-test('记忆工具调用即使自动召回关闭也留一条轨迹锚点', async () => {
+test('记忆工具调用即使自动召回关闭也留一条轨迹锚点', () => {
   const settings = {
     ...defaultInjectSettings,
     autoRecall: { ...defaultInjectSettings.autoRecall, enabled: false },
@@ -209,4 +209,38 @@ test('记忆工具调用即使自动召回关闭也留一条轨迹锚点', async
   assert.equal(entry!.step, 4)
   assert.equal(entry!.signal?.callId, 'call-mem')
 })
+
+test('记忆工具和没有 description 的工具不触发高风险召回信号', () => {
+  const settings = {
+    ...defaultInjectSettings,
+    autoRecall: { ...defaultInjectSettings.autoRecall, enabled: true, useMemoryTags: false, tags: ['release', 'memory'] },
+    recall: { ...defaultInjectSettings.recall, enabled: false },
+  }
+  const { handlers, attached } = setup({ settings })
+  const onEvent = handlers.get('session/event')
+  assert.ok(onEvent)
+  // memory_search 的参数里有 release/memory，但它本身就是取记忆，不能再触发一次召回。
+  onEvent!({ id: 's1' }, {
+    type: 'tool/call',
+    data: {
+      name: 'memory_search', callId: 'call-mem', turn: 1, step: 1,
+      arguments: JSON.stringify({ query: 'release memory 发布', topK: 5 }),
+    },
+  })
+  // 其它没有 description 字段的工具同样不触发。
+  onEvent!({ id: 's1' }, {
+    type: 'tool/call',
+    data: { name: 'write', callId: 'call-write', turn: 1, step: 2, arguments: JSON.stringify({ path: 'x', content: 'npm publish' }) },
+  })
+  onEvent!({ id: 's1' }, {
+    type: 'tool/call',
+    data: { name: 'ops_bash', callId: 'call-bash', turn: 1, step: 3, arguments: JSON.stringify({ command: 'npm publish' }) },
+  })
+  const entries = attached.current!.list()
+  assert.equal(entries.filter((entry) => entry.kind === 'signal' && entry.stage === 'signal_queued').length, 0, '没有 description 的调用不排队信号')
+  const anchor = entries.find((entry) => entry.stage === 'tool_call')
+  assert.ok(anchor, 'memory_search 仍保留轨迹锚点')
+  assert.equal(anchor!.operationId, 'call-mem')
+})
+
 

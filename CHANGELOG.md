@@ -2,6 +2,13 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.14.7 — memory_search / 无 description 的工具不再触发自动召回
+
+- **根因**：`tool/call` 的高风险召回信号不看 `description` 是否存在，直接把工具名 + 参数拼进匹配文本。`memory_search` 的 `query` 一旦含标签（包括默认的记忆标签），就会排队一次 `before_high_risk_tool` 信号；下一步强制召回，和已经注入的摘要/正文重复。
+- **修复**：只有带非空 `description` 的工具调用才允许触发高风险召回；`memory_*` 工具一律跳过（它本身就在读记忆）。工具失败信号保持原行为，不受此限制。
+- 记忆工具调用仍保留一条 `stage: tool_call` 的审计锚点，只用于轨迹关联，**不会排队召回**。
+- 回归测试：`memory_search`、无 `description` 的 `write` / `ops_bash` 都不产生 `signal_queued`；`memory_search` 的轨迹锚点仍在。
+
 ## 0.14.6 — 审计记忆 ID 跳转后自动展开并滚到目标记录
 
 - **现象**：在审计详情里点某个记忆 ID，会切到记录页，但目标记录没有展开，看起来像没跳成功。
