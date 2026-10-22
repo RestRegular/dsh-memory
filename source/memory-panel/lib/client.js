@@ -445,11 +445,34 @@ window.__ModuleLoader__.load({
       '.mem-view-head b{font-size:14px}',
       '.mem-view-head .muted{font-size:11.5px;color:var(--dsw-alias-label-secondary)}',
       '.mem-view-head .spacer{flex:1}',
+      // 记忆视图自己占满 viewArea，并声明 composer overlay：壳层会把 viewArea
+      // 压成 flex:1 1 0 / min-height:0，滚动只发生在审计列表里，外层不再跟着滚。
+      '.mem-view{display:flex;flex-direction:column;gap:10px;padding:12px 14px calc(var(--dsh-composer-height,152px) + 14px);min-height:0;height:100%;box-sizing:border-box;overflow:hidden;color:var(--dsw-alias-label-primary)}',
       '.mem-view-body{min-height:0;flex:1;display:flex;flex-direction:column;overflow:hidden}',
-      '.mem-view .audit{height:auto;max-height:none;flex:1}',
-      // 会话标题行里的入口：和宿主 header 的紧凑按钮同高，只借边框/文字色。
-      '.mem-head-btn{border:1px solid transparent;border-radius:6px;background:none;color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:20px;padding:0 7px;cursor:pointer;white-space:nowrap}',
-      '.mem-head-btn:hover{border-color:var(--dsw-alias-border-l1);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
+      '.mem-view .audit{height:100%;max-height:none;min-height:0;flex:1;overflow:hidden}',
+      '.mem-view .audit-split{min-height:0}',
+      '.mem-view .audit-detail{max-height:100%}',
+      // 轨迹详情面板的「记忆审计」页签。Trajectory 没有行级/页签级 slot，所以
+      // 按钮和面板都放在 shell.overlay 里用 fixed 定位贴着详情面板；不在 React
+      // 管理的 tabs 行里插 DOM，避免被轨迹的重渲染清掉。
+      '.mem-traj-audit-tab{position:fixed;z-index:71;box-sizing:border-box;display:flex;align-items:center;justify-content:center;height:26px;padding:0 8px;border:0;border-bottom:2px solid transparent;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-tertiary);font-size:13px;font-weight:500;line-height:16px;white-space:nowrap;cursor:pointer;pointer-events:auto}',
+      '.mem-traj-audit-tab:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}',
+      '.mem-traj-audit-tab.on{color:var(--dsw-alias-state-business-primary);border-bottom-color:var(--dsw-alias-state-business-primary)}',
+      '.mem-traj-audit-pane{position:fixed;z-index:72;box-sizing:border-box;display:flex;flex-direction:column;overflow:hidden;border-left:.5px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1);pointer-events:auto}',
+      '.mem-traj-audit-pane-head{display:flex;align-items:center;gap:8px;flex:none;padding:8px 10px;border-bottom:.5px solid var(--dsw-alias-border-l1)}',
+      '.mem-traj-audit-pane-head b{font-size:12px}',
+      '.mem-traj-audit-pane-head .spacer{flex:1}',
+      '.mem-traj-audit-pane-body{flex:1;min-height:0;overflow:auto;padding:6px 10px 10px;display:flex;flex-direction:column;gap:6px}',
+      '.mem-traj-audit-pane-foot{flex:none;display:flex;gap:6px;align-items:center;padding:8px 10px;border-top:.5px solid var(--dsw-alias-border-l1)}',
+      '.mem-traj-audit-pane-foot .spacer{flex:1}',
+      '.mem-traj-audit-row{display:flex;flex-direction:column;gap:4px;text-align:left;width:100%;box-sizing:border-box;padding:7px 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);cursor:pointer;color:inherit;font-size:11.5px}',
+      '.mem-traj-audit-row:hover{border-color:var(--dsw-alias-brand-primary)}',
+      '.mem-traj-audit-row-top{display:flex;align-items:center;gap:6px;min-width:0}',
+      '.mem-traj-audit-row-top .t{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10px;color:var(--dsw-alias-label-secondary);flex:none}',
+      '.mem-traj-audit-row-top .ch{font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.mem-traj-audit-row-meta{font-size:10.5px;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.mem-traj-audit-row-ids{display:flex;flex-wrap:wrap;gap:3px;max-height:44px;overflow:hidden}',
+      '.mem-traj-audit-empty{padding:16px 8px;color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:1.6}',
       // 轨迹行上的记忆徽标：fixed 定位在选中行右侧，不改轨迹表格结构。
       '.mem-traj-chip{position:fixed;z-index:70;display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 42%,var(--dsw-alias-border-l1));border-radius:999px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-brand-primary);font-size:10px;line-height:1;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.18);white-space:nowrap}',
       '.mem-traj-chip:hover{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 10%,var(--dsw-alias-bg-layer-1))}',
@@ -2147,17 +2170,6 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function selectedTrajectoryCallId() {
-      try {
-        const row = typeof document !== 'undefined'
-          ? document.querySelector('tr[data-selected="true"][data-trajectory-row-key]')
-          : null
-        return row === null ? undefined : trajectoryRowCallId(row)
-      } catch {
-        return undefined
-      }
-    }
-
     /**
      * `conversation.session` 注册时把 per-session store 交给 slot 服务；服务把实例
      * 放在 `_stores` 的 handle 记录里，按 session id 解析。这是主面板唯一能拿到
@@ -3577,7 +3589,12 @@ window.__ModuleLoader__.load({
           if (typeof openView === 'function') openView('trajectory', focus)
         } catch { /* 视图不可用时保持在本页 */ }
       }
-      return h('div', { className: 'memp mem-view' },
+      return h('div', {
+        className: 'memp mem-view',
+        // 让宿主把 composer 浮起来、把 viewArea 压成固定高度（与 Trajectory 同一机制），
+        // 否则外层 scrollBody 会滚动，审计列表拿不到自己的滚动视口。
+        'data-conversation-composer-overlay': '',
+      },
         h('div', { className: 'mem-view-head' },
           h('b', null, '记忆审计'),
           h('span', { className: 'muted' }, '本会话的注入评估、投递与记忆工具调用；选中一条可在轨迹里精确定位。'),
@@ -3598,21 +3615,6 @@ window.__ModuleLoader__.load({
           }),
         ),
       )
-    }
-
-    /** 会话头部的入口：有选中轨迹行时自动带上 callId，直接落到那组审计。 */
-    function MemoryHeaderAction({ sessionId }) {
-      return h('button', {
-        className: 'mem-head-btn',
-        title: '查看本会话的记忆审计（若轨迹里选中了工具行，会定位到该调用）',
-        onClick: () => {
-          const callId = selectedTrajectoryCallId()
-          openMemoryAuditPanel({
-            sessionId,
-            ...(callId !== undefined ? { callId } : {}),
-          })
-        },
-      }, '记忆审计')
     }
 
     /**
@@ -3711,6 +3713,257 @@ window.__ModuleLoader__.load({
           setBadge(null)
         },
       }, h('span', { className: 'dot' }), `记忆 ${badge.entries.length}`)
+    }
+
+    /**
+     * 轨迹详情面板里的「记忆审计」页签。
+     *
+     * Trajectory 的详情页签是包内私有的 `detailTabs` 数组，没有给插件留 slot。
+     * 这里不在 React 管理的 `<div data-slot>` 里插节点（会被重渲染清掉），而是：
+     *   1. 给详情页签行加 `padding-right` 预留 96px；
+     *   2. 在 `shell.overlay` 里用 fixed 定位渲染一个页签按钮，贴在保留区；
+     *   3. 点开后用 fixed 覆盖详情正文区域，展示这条记录的审计；
+     *   4. 页签/面板的位置随滚动、resize、详情切换重新测量。
+     * 选择器全部用 CSS Modules 的稳定后缀（`_details` / `_detailTabs` / `_detailBody`），
+     * 失配时什么都不显示，不影响轨迹本身。
+     */
+    function TrajectoryDetailAudit() {
+      const [layout, setLayout] = React.useState({
+        visible: false, tabTop: 0, tabLeft: 0, tabWidth: 88, paneTop: 0, paneLeft: 0, paneWidth: 0, paneHeight: 0,
+      })
+      const [open, setOpen] = React.useState(false)
+      const [callId, setCallId] = React.useState(undefined)
+      const [sessionId, setSessionId] = React.useState(undefined)
+      const [entries, setEntries] = React.useState([])
+      const [loading, setLoading] = React.useState(false)
+      const [error, setError] = React.useState('')
+      const layoutRef = React.useRef(layout)
+      const openRef = React.useRef(false)
+      const keyRef = React.useRef('')
+      const cacheRef = React.useRef(new Map())
+      const setOpenBoth = (value) => { openRef.current = value; setOpen(value) }
+
+      const loadAudit = (sid, cid) => {
+        const key = `${sid}|${cid}`
+        const cached = cacheRef.current.get(key)
+        if (cached && cached.pending === true) return
+        if (cached && Date.now() - cached.at < 4000) {
+          setEntries(cached.entries)
+          setLoading(false)
+          setError('')
+          return
+        }
+        cacheRef.current.set(key, { at: Date.now(), pending: true, entries: [] })
+        setLoading(true)
+        setError('')
+        api(`audit?session=${encodeURIComponent(sid)}&operation=${encodeURIComponent(cid)}&limit=50`)
+          .then((value) => {
+            const list = value && Array.isArray(value.entries) ? value.entries : []
+            cacheRef.current.set(key, { at: Date.now(), pending: false, entries: list })
+            if (keyRef.current === key) { setEntries(list); setLoading(false) }
+          })
+          .catch((reason) => {
+            cacheRef.current.set(key, { at: Date.now(), pending: false, entries: [] })
+            if (keyRef.current === key) { setEntries([]); setLoading(false); setError(String(reason?.message || reason)) }
+          })
+      }
+
+      React.useEffect(() => {
+        let disposed = false
+        let raf = 0
+        const rafFn = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : ((fn) => setTimeout(fn, 16))
+        const cancelFn = typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : ((id) => clearTimeout(id))
+        const apply = (next) => {
+          const prev = layoutRef.current
+          if (prev.visible === next.visible
+            && Math.abs(prev.tabTop - next.tabTop) < 1
+            && Math.abs(prev.tabLeft - next.tabLeft) < 1
+            && Math.abs(prev.paneTop - next.paneTop) < 1
+            && Math.abs(prev.paneLeft - next.paneLeft) < 1
+            && Math.abs(prev.paneWidth - next.paneWidth) < 1
+            && Math.abs(prev.paneHeight - next.paneHeight) < 1) return
+          layoutRef.current = next
+          setLayout(next)
+        }
+        const hide = () => {
+          apply({ visible: false, tabTop: 0, tabLeft: 0, tabWidth: 88, paneTop: 0, paneLeft: 0, paneWidth: 0, paneHeight: 0 })
+          keyRef.current = ''
+        }
+        const tick = () => {
+          try {
+            if (disposed || typeof document === 'undefined' || typeof window === 'undefined') return
+            const details = document.querySelector('[class*="_details"]')
+            if (details === null) { hide(); return }
+            const tabs = details.querySelector('[class*="_detailTabs"]')
+            const body = details.querySelector('[class*="_detailBody"]')
+            const row = document.querySelector('tr[data-selected="true"][data-trajectory-row-key]')
+            if (tabs === null || body === null || row === null) { hide(); return }
+            const detailsRect = details.getBoundingClientRect()
+            const tabsRect = tabs.getBoundingClientRect()
+            if (detailsRect.width < 220 || detailsRect.height < 120 || tabsRect.height === 0) { hide(); return }
+            const sid = currentSessionId()
+            if (sid === undefined) { hide(); return }
+            // 给受 React 管理的 tabs 行留出右侧空位；只改 style，不动 DOM 结构。
+            if (tabs.style.paddingRight !== '96px') tabs.style.paddingRight = '96px'
+            const cid = trajectoryRowCallId(row)
+            const key = `${sid}|${cid ?? ''}`
+            if (key !== keyRef.current) {
+              keyRef.current = key
+              setCallId(cid)
+              setSessionId(sid)
+              setOpenBoth(false)
+              if (cid === undefined) {
+                setEntries([])
+                setLoading(false)
+                setError('')
+              } else {
+                loadAudit(sid, cid)
+              }
+            }
+            const tabWidth = 88
+            const tabTop = tabsRect.top + 4
+            const tabLeft = Math.max(0, tabsRect.right - tabWidth - 4)
+            const paneTop = tabsRect.bottom
+            const paneLeft = detailsRect.left
+            const paneWidth = detailsRect.width
+            // 轨迹会把 composer 浮在面板底部；审计面板停在 composer 上沿，
+            // 避免把输入框盖住（composer 不存在/隐藏时退回面板底边）。
+            const composerSeat = document.querySelector('[class*="_composerSeat"]')
+            const composerRect = composerSeat ? composerSeat.getBoundingClientRect() : null
+            const paneBottom = composerRect !== null && composerRect.height > 0
+              ? Math.min(detailsRect.bottom, composerRect.top)
+              : detailsRect.bottom
+            const paneHeight = Math.max(0, paneBottom - tabsRect.bottom)
+            apply({ visible: true, tabTop, tabLeft, tabWidth, paneTop, paneLeft, paneWidth, paneHeight })
+          } catch { /* 观察失败：保持现状 */ }
+        }
+        const schedule = () => {
+          if (disposed || raf !== 0) return
+          raf = rafFn(() => { raf = 0; tick() })
+        }
+        let observer = null
+        try {
+          observer = new MutationObserver(schedule)
+          observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['data-selected', 'class', 'style'],
+          })
+        } catch { observer = null }
+        const onScroll = () => schedule()
+        let timer = null
+        try {
+          window.addEventListener('scroll', onScroll, true)
+          window.addEventListener('resize', onScroll)
+          timer = setInterval(tick, 700)
+        } catch { /* 非浏览器环境 */ }
+        const onDocClick = (event) => {
+          try {
+            const target = event.target
+            if (!target || typeof target.closest !== 'function') return
+            if (target.closest('.mem-traj-audit-tab') || target.closest('.mem-traj-audit-pane')) return
+            if (target.closest('[class*="_detailTab"]')) setOpenBoth(false)
+          } catch { /* 忽略 */ }
+        }
+        try { document.addEventListener('click', onDocClick, true) } catch { /* 忽略 */ }
+        schedule()
+        return () => {
+          disposed = true
+          if (raf !== 0) cancelFn(raf)
+          if (timer !== null) clearInterval(timer)
+          try { observer?.disconnect() } catch { /* 已断开 */ }
+          try {
+            window.removeEventListener('scroll', onScroll, true)
+            window.removeEventListener('resize', onScroll)
+            document.removeEventListener('click', onDocClick, true)
+          } catch { /* 非浏览器环境 */ }
+        }
+      }, [])
+
+      if (!layout.visible) return null
+      const toggle = () => setOpenBoth(!openRef.current)
+      const close = () => setOpenBoth(false)
+      const openInPanel = (entryId) => {
+        openMemoryAuditPanel({
+          sessionId,
+          ...(callId !== undefined ? { callId } : {}),
+          ...(entryId !== undefined ? { entryId } : {}),
+        })
+      }
+      const rowView = (entry) => {
+        const ids = entry.selected && Array.isArray(entry.selected.contentIds) ? entry.selected.contentIds : []
+        const outcome = auditOutcomeMeta(entry.outcome)
+        return h('button', {
+          key: entry.id,
+          className: 'mem-traj-audit-row',
+          title: `${fmtTime(entry.at)} · ${entry.trigger || entry.stage || ''}`,
+          onClick: () => openInPanel(entry.id),
+        },
+          h('div', { className: 'mem-traj-audit-row-top' },
+            h('span', { className: 't' }, shortTime(entry.at)),
+            h('span', { className: 'ch' }, `${auditChannelLabel(entry.channel)} · ${entry.kind || 'event'}`),
+            h('span', { className: 'spacer' }),
+            h('span', { className: `audit-pill ${outcome.tone}` }, outcome.label),
+          ),
+          h('div', { className: 'mem-traj-audit-row-meta' },
+            `${entry.trigger || '—'}${entry.stage ? ` / ${entry.stage}` : ''}`
+            + (entry.delivery ? ` · ${auditDeliveryMeta(entry).label}` : '')
+            + (entry.candidates !== undefined ? ` · 候选 ${entry.candidates}` : '')
+            + (entry.selected && entry.selected.count !== undefined ? ` · 选中 ${entry.selected.count}` : ''),
+          ),
+          ids.length > 0
+            ? h('div', { className: 'mem-traj-audit-row-ids' },
+                ids.slice(0, 4).map((id) => h('span', { className: 'audit-id', key: id }, String(id).length > 14 ? `${String(id).slice(0, 10)}…` : String(id))),
+                ids.length > 4 ? h('span', { className: 'audit-id-sub' }, `+${ids.length - 4}`) : null,
+              )
+            : null,
+        )
+      }
+      return h(React.Fragment, null,
+        h('button', {
+          className: 'mem-traj-audit-tab' + (open ? ' on' : ''),
+          style: { top: layout.tabTop, left: layout.tabLeft, width: layout.tabWidth },
+          title: callId === undefined ? '这条记录没有 callId 锚点，可打开本会话记忆审计' : `查看这次调用的记忆审计（${callId}）`,
+          onClick: toggle,
+        }, `记忆审计${entries.length > 0 ? ` ${entries.length}` : ''}`),
+        open
+          ? h('div', {
+              className: 'memp mem-traj-audit-pane',
+              style: {
+                top: layout.paneTop,
+                left: layout.paneLeft,
+                width: layout.paneWidth,
+                height: layout.paneHeight,
+              },
+            },
+              h('div', { className: 'mem-traj-audit-pane-head' },
+                h('b', null, '记忆审计'),
+                callId !== undefined ? h('span', { className: 'mono', title: callId }, callId.length > 20 ? `${callId.slice(0, 18)}…` : callId) : null,
+                h('span', { className: 'spacer' }),
+                h('button', { className: 'linkbtn', onClick: close }, '返回轨迹'),
+              ),
+              h('div', { className: 'mem-traj-audit-pane-body' },
+                loading
+                  ? h('div', { className: 'mem-traj-audit-empty' }, '加载审计…')
+                  : error
+                    ? h('div', { className: 'mem-traj-audit-empty' }, `加载失败：${error}`)
+                    : entries.length === 0
+                      ? h('div', { className: 'mem-traj-audit-empty' },
+                          callId === undefined
+                            ? '这条轨迹记录没有 callId 锚点，无法精确过滤；可以打开本会话记忆审计，按轮次/步骤查找。'
+                            : '这次调用没有记忆审计记录（可能发生在审计开启前，或已被容量策略淘汰）。',
+                        )
+                      : entries.map(rowView),
+              ),
+              h('div', { className: 'mem-traj-audit-pane-foot' },
+                h('span', { className: 'muted' }, entries.length > 0 ? `${entries.length} 条` : ''),
+                h('span', { className: 'spacer' }),
+                h('button', { onClick: () => openInPanel(entries[0]?.id) }, '打开本会话记忆审计'),
+              ),
+            )
+          : null,
+      )
     }
 
     const inject = ['slots']
@@ -3857,17 +4110,6 @@ window.__ModuleLoader__.load({
           console.warn('[dsh-memory] 记忆审计视图注册失败:', error?.message)
         }
         try {
-          slots.inject('conversation.session.header.actions', () => slots.register({
-            name: 'conversation.session.header.actions',
-            id: 'memory-audit',
-            order: 20,
-            label: () => '记忆审计',
-            inject: (sessionId) => ({ sessionId }),
-          }, MemoryHeaderAction))
-        } catch (error) {
-          console.warn('[dsh-memory] 会话头部记忆入口注册失败:', error?.message)
-        }
-        try {
           slots.inject('shell.overlay', () => slots.register({
             name: 'shell.overlay',
             id: 'memory-audit-badge',
@@ -3875,6 +4117,15 @@ window.__ModuleLoader__.load({
           }, () => React.createElement(TrajectoryMemoryBadge)))
         } catch (error) {
           console.warn('[dsh-memory] 轨迹记忆徽标注册失败:', error?.message)
+        }
+        try {
+          slots.inject('shell.overlay', () => slots.register({
+            name: 'shell.overlay',
+            id: 'memory-audit-detail',
+            order: 61,
+          }, () => React.createElement(TrajectoryDetailAudit)))
+        } catch (error) {
+          console.warn('[dsh-memory] 轨迹详情记忆页签注册失败:', error?.message)
         }
       } catch (error) {
         console.error('[dsh-memory] client apply 失败(已吞掉):', error?.message)
@@ -4003,8 +4254,8 @@ window.__ModuleLoader__.load({
       paintNavIcon: paintNavIcon,
       // 审计 ↔ 轨迹桥（测试只覆盖纯解析/焦点总线，不碰宿主 slot 实例）
       MemoryAuditView: MemoryAuditView,
-      MemoryHeaderAction: MemoryHeaderAction,
       TrajectoryMemoryBadge: TrajectoryMemoryBadge,
+      TrajectoryDetailAudit: TrajectoryDetailAudit,
       auditEntryCallId: auditEntryCallId,
       trajectoryRowCallId: trajectoryRowCallId,
       requestAuditFocus: requestAuditFocus,

@@ -2,6 +2,12 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.14.1 — 移除头部入口，记忆视图内滚，轨迹详情加审计页签
+
+- **移除会话头部的「记忆审计」按钮**：入口收敛到会话内的「记忆」视图和轨迹详情页签，不再占用标题行。
+- **记忆视图不再撑高外层**：视图声明 `data-conversation-composer-overlay`，与 Trajectory 用同一套壳层机制把 viewArea 压成固定高度；审计列表在自己的滚动容器里滚动，外层会话界面不需要跟着滚。底部为浮动 composer 预留高度。
+- **轨迹详情新增「记忆审计」页签**：Trajectory 没有页签级 slot，所以页签按钮和面板放在 `shell.overlay` 里，用 fixed 定位贴着右侧详情面板（页签行预留 96px，不改 React 管理的 DOM）。点击后展示该记录的 callId 对应审计事件，底部按钮跳到本会话记忆审计面板；没有 callId 的记录明确提示无法精确过滤。选择器用 CSS Modules 稳定后缀（`_details` / `_detailTabs` / `_detailBody`），失配时静默隐藏。
+
 ## 0.14.0 — 记忆审计与会话轨迹互相精准跳转
 
 - **审计可定位到轨迹**：审计详情新增「在轨迹中定位」。条目上的 `operationId`（记忆工具调用、触发召回的工具调用）直接作为 Trajectory 的 callId 深链；没有 `operationId` 的按轮/步事件请求新增的 `GET /memory/api/anchor`，由 Host 在会话事件窗口里找该 turn/step 的第一个 `tool/call`。找不到时只切到轨迹页，不伪造锚点。

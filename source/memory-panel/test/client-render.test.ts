@@ -1445,7 +1445,7 @@ test('主面板通过 conversation.session 的 store 调 openView 跳轨迹', as
   testApi.setClientCtx(null)
 })
 
-test('client apply 注册记忆视图、会话头部入口与轨迹徽标', async () => {
+test('client apply 注册记忆视图、轨迹徽标与详情页签', async () => {
   const { exports } = await loadBundle()
   const registered: { spec: Record<string, unknown>; component: unknown }[] = []
   const injected: string[] = []
@@ -1506,14 +1506,114 @@ test('client apply 注册记忆视图、会话头部入口与轨迹徽标', asyn
   assert.equal(spec('main')?.key, 'memory')
   assert.equal(spec('sidebar.panellist')?.id, 'memory')
   assert.equal(spec('conversation.view')?.id, 'memory', '会话内「记忆」视图已注册')
-  assert.equal(spec('conversation.session.header.actions')?.id, 'memory-audit', '头部入口已注册')
-  assert.equal(spec('shell.overlay')?.id, 'memory-audit-badge', '轨迹徽标浮层已注册')
+  assert.ok(!registered.some((entry) => entry.spec.name === 'conversation.session.header.actions'), '会话头部不再注册记忆按钮')
+  const overlays = registered.filter((entry) => entry.spec.name === 'shell.overlay').map((entry) => entry.spec.id)
+  assert.deepEqual(overlays.sort(), ['memory-audit-badge', 'memory-audit-detail'], '轨迹徽标 + 轨迹详情页签浮层已注册')
   assert.ok(injected.includes('conversation.view'))
-  assert.ok(injected.includes('conversation.session.header.actions'))
+  assert.ok(!injected.includes('conversation.session.header.actions'))
   assert.ok(injected.includes('shell.overlay'))
 })
 
-test('审计详情能把 operationId 精确送到轨迹视图', async () => {  const { exports, hooks } = await loadBundle()
+test('记忆视图用 composer overlay 占满高度，滚动只发生在审计列表里', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const View = (exports.__test as { MemoryAuditView: (p: Record<string, unknown>) => unknown }).MemoryAuditView
+  const tree = render(hooks.React.createElement(View, {
+    sessionId: 's1',
+    openView: () => {},
+    sessionInfo: () => ({}),
+  }), hooks)
+  assert.equal(tree?.props?.['data-conversation-composer-overlay'], '', '声明 composer overlay，让壳层压住外层滚动')
+  const css = (exports.__test as { CSS: string }).CSS
+  assert.match(css, /\.mem-view\{[^}]*height:100%/, '记忆视图占满 viewArea')
+  assert.match(css, /\.mem-view-body\{[^}]*overflow:hidden/, '外层内容不滚动')
+  assert.match(css, /\.mem-view \.audit\{height:100%/, '审计页填满剩余高度')
+  assert.doesNotMatch(css, /\.mem-head-btn/, '会话头部按钮样式已移除')
+})
+
+test('轨迹详情页签展示该 callId 的审计并可打开本会话面板', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const testApi = exports.__test as {
+    TrajectoryDetailAudit: (p: Record<string, unknown>) => unknown
+    setClientCtx: (ctx: unknown) => void
+    requestAuditFocus: (target: unknown) => void
+  }
+  const rect = (left: number, top: number, width: number, height: number) => ({
+    left, top, right: left + width, bottom: top + height, width, height,
+  })
+  const tabs = { style: {} as Record<string, string>, getBoundingClientRect: () => rect(100, 100, 300, 34) }
+  const body = { getBoundingClientRect: () => rect(100, 134, 300, 366) }
+  const details = {
+    getBoundingClientRect: () => rect(100, 60, 300, 440),
+    querySelector: (selector: string) => selector.includes('_detailTabs') ? tabs : selector.includes('_detailBody') ? body : null,
+  }
+  const row = {
+    getAttribute: (name: string) => name === 'data-trajectory-row-key' ? 'tool\u0000call\u0000call-9' : null,
+    getBoundingClientRect: () => rect(0, 180, 700, 30),
+  }
+  const fakeDocument = {
+    body: {},
+    querySelector: (selector: string) => {
+      if (selector.includes('tr[data-selected')) return row
+      if (selector.includes('_details')) return details
+      if (selector.includes('_composerSeat')) return null
+      return null
+    },
+    addEventListener() {},
+    removeEventListener() {},
+  }
+  const globals = globalThis as Record<string, unknown>
+  const saved = { window: globals.window, document: globals.document, fetch: globals.fetch }
+  globals.window = { innerWidth: 1200, addEventListener() {}, removeEventListener() {} }
+  globals.document = fakeDocument
+  globals.fetch = async () => ({
+    status: 200,
+    json: async () => ({
+      ok: true,
+      value: {
+        entries: [{
+          id: 'audit-1', seq: 1, at: Date.now(), sessionId: 's1', kind: 'signal',
+          channel: 'signal', stage: 'tool_call', trigger: 'memory_tool', outcome: 'success',
+          operationId: 'call-9', selected: { contentIds: ['mem-1'], hintIds: [], count: 1 },
+        }],
+        total: 1,
+        stats: { entries: 1, capacity: 2000, perSessionCapacity: 200, dropped: 0, writeErrors: 0, persistence: 'memory' },
+      },
+    }),
+  })
+  testApi.setClientCtx({
+    get: (name: string) => name === 'uiWorkspace'
+      ? { sessions: { list: { getSnapshot: () => ({ byId: { s1: { id: 's1', retainedBy: { mainView: 1 } } } }) } } }
+      : undefined,
+  })
+  const Component = testApi.TrajectoryDetailAudit
+  const element = () => hooks.React.createElement(Component, {})
+  let current: RenderNode | null = render(element(), hooks)
+  hooks.setRerender(() => { current = render(element(), hooks) })
+  hooks.runEffects()
+  await new Promise((resolve) => setTimeout(resolve, 40))
+  for (let i = 0; i < 6; i++) await Promise.resolve()
+  const tab = collect(current).find((n) => String(n.props?.className ?? '').split(/\s+/).includes('mem-traj-audit-tab'))
+  assert.ok(tab, '详情页签行出现「记忆审计」页签')
+  assert.ok(textOf(tab).includes('记忆审计'))
+  assert.equal(tabs.style.paddingRight, '96px', '为页签预留右侧空间')
+  ;(tab!.props!.onClick as () => void)()
+  for (let i = 0; i < 4; i++) await Promise.resolve()
+  const pane = collect(current).find((n) => String(n.props?.className ?? '').split(/\s+/).includes('mem-traj-audit-pane'))
+  assert.ok(pane, '页签打开后出现审计面板')
+  const paneText = textOf(pane)
+  assert.ok(paneText.includes('memory_tool'), '展示该 callId 的审计')
+  assert.ok(paneText.includes('打开本会话记忆审计'), '提供跳回会话审计面板的按钮')
+  ;(testApi.setClientCtx as (v: unknown) => void)(null)
+  globals.window = saved.window
+  globals.document = saved.document
+  globals.fetch = saved.fetch
+  hooks.resetAll()
+})
+
+test('审计详情能把 operationId 精确送到轨迹视图', async () => {
+  const { exports, hooks } = await loadBundle()
   hooks.resetAll()
   const entries = [{
     id: 'audit-1',
