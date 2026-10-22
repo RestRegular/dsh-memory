@@ -32,6 +32,8 @@ export interface BehaviorSignal {
   tag?: string
   /** 触发来源:tool / failure / assistant / todo / command / goal。 */
   source?: string
+  /** 触发本次信号的 tool call id（用于把审计条目锚回轨迹中的那一行）。 */
+  callId?: string
 }
 
 export interface ToolSignalOptions {
@@ -40,11 +42,15 @@ export interface ToolSignalOptions {
   description?: string
   useToolDescription?: boolean
   maxQueryChars?: number
+  /** 触发本次信号的 tool call id。 */
+  callId?: string
 }
 
 export interface FailureOptions {
   description?: string
   maxQueryChars?: number
+  /** 触发本次信号的 tool call id。 */
+  callId?: string
 }
 
 const DEFAULT_MAX_QUERY = 240
@@ -196,6 +202,7 @@ export function highRiskSignal(tool: string, argumentsText: string, options: Too
       tool,
       tag,
       source: 'tool',
+      ...(options.callId !== undefined ? { callId: options.callId } : {}),
     }
   }
   return undefined
@@ -334,6 +341,7 @@ export function failureSignal(
     ...(tool !== undefined ? { tool } : {}),
     errorClass,
     source: 'failure',
+    ...(options.callId !== undefined ? { callId: options.callId } : {}),
   }
 }
 

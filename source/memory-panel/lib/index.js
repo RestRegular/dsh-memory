@@ -355,8 +355,52 @@ function legacyAuditPage(memory, query) {
   }
 }
 
-function auditPage(memory, query) {
-  if (memory === undefined || memory === null) {
+/**
+ * 把一个审计条目的 turn/step 锚点解析成轨迹可直接聚焦的 tool call id。
+ *
+ * Trajectory 的深链只接受 callId（它的 `toolCallFocus` 就是同一性映射），所以
+ * 没有 operationId 的审计事件（摘要/规则等按步注入）需要回到会话事件里找该步
+ * 的第一个 `tool/call`。找不到工具调用时不伪造：返回 null，由客户端退化成
+ * “只切到轨迹页”。
+ *
+ * @param ctx - Host 插件上下文。
+ * @param query - `{ sessionId, turn?, step?, callId? }`。
+ * @returns 锚点结果（永不抛错）。
+ */
+export function findTrajectoryAnchor(ctx, query) {
+  const sessionId = typeof query?.sessionId === 'string' ? query.sessionId.trim() : ''
+  if (sessionId === '') return { callId: null, reason: 'session_required' }
+  let session
+  try { session = ctx?.get?.('sessions')?.get?.(sessionId) } catch { session = undefined }
+  if (session === undefined || typeof session?.ownEvents !== 'function') {
+    return { callId: null, reason: 'session_unavailable' }
+  }
+  const turn = typeof query.turn === 'number' ? query.turn : undefined
+  const step = typeof query.step === 'number' ? query.step : undefined
+  // 已有 callId 时校验它确实属于这个会话，避免把跨会话/伪造 id 送进轨迹。
+  const wanted = typeof query.callId === 'string' && query.callId !== '' ? query.callId : undefined
+  try {
+    for (const event of session.ownEvents()) {
+      if (event?.type !== 'tool/call') continue
+      const data = event.data ?? {}
+      if (turn !== undefined && data.turn !== turn) continue
+      if (step !== undefined && data.step !== step) continue
+      const callId = typeof data.callId === 'string' ? data.callId : undefined
+      if (callId === undefined) continue
+      if (wanted !== undefined && callId !== wanted) continue
+      return {
+        callId,
+        tool: typeof data.name === 'string' ? data.name : undefined,
+        turn: typeof data.turn === 'number' ? data.turn : undefined,
+        step: typeof data.step === 'number' ? data.step : undefined,
+        reason: wanted !== undefined ? 'operation' : 'step_tool',
+      }
+    }
+  } catch { /* 事件窗口读取失败：按找不到处理 */ }
+  return { callId: null, reason: wanted !== undefined ? 'operation_not_found' : 'no_tool_in_step' }
+}
+
+function auditPage(memory, query) {  if (memory === undefined || memory === null) {
     throw new ApiError(503, 'AUDIT_UNAVAILABLE', 'memory provider 未加载')
   }
   try {
@@ -444,6 +488,22 @@ async function handle(ctx, routePath, req, res) {
     }
     if (method === 'GET' && path === '/audit/stats') {
       writeJson(res, { ok: true, value: auditStats(memory) })
+      return
+    }
+    if (method === 'GET' && path === '/anchor') {
+      const numeric = (name) => {
+        const raw = url.searchParams.get(name)
+        if (raw === null || raw.trim() === '') return undefined
+        if (!/^-?\d+$/.test(raw.trim())) throw new ApiError(400, 'ANCHOR_QUERY_INVALID', `${name} 必须是整数`)
+        return Number(raw)
+      }
+      const query = {
+        sessionId: url.searchParams.get('session') ?? '',
+        turn: numeric('turn'),
+        step: numeric('step'),
+        callId: url.searchParams.get('callId') ?? undefined,
+      }
+      writeJson(res, { ok: true, value: findTrajectoryAnchor(ctx, query) })
       return
     }
     if (method === 'GET' && path === '/audit/export') {

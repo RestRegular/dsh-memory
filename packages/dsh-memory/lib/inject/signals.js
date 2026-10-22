@@ -32,6 +32,8 @@
               
                                                                  
                  
+                                                
+                 
  
 
                                     
@@ -40,11 +42,15 @@
                       
                               
                         
+                              
+                 
  
 
                                  
                       
                         
+                              
+                 
  
 
 const DEFAULT_MAX_QUERY = 240
@@ -196,6 +202,7 @@ export function highRiskSignal(tool        , argumentsText        , options     
       tool,
       tag,
       source: 'tool',
+      ...(options.callId !== undefined ? { callId: options.callId } : {}),
     }
   }
   return undefined
@@ -334,6 +341,7 @@ export function failureSignal(
     ...(tool !== undefined ? { tool } : {}),
     errorClass,
     source: 'failure',
+    ...(options.callId !== undefined ? { callId: options.callId } : {}),
   }
 }
 

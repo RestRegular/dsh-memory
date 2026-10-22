@@ -1389,3 +1389,183 @@ test('两个开关的配色跟随宿主 switch token,深色主题下轨道和圆
     assert.match(rule(p.knobOn), /background:var\(--dsw-alias-label-primary-foreground\)/, `${p.name}:开启态圆点用 label-primary-foreground`)
   }
 })
+
+test('审计条目的轨迹锚点解析：operationId 优先，其次 signal.callId', async () => {
+  const { exports } = await loadBundle()
+  const testApi = exports.__test as {
+    auditEntryCallId: (entry: unknown) => string | undefined
+    trajectoryRowCallId: (row: unknown) => string | undefined
+    requestAuditFocus: (target: unknown) => void
+    takeAuditFocus: (audience?: string) => { sessionId?: string; callId?: string; audience?: string } | null
+  }
+  assert.equal(testApi.auditEntryCallId({ operationId: 'call-1' }), 'call-1')
+  assert.equal(testApi.auditEntryCallId({ operationId: '', signal: { callId: 'call-2' } }), 'call-2')
+  assert.equal(testApi.auditEntryCallId({ signal: { callId: 'call-3' } }), 'call-3')
+  assert.equal(testApi.auditEntryCallId({}), undefined)
+
+  // Trajectory 的行 key：kind\0call\0<callId>；非 call 行不产生锚点。
+  assert.equal(testApi.trajectoryRowCallId({
+    getAttribute: (name: string) => name === 'data-trajectory-row-key' ? 'tool\u0000call\u0000call-9' : null,
+  }), 'call-9')
+  assert.equal(testApi.trajectoryRowCallId({ getAttribute: () => 'message\u0000abc' }), undefined)
+  assert.equal(testApi.trajectoryRowCallId(null), undefined)
+
+  // 焦点总线只把目标交给匹配的受众（主面板 vs 会话内视图）。
+  testApi.requestAuditFocus({ audience: 'view', sessionId: 's1', callId: 'call-9' })
+  assert.equal(testApi.takeAuditFocus('panel'), null, '面板不能抢走给会话视图的焦点')
+  const taken = testApi.takeAuditFocus('view')
+  assert.equal(taken?.sessionId, 's1')
+  assert.equal(taken?.callId, 'call-9')
+  assert.equal(testApi.takeAuditFocus('view'), null, '取过一次就清掉')
+})
+
+test('主面板通过 conversation.session 的 store 调 openView 跳轨迹', async () => {
+  const { exports } = await loadBundle()
+  const testApi = exports.__test as {
+    setClientCtx: (ctx: unknown) => void
+    conversationStoreFor: (sessionId: string) => { actions?: Record<string, unknown> } | undefined
+    setConversationView: (sessionId: string, view: string, focus?: string) => boolean
+  }
+  const handle = { kind: 'conversation-store' }
+  const seen: [string, string | undefined][] = []
+  const store = {
+    actions: {
+      openView: (view: string, focus?: string) => { seen.push([view, focus]) },
+      setView: (view: string) => { seen.push([view, undefined]) },
+    },
+  }
+  const slots = {
+    entries: (key: string) => key === 'conversation.session' ? [{ store: handle }] : [],
+    _stores: new Map([[handle, { instances: new Map([['s1', store]]) }]]),
+  }
+  testApi.setClientCtx({ get: (name: string) => name === 'slots' ? slots : undefined })
+  assert.equal(testApi.conversationStoreFor('s1'), store)
+  assert.equal(testApi.setConversationView('s1', 'trajectory', 'call-9'), true)
+  assert.deepEqual(seen, [['trajectory', 'call-9']])
+  testApi.setClientCtx(null)
+})
+
+test('client apply 注册记忆视图、会话头部入口与轨迹徽标', async () => {
+  const { exports } = await loadBundle()
+  const registered: { spec: Record<string, unknown>; component: unknown }[] = []
+  const injected: string[] = []
+  const slots = {
+    entries: () => [],
+    inject(key: string, callback: () => unknown) {
+      injected.push(key)
+      const dispose = callback()
+      return typeof dispose === 'function' ? dispose : () => {}
+    },
+    register(spec: Record<string, unknown>, component: unknown) {
+      registered.push({ spec, component })
+      return () => {}
+    },
+  }
+  const ctx = {
+    get: (name: string) => name === 'slots' ? slots : undefined,
+    effect: (fn: () => unknown) => { const dispose = fn(); return typeof dispose === 'function' ? dispose : () => {} },
+  }
+  const globals = globalThis as Record<string, unknown>
+  const saved = {
+    window: globals.window,
+    document: globals.document,
+    MutationObserver: globals.MutationObserver,
+    fetch: globals.fetch,
+  }
+  const errors: string[] = []
+  const originalError = console.error
+  globals.window = {
+    addEventListener() {},
+    removeEventListener() {},
+    dispatchEvent() {},
+    location: { hash: '' },
+  }
+  globals.document = {
+    createElement: () => ({ set textContent(_v: string) {}, remove() {} }),
+    head: { appendChild() {} },
+    body: {},
+    querySelectorAll: () => [],
+  }
+  globals.MutationObserver = class { observe() {} disconnect() {} }
+  globals.fetch = async () => ({ status: 200, json: async () => ({ ok: true, value: { sidebar: { enabled: true } } }) })
+  console.error = (...args: unknown[]) => { errors.push(args.map(String).join(' ')) }
+  try {
+    ;(exports.apply as (ctx: unknown) => void)(ctx)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  } finally {
+    globals.window = saved.window
+    globals.document = saved.document
+    globals.MutationObserver = saved.MutationObserver
+    globals.fetch = saved.fetch
+    console.error = originalError
+    ;(exports.__test as { setClientCtx: (v: unknown) => void }).setClientCtx(null)
+  }
+  assert.deepEqual(errors, [], '注册过程不应吞掉异常并打 console.error')
+  const spec = (name: string) => registered.find((entry) => entry.spec.name === name)?.spec
+  assert.equal(spec('settings.section')?.id, 'memory')
+  assert.equal(spec('main')?.key, 'memory')
+  assert.equal(spec('sidebar.panellist')?.id, 'memory')
+  assert.equal(spec('conversation.view')?.id, 'memory', '会话内「记忆」视图已注册')
+  assert.equal(spec('conversation.session.header.actions')?.id, 'memory-audit', '头部入口已注册')
+  assert.equal(spec('shell.overlay')?.id, 'memory-audit-badge', '轨迹徽标浮层已注册')
+  assert.ok(injected.includes('conversation.view'))
+  assert.ok(injected.includes('conversation.session.header.actions'))
+  assert.ok(injected.includes('shell.overlay'))
+})
+
+test('审计详情能把 operationId 精确送到轨迹视图', async () => {  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const entries = [{
+    id: 'audit-1',
+    seq: 1,
+    at: Date.now(),
+    sessionId: 's1',
+    turn: 2,
+    step: 1,
+    kind: 'signal',
+    channel: 'signal',
+    stage: 'tool_call',
+    trigger: 'memory_tool',
+    outcome: 'success',
+    operationId: 'call-9',
+    signal: { key: 'call-9', reason: 'memory_tool', tool: 'memory_search', callId: 'call-9' },
+  }]
+  ;(globalThis as Record<string, unknown>).fetch = async () => ({
+    status: 200,
+    json: async () => ({
+      ok: true,
+      value: {
+        entries,
+        total: 1,
+        stats: { entries: 1, capacity: 2000, perSessionCapacity: 200, dropped: 0, writeErrors: 0, persistence: 'memory' },
+      },
+    }),
+  })
+  const AuditTab = (exports.__test as { AuditTab: (p: Record<string, unknown>) => unknown }).AuditTab
+  const seen: (string | undefined)[] = []
+  const element = () => hooks.React.createElement(AuditTab, {
+    scopes: [],
+    records: [],
+    lockSession: 's1',
+    audience: 'view',
+    openTrajectory: (focus?: string) => { seen.push(focus) },
+  })
+  let current: RenderNode | null = render(element(), hooks)
+  hooks.setRerender(() => { current = render(element(), hooks) })
+  hooks.runEffects()
+  for (let i = 0; i < 8; i++) await Promise.resolve()
+
+  const row = collect(current).find((n) => String(n.props?.className ?? '').startsWith('audit-row'))
+  assert.ok(row, '审计行存在')
+  ;(row!.props!.onClick as () => void)()
+  hooks.runEffects()
+  for (let i = 0; i < 4; i++) await Promise.resolve()
+
+  const jump = collect(current).find((n) => String(n.props?.className ?? '').split(/\s+/).includes('audit-jump'))
+  assert.ok(jump, '详情头部有「在轨迹中定位」')
+  await (jump!.props!.onClick as () => Promise<void>)()
+  for (let i = 0; i < 4; i++) await Promise.resolve()
+  assert.deepEqual(seen, ['call-9'], '把 operationId 原样交给 openView')
+  assert.ok(textOf(current).includes('已定位到轨迹'))
+  hooks.resetAll()
+})

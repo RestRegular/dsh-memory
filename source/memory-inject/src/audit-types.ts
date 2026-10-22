@@ -155,6 +155,12 @@ export interface AuditEntryV2 {
     tag?: string
     errorClass?: string
     source?: string
+    /**
+     * 触发这条信号的 tool call id（若信号来自工具事件）。
+     * 与条目上的 `operationId` 同值；独立保留是为了让信号消费/召回事件
+     * 也能把用户带回轨迹里那次具体的工具调用。
+     */
+    callId?: string
   }
   error?: {
     stage: string

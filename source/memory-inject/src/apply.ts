@@ -276,7 +276,11 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
     return limited
   }
 
-  const observeSignal = (sessionId: string, signal: BehaviorSignal | undefined): void => {
+  const observeSignal = (
+    sessionId: string,
+    signal: BehaviorSignal | undefined,
+    context: { turn?: number; step?: number } = {},
+  ): void => {
     if (!signal || !signals.note(sessionId, signal)) return
     const query = sanitizeAuditText(signal.query)
     recordAudit({
@@ -288,6 +292,9 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
       sessionId,
       trigger: signal.reason,
       phase: signal.phase,
+      ...(context.turn !== undefined ? { turn: context.turn } : {}),
+      ...(context.step !== undefined ? { step: context.step } : {}),
+      ...(signal.callId !== undefined ? { operationId: signal.callId } : {}),
       ...(query !== undefined ? { query } : {}),
       signal: {
         key: signal.key,
@@ -296,7 +303,34 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
         ...(signal.tool ? { tool: signal.tool } : {}),
         ...(signal.tag ? { tag: signal.tag } : {}),
         ...(signal.source ? { source: signal.source } : {}),
+        ...(signal.callId !== undefined ? { callId: signal.callId } : {}),
       },
+    })
+  }
+
+  /** 记忆工具自身的调用:不属于注入评估,但它是审计里最有用的轨迹锚点。 */
+  const MEMORY_TOOL_NAMES = new Set(['memory_save', 'memory_search', 'memory_forget', 'memory_list', 'memory_get'])
+  const rememberMemoryToolCall = (
+    sessionId: string,
+    data: Record<string, unknown>,
+  ): void => {
+    const callId = typeof data.callId === 'string' ? data.callId : undefined
+    const tool = typeof data.name === 'string' ? data.name : undefined
+    if (callId === undefined || tool === undefined || !MEMORY_TOOL_NAMES.has(tool)) return
+    const turn = typeof data.turn === 'number' ? data.turn : undefined
+    const step = typeof data.step === 'number' ? data.step : undefined
+    recordAudit({
+      kind: 'signal',
+      channel: 'signal',
+      stage: 'tool_call',
+      outcome: 'success',
+      reasonCode: 'memory_tool',
+      trigger: 'memory_tool',
+      sessionId,
+      operationId: callId,
+      ...(turn !== undefined ? { turn } : {}),
+      ...(step !== undefined ? { step } : {}),
+      signal: { key: callId, reason: 'memory_tool', tool, source: 'tool', callId },
     })
   }
 
@@ -343,6 +377,10 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
         const memory = ctx.get('memory') as MemoryWithInject | undefined
         if (memory) attachAudit(memory)
 
+        // 记忆工具调用先落一条锚点审计：即使自动召回关闭、或该工具没有命中
+        // 任何触发标签，用户也能从审计面板/记忆视图精确跳回轨迹里的那一次调用。
+        if (type === 'tool/call') rememberMemoryToolCall(sessionId, data)
+
         if (type === 'compaction/start' || type === 'compaction/end') {
           // 上下文重建:旧去重状态不再可信,允许摘要/正文重新进入。
           // 审计也要留下分界，否则压缩前后的记录会被误读成同一段上下文。
@@ -371,17 +409,24 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
 
         if (type === 'tool/call') {
           const tool = typeof data.name === 'string' ? data.name : 'tool'
+          const callId = typeof data.callId === 'string' ? data.callId : undefined
           const args = typeof data.arguments === 'string'
             ? data.arguments
             : (() => { try { return JSON.stringify(data.arguments ?? '') } catch { return '' } })()
           const description = auto.useToolDescription ? toolCallDescription(data.arguments) : undefined
           rememberCallMeta(data.callId, tool, description)
+          const turn = typeof data.turn === 'number' ? data.turn : undefined
+          const step = typeof data.step === 'number' ? data.step : undefined
           observeSignal(sessionId, highRiskSignal(tool, args, {
             tags,
             ...(description !== undefined ? { description } : {}),
+            ...(callId !== undefined ? { callId } : {}),
             useToolDescription: auto.useToolDescription,
             maxQueryChars: auto.maxQueryChars,
-          }))
+          }), {
+            ...(turn !== undefined ? { turn } : {}),
+            ...(step !== undefined ? { step } : {}),
+          })
           return
         }
         if (type === 'tool/result') {
@@ -391,10 +436,16 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
           const callId = message?.source?.callId
           const meta = typeof callId === 'string' ? callMeta.get(callId) : undefined
           const description = auto.useToolDescription ? meta?.description : undefined
+          const turn = typeof data.turn === 'number' ? data.turn : undefined
+          const step = typeof data.step === 'number' ? data.step : undefined
           observeSignal(sessionId, failureSignal(meta?.name, failure.code, failure.message, {
             ...(description !== undefined ? { description } : {}),
+            ...(typeof callId === 'string' ? { callId } : {}),
             maxQueryChars: auto.maxQueryChars,
-          }))
+          }), {
+            ...(turn !== undefined ? { turn } : {}),
+            ...(step !== undefined ? { step } : {}),
+          })
           return
         }
         // 可见 assistant 输出 / 任务清单 / 命令 / goal:命中记忆标签就排队一次召回。
@@ -528,14 +579,30 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
       recordAudit(auditBase('signal', {
         kind: 'signal', stage: 'signal_dropped', outcome: 'skipped', reasonCode: 'auto_scope_unavailable',
         trigger: signal.reason, phase: signal.phase,
-        signal: { key: signal.key, reason: signal.reason, ...(signal.tag ? { tag: signal.tag } : {}), ...(signal.tool ? { tool: signal.tool } : {}) },
+        ...(signal.callId !== undefined ? { operationId: signal.callId } : {}),
+        signal: {
+          key: signal.key,
+          reason: signal.reason,
+          ...(signal.tag ? { tag: signal.tag } : {}),
+          ...(signal.tool ? { tool: signal.tool } : {}),
+          ...(signal.callId !== undefined ? { callId: signal.callId } : {}),
+        },
       }))
     }
     if (usableSignal !== undefined) {
       recordAudit(auditBase('signal', {
         kind: 'signal', stage: 'signal_consumed', outcome: 'success', reasonCode: 'consumed',
         trigger: usableSignal.reason, phase: usableSignal.phase,
-        signal: { key: usableSignal.key, reason: usableSignal.reason, ...(usableSignal.tag ? { tag: usableSignal.tag } : {}), ...(usableSignal.tool ? { tool: usableSignal.tool } : {}), ...(usableSignal.errorClass ? { errorClass: usableSignal.errorClass } : {}), ...(usableSignal.source ? { source: usableSignal.source } : {}) },
+        ...(usableSignal.callId !== undefined ? { operationId: usableSignal.callId } : {}),
+        signal: {
+          key: usableSignal.key,
+          reason: usableSignal.reason,
+          ...(usableSignal.tag ? { tag: usableSignal.tag } : {}),
+          ...(usableSignal.tool ? { tool: usableSignal.tool } : {}),
+          ...(usableSignal.errorClass ? { errorClass: usableSignal.errorClass } : {}),
+          ...(usableSignal.source ? { source: usableSignal.source } : {}),
+          ...(usableSignal.callId !== undefined ? { callId: usableSignal.callId } : {}),
+        },
       }))
     }
 
@@ -755,6 +822,7 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
           kind: 'evaluation', stage: 'searched', outcome, reasonCode,
           trigger: usableSignal?.reason ?? 'turn_start',
           ...(usableSignal !== undefined ? { phase: usableSignal.phase } : {}),
+          ...(usableSignal?.callId !== undefined ? { operationId: usableSignal.callId } : {}),
           ...(queryField !== undefined ? { query: queryField } : {}),
           candidates: recall.candidates,
           filter: {
@@ -785,7 +853,7 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
           ...(recallScopes !== undefined ? { scopes: [...recallScopes] } : {}),
           limits: { topK: settings.recall.topK, maxQueryChars: settings.autoRecall.maxQueryChars },
           ...(usableSignal !== undefined
-            ? { signal: { key: usableSignal.key, reason: usableSignal.reason, ...(usableSignal.errorClass ? { errorClass: usableSignal.errorClass } : {}), ...(usableSignal.tool ? { tool: usableSignal.tool } : {}), ...(usableSignal.tag ? { tag: usableSignal.tag } : {}), ...(usableSignal.source ? { source: usableSignal.source } : {}) } }
+            ? { signal: { key: usableSignal.key, reason: usableSignal.reason, ...(usableSignal.errorClass ? { errorClass: usableSignal.errorClass } : {}), ...(usableSignal.tool ? { tool: usableSignal.tool } : {}), ...(usableSignal.tag ? { tag: usableSignal.tag } : {}), ...(usableSignal.source ? { source: usableSignal.source } : {}), ...(usableSignal.callId ? { callId: usableSignal.callId } : {}) } }
             : {}),
         }))
       }

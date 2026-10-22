@@ -166,3 +166,47 @@ test('信号观察: query 在写审计前脱敏', async () => {
   assert.equal(signal!.query?.redacted, true)
   assert.ok(signal!.query?.text?.includes('[REDACTED:'))
 })
+
+test('工具信号携带 operationId/turn/step，审计可以直接锚回轨迹', async () => {
+  const settings = {
+    ...defaultInjectSettings,
+    autoRecall: { ...defaultInjectSettings.autoRecall, enabled: true, useMemoryTags: false, tags: ['release'] },
+    recall: { ...defaultInjectSettings.recall, enabled: false },
+  }
+  const { handlers, attached } = setup({ settings })
+  const onEvent = handlers.get('session/event')
+  onEvent!({ id: 's1' }, {
+    type: 'tool/call',
+    data: {
+      name: 'ops_bash', callId: 'call-9', turn: 3, step: 2,
+      arguments: JSON.stringify({ description: '发布前检查' }),
+    },
+  })
+  const signal = attached.current!.list().find((entry) => entry.kind === 'signal' && entry.stage === 'signal_queued')
+  assert.ok(signal)
+  assert.equal(signal!.operationId, 'call-9')
+  assert.equal(signal!.turn, 3)
+  assert.equal(signal!.step, 2)
+  assert.equal(signal!.signal?.callId, 'call-9')
+})
+
+test('记忆工具调用即使自动召回关闭也留一条轨迹锚点', async () => {
+  const settings = {
+    ...defaultInjectSettings,
+    autoRecall: { ...defaultInjectSettings.autoRecall, enabled: false },
+  }
+  const { handlers, attached } = setup({ settings })
+  const onEvent = handlers.get('session/event')
+  onEvent!({ id: 's1' }, {
+    type: 'tool/call',
+    data: { name: 'memory_search', callId: 'call-mem', turn: 2, step: 4, arguments: '{}' },
+  })
+  const entry = attached.current!.list().find((candidate) => candidate.stage === 'tool_call')
+  assert.ok(entry, '记忆工具调用本身应被记录')
+  assert.equal(entry!.operationId, 'call-mem')
+  assert.equal(entry!.trigger, 'memory_tool')
+  assert.equal(entry!.turn, 2)
+  assert.equal(entry!.step, 4)
+  assert.equal(entry!.signal?.callId, 'call-mem')
+})
+

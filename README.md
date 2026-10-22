@@ -365,9 +365,22 @@ GET /memory/api/audit
 
 GET /memory/api/audit/stats
 GET /memory/api/audit/export?format=json|jsonl&<same filters>
+
+GET /memory/api/anchor?session=<id>&turn=<n>&step=<n>&callId=<optional>
 ```
 
 响应为 `{ ok: true, value: { entries, total, nextCursor?, stats, query } }`。旧调用 `GET /audit?session=<id>` 仍兼容；不带 `session` 时查询全部会话，`query.scope` 会标记为 `all`。
+
+### 和会话轨迹互相跳转
+
+DSH 自带的 Trajectory 面板是一个**纯投影**：它只声明 `conversation.trajectory.images` 一个子槽，没有行/列扩展点，选中状态也只存在组件内部。因此插件不能直接往轨迹表格里插审计行。当前采用的是一条不碰轨迹 React 树的组合：
+
+- **轨迹 → 记忆审计**：Trajectory 的选中行带有稳定的 `data-trajectory-row-key`（工具行是 `kind\0call\0<callId>`）。一个 `shell.overlay` 徽标只读观察选中行，按 callId 查审计，在行右侧浮出「记忆 N」。点击后打开记忆面板的「审计」页，并按 `op:<callId>` 过滤。会话标题行还固定提供一个「记忆审计」入口。
+- **记忆审计 → 轨迹**：审计详情里的「在轨迹中定位」把条目上的 `operationId`（记忆工具调用、触发召回的工具调用）交给 Trajectory 的 `openView('trajectory', callId)`。没有 `operationId` 的按轮/步事件先请求 `/anchor`，由 Host 从会话事件窗口里找该 turn/step 的第一个 `tool/call`；找不到就只切到轨迹页，不伪造定位。
+- **会话内的「记忆」视图**：与 Chat / 轨迹同一个 view ring，按当前会话展示审计；它直接使用宿主传给每个 view 的 `openView`，因此跳转是官方支持路径。主面板不在 view ring 内，通过 `conversation.session` 注册的 per-session store 调同一个 action；拿不到时退化为打开会话/轨迹页。
+- 记忆工具调用（`memory_save/search/list/get/forget`）本身会额外留一条 `stage: tool_call` 的审计锚点：即使自动召回关闭，也能从这条记录精确跳回轨迹里的那次调用。
+
+`/anchor` 只返回 `{ callId, tool?, turn?, step?, reason }`，不返回工具参数、消息正文或记忆内容；找不到会话/工具时 `callId` 为 `null` 并给出稳定 `reason`。
 
 审计数据默认**只在内存**：容量 2000 条、每会话 200 条，超出时优先保留 digest / rules / delivery / error 等关键通道；`stats` 暴露 `entries / capacity / dropped / writeErrors / persistence`。重启后记录丢失，面板会明确提示。
 

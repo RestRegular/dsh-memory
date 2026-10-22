@@ -2,6 +2,14 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.14.0 — 记忆审计与会话轨迹互相精准跳转
+
+- **审计可定位到轨迹**：审计详情新增「在轨迹中定位」。条目上的 `operationId`（记忆工具调用、触发召回的工具调用）直接作为 Trajectory 的 callId 深链；没有 `operationId` 的按轮/步事件请求新增的 `GET /memory/api/anchor`，由 Host 在会话事件窗口里找该 turn/step 的第一个 `tool/call`。找不到时只切到轨迹页，不伪造锚点。
+- **轨迹行可回到审计**：新增 `shell.overlay` 徽标，只读观察 Trajectory 选中行的 `data-trajectory-row-key`，按 callId 查出相关审计并在行右侧显示「记忆 N」；点击打开记忆面板「审计」页并按 `op:<callId>` 过滤。会话标题行同时提供固定入口「记忆审计」。
+- **会话内新增「记忆」视图**：与 Chat / 轨迹同一个 view ring，按当前会话展示审计；使用宿主传给每个 view 的 `openView` 完成跳转，属于官方扩展路径。主面板不在 view ring 内，通过 `conversation.session` 的 per-session store 调同一个 action（拿不到时退化为只打开会话/轨迹页）。
+- **记忆工具调用入审计**：`memory_save/search/list/get/forget` 的每次调用都会记一条 `stage: tool_call` 的锚点（`operationId` = callId，带 turn/step），即使自动召回关闭也保留；信号事件同步写入 `operationId`、`turn`、`step` 与 `signal.callId`，便于把审计和轨迹对上。
+- 新增 Host 纯函数 `findTrajectoryAnchor` 与回归测试；客户端新增锚点解析、焦点总线、主面板 store 桥、审计详情跳转的渲染测试。
+
 ## 0.13.2 — 修复检索分数全部相同
 
 - **根因**：`search()` 组装最终分数时写成了 `c.id`，而候选对象只有 `c.record`，于是所有候选都落到

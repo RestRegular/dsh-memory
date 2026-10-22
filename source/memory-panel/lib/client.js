@@ -434,6 +434,26 @@ window.__ModuleLoader__.load({
       '.memp .audit-tip-content{font-size:11px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-primary);max-height:none;overflow:visible}',
       '.memp .audit-tip-foot{margin-top:6px;font-size:9.5px;color:var(--dsw-alias-label-secondary)}',
       '.memp .rec.focus{border-color:var(--dsw-alias-brand-primary);box-shadow:0 0 0 1px color-mix(in srgb,var(--dsw-alias-brand-primary) 25%,transparent)}',
+      // 审计 → 轨迹的精准跳转按钮：只在有锚点时出现，不抢详情头部的主操作。
+      '.memp .audit-jump{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--dsw-alias-border-l1);border-radius:7px;padding:2px 7px;font-size:10.5px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);cursor:pointer}',
+      '.memp .audit-jump:hover{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary)}',
+      '.memp .audit-jump[disabled]{opacity:.55;cursor:default}',
+      '.memp .audit-jump-note{font-size:10px;color:var(--dsw-alias-label-secondary)}',
+      // 会话视图里的「记忆审计」页：壳层已经有自己的滚动区，这里只负责头部。
+      '.mem-view{display:flex;flex-direction:column;gap:10px;padding:12px 14px 6px;min-height:0;height:100%;box-sizing:border-box;overflow:hidden;color:var(--dsw-alias-label-primary)}',
+      '.mem-view-head{display:flex;align-items:center;gap:9px;flex-wrap:wrap;flex:none}',
+      '.mem-view-head b{font-size:14px}',
+      '.mem-view-head .muted{font-size:11.5px;color:var(--dsw-alias-label-secondary)}',
+      '.mem-view-head .spacer{flex:1}',
+      '.mem-view-body{min-height:0;flex:1;display:flex;flex-direction:column;overflow:hidden}',
+      '.mem-view .audit{height:auto;max-height:none;flex:1}',
+      // 会话标题行里的入口：和宿主 header 的紧凑按钮同高，只借边框/文字色。
+      '.mem-head-btn{border:1px solid transparent;border-radius:6px;background:none;color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:20px;padding:0 7px;cursor:pointer;white-space:nowrap}',
+      '.mem-head-btn:hover{border-color:var(--dsw-alias-border-l1);background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
+      // 轨迹行上的记忆徽标：fixed 定位在选中行右侧，不改轨迹表格结构。
+      '.mem-traj-chip{position:fixed;z-index:70;display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border:1px solid color-mix(in srgb,var(--dsw-alias-brand-primary) 42%,var(--dsw-alias-border-l1));border-radius:999px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-brand-primary);font-size:10px;line-height:1;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.18);white-space:nowrap}',
+      '.mem-traj-chip:hover{background:color-mix(in srgb,var(--dsw-alias-brand-primary) 10%,var(--dsw-alias-bg-layer-1))}',
+      '.mem-traj-chip .dot{width:5px;height:5px;border-radius:50%;background:currentColor}',
       '@media (max-width:900px){.memp .audit-split.has-detail{grid-template-columns:minmax(0,1fr)}.memp .audit-row{grid-template-columns:54px 120px 120px minmax(100px,1fr) 96px 100px 80px}.memp .audit-table-head{grid-template-columns:54px 120px 120px minmax(100px,1fr) 96px 100px 80px}}',
       '@media (max-width:620px){.memp .audit-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.memp .audit-table-head{display:none}.memp .audit-row{display:flex;flex-wrap:wrap;gap:4px 8px}.memp .audit-row .col-trigger,.memp .audit-row .col-budget{display:none}.memp .audit-row .col-nums{margin-left:auto}.memp .audit-row .col-time{order:1}.memp .audit-row .col-channel{order:2}.memp .audit-row .col-delivery{order:3}.memp .audit-row .col-outcome{order:4;margin-left:auto}.memp .audit-filter-row input[type=text],.memp .audit-filter-row input[type=search]{max-width:none;flex:1}.memp .audit{height:calc(100vh - 150px);max-height:calc(100vh - 150px)}.memp .audit-detail{max-height:calc(100vh - 280px)}}',
     ].join('')
@@ -2060,6 +2080,230 @@ window.__ModuleLoader__.load({
       )
     }
 
+    // ===== 记忆审计 ↔ 会话轨迹 的桥接 =====
+    //
+    // DSH 的 Trajectory 面板是一个纯投影：它只声明 `conversation.trajectory.images`
+    // 一个子槽，没有行/列的扩展点，选中状态也是组件私有的。但它**支持按 callId
+    // 深链聚焦**（`toolCallFocus` 就是同一性映射），而每个 `conversation.view`
+    // 的渲染产物都会收到 `openView(view, focus)`。所以：
+    //   - 会话内的「记忆审计」视图直接用 openView('trajectory', callId)；
+    //   - 主面板（不在会话视图树里）通过 `conversation.session` 条目挂的 per-session
+    //     store 调同一个 action。这里是宿主 slot 服务的内部字段（`_stores`），
+    //     全部做了存在性判断；拿不到就退化成“只打开会话/只切轨迹页”，绝不 throw。
+    let clientCtx = null
+    const AUDIT_FOCUS_EVENT = 'dsh-memory:audit-focus'
+    let pendingAuditFocus = null
+
+    function safeSlots() {
+      try { return clientCtx?.get?.('slots') } catch { return undefined }
+    }
+
+    function uiWorkspace() {
+      try { return clientCtx?.get?.('uiWorkspace') } catch { return undefined }
+    }
+
+    function openSessionById(id) {
+      if (typeof id !== 'string' || id === '') return
+      try {
+        const workspace = uiWorkspace()
+        if (workspace && typeof workspace.openSession === 'function') {
+          workspace.openSession(id)
+          return
+        }
+        if (typeof window !== 'undefined') window.location.hash = `#/s/${encodeURIComponent(id)}`
+      } catch { /* 旧宿主没有 uiWorkspace：保持原状 */ }
+    }
+
+    /** 当前主视图保留的会话（Host 用 retainedBy.mainView 标出）。 */
+    function currentSessionId() {
+      try {
+        const snapshot = uiWorkspace()?.sessions?.list?.getSnapshot?.()
+        const rows = snapshot && snapshot.byId ? Object.values(snapshot.byId) : []
+        const current = rows.find((row) => row && row.retainedBy && (row.retainedBy.mainView ?? 0) > 0)
+        return current && typeof current.id === 'string' ? current.id : undefined
+      } catch {
+        return undefined
+      }
+    }
+
+    /** 审计条目的轨迹锚：优先 operationId（记忆工具调用/工具信号），其次 signal.callId。 */
+    function auditEntryCallId(entry) {
+      if (!entry || typeof entry !== 'object') return undefined
+      if (typeof entry.operationId === 'string' && entry.operationId !== '') return entry.operationId
+      const signalCall = entry.signal && typeof entry.signal.callId === 'string' ? entry.signal.callId : ''
+      return signalCall !== '' ? signalCall : undefined
+    }
+
+    /** Trajectory 的行 key 形如 `tool\0call\0<callId>`；解析失败返回 undefined。 */
+    function trajectoryRowCallId(row) {
+      try {
+        const key = row && typeof row.getAttribute === 'function' ? row.getAttribute('data-trajectory-row-key') : ''
+        if (typeof key !== 'string') return undefined
+        const sep = '\u0000call\u0000'
+        const at = key.indexOf(sep)
+        return at >= 0 ? key.slice(at + sep.length) : undefined
+      } catch {
+        return undefined
+      }
+    }
+
+    function selectedTrajectoryCallId() {
+      try {
+        const row = typeof document !== 'undefined'
+          ? document.querySelector('tr[data-selected="true"][data-trajectory-row-key]')
+          : null
+        return row === null ? undefined : trajectoryRowCallId(row)
+      } catch {
+        return undefined
+      }
+    }
+
+    /**
+     * `conversation.session` 注册时把 per-session store 交给 slot 服务；服务把实例
+     * 放在 `_stores` 的 handle 记录里，按 session id 解析。这是主面板唯一能拿到
+     * `openView` 的路径（slot 只把 actions 交给注册者自己）。
+     */
+    function conversationStoreFor(sessionId) {
+      if (typeof sessionId !== 'string' || sessionId === '') return undefined
+      try {
+        const slots = safeSlots()
+        const entries = slots?.entries?.('conversation.session') ?? []
+        const handle = entries.map((entry) => entry?.store).find((value) => value !== undefined)
+        if (handle === undefined) return undefined
+        const record = slots?._stores?.get?.(handle)
+        const instances = record && record.instances
+        if (!(instances instanceof Map)) return undefined
+        const direct = instances.get(sessionId)
+        if (direct !== undefined) return direct
+        for (const [key, store] of instances) {
+          if (String(key) === sessionId || String(key).endsWith(sessionId)) return store
+        }
+        if (instances.size === 1) return [...instances.values()][0]
+        return undefined
+      } catch {
+        return undefined
+      }
+    }
+
+    function setConversationView(sessionId, view, focus) {
+      const store = conversationStoreFor(sessionId)
+      const actions = store && store.actions
+      if (!actions) return false
+      try {
+        if (typeof actions.openView === 'function') {
+          actions.openView(view, focus)
+          return true
+        }
+        if (typeof actions.setView === 'function') {
+          actions.setView(view)
+          return true
+        }
+      } catch { /* action 失败：调用方退化成打开会话 */ }
+      return false
+    }
+
+    /** 打开会话并把 Trajectory 切到指定 callId；拿不到 store 时轮询等待会话挂载。 */
+    async function jumpToTrajectory(sessionId, focus) {
+      if (typeof sessionId !== 'string' || sessionId === '') return { opened: false, focused: false }
+      openSessionById(sessionId)
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        const store = conversationStoreFor(sessionId)
+        const actions = store && store.actions
+        if (actions) {
+          try {
+            if (focus !== undefined && typeof actions.openView === 'function') {
+              actions.openView('trajectory', focus)
+              return { opened: true, focused: true }
+            }
+            if (typeof actions.setView === 'function') {
+              actions.setView('trajectory')
+              return { opened: true, focused: false }
+            }
+          } catch { /* 继续重试 */ }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 75))
+      }
+      return { opened: false, focused: false }
+    }
+
+    /** 无 operationId 时，用 turn/step 去 Host 的会话事件里找该步的工具调用。 */
+    async function resolveAuditFocus(entry) {
+      const direct = auditEntryCallId(entry)
+      if (direct !== undefined) return direct
+      if (!entry || typeof entry.sessionId !== 'string' || entry.sessionId === '') return undefined
+      if (typeof entry.turn !== 'number' && typeof entry.step !== 'number') return undefined
+      try {
+        const params = new URLSearchParams({ session: entry.sessionId })
+        if (typeof entry.turn === 'number') params.set('turn', String(entry.turn))
+        if (typeof entry.step === 'number') params.set('step', String(entry.step))
+        const value = await api(`anchor?${params.toString()}`)
+        return value && typeof value.callId === 'string' && value.callId !== '' ? value.callId : undefined
+      } catch {
+        return undefined
+      }
+    }
+
+    async function jumpAuditEntryToTrajectory(entry) {
+      if (!entry || typeof entry.sessionId !== 'string' || entry.sessionId === '') {
+        return { opened: false, focused: false, reason: 'no_session' }
+      }
+      const focus = await resolveAuditFocus(entry)
+      const result = await jumpToTrajectory(entry.sessionId, focus)
+      return { ...result, reason: focus === undefined ? 'no_anchor' : 'focused' }
+    }
+
+    function requestAuditFocus(target) {
+      pendingAuditFocus = target && typeof target === 'object' ? { ...target, at: Date.now() } : null
+      try {
+        if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+          window.dispatchEvent(new CustomEvent(AUDIT_FOCUS_EVENT, { detail: pendingAuditFocus }))
+        }
+      } catch { /* 没有 CustomEvent 时靠挂载时取一次 */ }
+    }
+
+    function takeAuditFocus(audience) {
+      const target = pendingAuditFocus
+      if (!target) return null
+      if (audience && target.audience && target.audience !== audience) return null
+      pendingAuditFocus = null
+      return target
+    }
+
+    /** 只读探测：面板挂载时据此先切到「审计」标签，再让 AuditTab 自己消费。 */
+    function peekAuditFocus(audience) {
+      const target = pendingAuditFocus
+      if (!target) return null
+      if (audience && target.audience && target.audience !== audience) return null
+      return target
+    }
+
+    /**
+     * 从轨迹/头部入口打开记忆审计：优先主面板；没有侧栏入口时切到会话内的
+     * 「记忆」视图；两者都不可用时至少打开设置页（面板挂载后会消费 pending）。
+     */
+    function openMemoryAuditPanel(target) {
+      const sessionId = target && typeof target.sessionId === 'string' ? target.sessionId : undefined
+      try {
+        const main = safeSlots()?.entries?.('main') ?? []
+        if (main.some((entry) => entry?.options?.key === 'memory')) {
+          requestAuditFocus({ ...target, audience: 'panel' })
+          try { clientCtx?.get?.('layout')?.selectPanel?.('memory') } catch { /* 交给挂载消费 */ }
+          return 'panel'
+        }
+      } catch { /* fallthrough */ }
+      try {
+        const views = safeSlots()?.entries?.('conversation.view') ?? []
+        const hasView = views.some((entry) => entry?.options?.id === 'memory')
+        if (hasView && sessionId !== undefined && conversationStoreFor(sessionId) !== undefined) {
+          requestAuditFocus({ ...target, audience: 'view' })
+          if (setConversationView(sessionId, 'memory')) return 'view'
+        }
+      } catch { /* fallthrough */ }
+      requestAuditFocus({ ...target, audience: 'panel' })
+      try { clientCtx?.get?.('layout')?.selectPanel?.('settings') } catch { /* 无布局服务 */ }
+      return 'settings'
+    }
+
     // ===== 审计标签页 =====
     const AUDIT_CHANNEL_META = {
       digest: '摘要', recall: '召回', rules: '规则', rules_delta: '规则增量',
@@ -2121,6 +2365,7 @@ window.__ModuleLoader__.load({
         return `${meta.label}${meta.detail}${entry.delivery && entry.delivery.textChars ? ` · ${entry.delivery.textChars} 字符` : ''}`
       }
       if (entry.kind === 'signal') {
+        if (entry.stage === 'tool_call') return `记忆工具调用${entry.signal && entry.signal.tool ? ` · ${entry.signal.tool}` : ''}`
         const stage = entry.stage === 'signal_consumed' ? '信号已消费' : entry.stage === 'signal_dropped' ? '信号被丢弃' : '信号已排队'
         return `${stage}${entry.signal && entry.signal.reason ? ` · ${entry.signal.reason}` : ''}`
       }
@@ -2165,7 +2410,16 @@ window.__ModuleLoader__.load({
       tag_mismatch: '标签不匹配', dedup: '去重', excluded: '被排除', skipped: '跳过',
     }
 
-    function AuditTab({ scopes, records = [], openRecord, openSession, sessionInfo }) {
+    function AuditTab({
+      scopes,
+      records = [],
+      openRecord,
+      openSession,
+      sessionInfo,
+      audience = 'panel',
+      lockSession,
+      openTrajectory,
+    }) {
       const [entries, setEntries] = React.useState([])
       const [stats, setStats] = React.useState(null)
       const [total, setTotal] = React.useState(0)
@@ -2176,10 +2430,12 @@ window.__ModuleLoader__.load({
       const [error, setError] = React.useState('')
       const [copyNotice, setCopyNotice] = React.useState('')
       const [exportNotice, setExportNotice] = React.useState('')
+      const [focusNotice, setFocusNotice] = React.useState('')
+      const [focusBusy, setFocusBusy] = React.useState(false)
       const [autoRefresh, setAutoRefresh] = React.useState(true)
       const [refreshMs, setRefreshMs] = React.useState(500)
       const loadingRef = React.useRef(false)
-      const [session, setSession] = React.useState(readAuditSession())
+      const [session, setSession] = React.useState(lockSession || readAuditSession())
       const [channel, setChannel] = React.useState('')
       const [outcome, setOutcome] = React.useState('')
       const [trigger, setTrigger] = React.useState('')
@@ -2194,10 +2450,11 @@ window.__ModuleLoader__.load({
       const [recordCache, setRecordCache] = React.useState({})
       const tipTimer = React.useRef(null)
       const hideTimer = React.useRef(null)
+      const effectiveSession = lockSession || session
 
       function queryParams(cursorValue) {
         const params = new URLSearchParams()
-        if (session) params.set('session', session)
+        if (effectiveSession) params.set('session', effectiveSession)
         if (channel) params.set('channel', channel)
         if (outcome) params.set('outcome', outcome)
         if (trigger.trim()) params.set('trigger', trigger.trim())
@@ -2245,6 +2502,38 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => { load('', []) }, [reloadTick])
 
+      // 从轨迹行/会话头部跳到审计时，可能带着 session + callId + 具体事件 id。
+      // 面板挂载时先取一次 pending，之后靠同一个 window 事件接收（面板已经在
+      // 屏幕上时不必重挂）。只消费与自己 audience 匹配的目标。
+      React.useEffect(() => {
+        const applyFocus = () => {
+          const target = takeAuditFocus(audience)
+          if (!target) return
+          if (!lockSession && typeof target.sessionId === 'string' && target.sessionId !== '') {
+            setSession(target.sessionId)
+            writeAuditSession(target.sessionId)
+          }
+          if (typeof target.callId === 'string' && target.callId !== '') {
+            setSearch(`op:${target.callId}`)
+            setFocusNotice(`已定位到轨迹调用 ${target.callId.slice(0, 12)}`)
+          } else if (!lockSession) {
+            setSearch('')
+          }
+          if (typeof target.entryId === 'string' && target.entryId !== '') setSelectedId(target.entryId)
+          setReloadTick((n) => n + 1)
+        }
+        applyFocus()
+        const onFocus = () => applyFocus()
+        try {
+          if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') window.addEventListener(AUDIT_FOCUS_EVENT, onFocus)
+        } catch { /* 没有 window 事件也能靠挂载时消费 */ }
+        return () => {
+          try {
+            if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') window.removeEventListener(AUDIT_FOCUS_EVENT, onFocus)
+          } catch { /* cleanup 失败不影响面板 */ }
+        }
+      }, [audience, lockSession])
+
       // 自动刷新：默认 500ms，可关；页面隐藏时跳过，避免后台无意义轮询。
       React.useEffect(() => {
         if (!autoRefresh) return undefined
@@ -2253,7 +2542,7 @@ window.__ModuleLoader__.load({
           load(cursor, cursorStack, { silent: true })
         }, refreshMs)
         return () => clearInterval(timer)
-      }, [autoRefresh, refreshMs, cursor, cursorStack, session, channel, outcome, trigger, search, problem, range, since, until])
+      }, [autoRefresh, refreshMs, cursor, cursorStack, effectiveSession, channel, outcome, trigger, search, problem, range, since, until])
 
       const resetAndReload = () => { setCursor(''); setCursorStack([]); setReloadTick((n) => n + 1) }
       const selected = selectedId === null ? null : entries.find((entry) => entry.id === selectedId) || null
@@ -2358,8 +2647,8 @@ window.__ModuleLoader__.load({
           value: scope.scope.slice(8),
           label: scope.label || `会话 ${scope.scope.slice(8, 16)}`,
         })))
-      if (session && !sessionOptions.some((item) => item.value === session)) {
-        sessionOptions.push({ value: session, label: `会话 ${session.slice(0, 8)}` })
+      if (effectiveSession && !sessionOptions.some((item) => item.value === effectiveSession)) {
+        sessionOptions.push({ value: effectiveSession, label: `会话 ${effectiveSession.slice(0, 8)}` })
       }
       const channelOptions = [{ value: '', label: '全部通道' }].concat(Object.keys(AUDIT_CHANNEL_META).map((key) => ({ value: key, label: AUDIT_CHANNEL_META[key] })))
       const outcomeOptions = [{ value: '', label: '全部结果' }].concat(Object.keys(AUDIT_OUTCOME_META).map((key) => ({ value: key, label: AUDIT_OUTCOME_META[key].label })))
@@ -2396,13 +2685,15 @@ window.__ModuleLoader__.load({
         banner.push(h('div', { className: 'audit-banner bad', key: 'err' }, `审计写入失败 ${writeErrors} 次；面板数据可能不完整。`))
       }
 
-      const filterActive = Boolean(session || channel || outcome || trigger || search || problem || range)
+      const filterActive = Boolean(effectiveSession || channel || outcome || trigger || search || problem || range)
       const toolbar = h('div', { className: 'audit-toolbar' },
         h('div', { className: 'audit-filter-row' },
-          h(Dropdown, {
-            items: sessionOptions, value: session, disabled: loading,
-            onChange: (next) => { setSession(next); writeAuditSession(next); resetAndReload() },
-          }),
+          lockSession
+            ? h('span', { className: 'audit-pill mute', title: lockSession }, `会话 ${String(lockSession).slice(0, 10)}`)
+            : h(Dropdown, {
+                items: sessionOptions, value: session, disabled: loading,
+                onChange: (next) => { setSession(next); writeAuditSession(next); resetAndReload() },
+              }),
           h(Dropdown, {
             items: channelOptions, value: channel, disabled: loading,
             onChange: (next) => { setChannel(next); resetAndReload() },
@@ -2462,7 +2753,7 @@ window.__ModuleLoader__.load({
             : null,
           filterActive
             ? h('button', { className: 'linkbtn', onClick: () => {
-                setSession(''); writeAuditSession(''); setChannel(''); setOutcome(''); setTrigger(''); setSearch(''); setProblem(false); setRange(''); setSince(''); setUntil(''); resetAndReload()
+                setSession(lockSession || ''); if (!lockSession) writeAuditSession(''); setChannel(''); setOutcome(''); setTrigger(''); setSearch(''); setProblem(false); setRange(''); setSince(''); setUntil(''); resetAndReload()
               } }, '清空筛选')
             : null,
           h('span', { className: 'spacer' }),
@@ -2544,15 +2835,48 @@ window.__ModuleLoader__.load({
                onClick: () => openSessionId(selected.sessionId),
              }, selected.sessionId))]
           : null
+        const directCall = auditEntryCallId(selected)
+        const hasStep = typeof selected.turn === 'number' || typeof selected.step === 'number'
+        const jumpTarget = directCall !== undefined
+          ? `callId ${directCall}`
+          : hasStep ? `第 ${selected.turn ?? '?'} 轮 / 第 ${selected.step ?? '?'} 步（按步查找）` : undefined
+        const onJump = async () => {
+          if (!selected.sessionId) return
+          setFocusBusy(true)
+          setFocusNotice('')
+          try {
+            const focus = await resolveAuditFocus(selected)
+            if (typeof openTrajectory === 'function') {
+              openTrajectory(focus)
+              setFocusNotice(focus === undefined ? '已切到轨迹页（这条没有精确锚点）' : '已定位到轨迹')
+              return
+            }
+            const result = await jumpAuditEntryToTrajectory(selected)
+            setFocusNotice(result.focused ? '已定位到轨迹' : result.opened ? '已切到轨迹页（未找到精确锚点）' : '打开轨迹失败')
+          } catch {
+            setFocusNotice('定位失败')
+          } finally {
+            setFocusBusy(false)
+          }
+        }
         const json = JSON.stringify(selected, null, 2)
         return h('div', { className: 'audit-detail' },
           h('div', { className: 'audit-detail-head' },
             h('b', null, auditSummaryLine(selected)),
             h('span', { className: 'spacer' }),
+            selected.sessionId
+              ? h('button', {
+                  className: 'audit-jump',
+                  disabled: focusBusy,
+                  title: jumpTarget === undefined ? '切到该会话的轨迹页（本条没有 callId/turn/step 锚点）' : `在轨迹中定位：${jumpTarget}`,
+                  onClick: onJump,
+                }, focusBusy ? '定位中…' : '在轨迹中定位')
+              : null,
             h('button', { className: 'linkbtn', onClick: () => copyAuditText(selected.id, setCopyNotice) }, '复制 ID'),
             copyNotice ? h('span', { className: 'audit-inline-note' }, copyNotice) : null,
             h('button', { className: 'audit-close', title: '关闭', onClick: () => { setSelectedId(null); setCopyNotice('') } }, '×'),
           ),
+          focusNotice ? h('div', { className: 'audit-jump-note' }, focusNotice) : null,
           h('div', { className: 'audit-kv' },
             kv('事件', selected.id),
             kv('序号', selected.seq),
@@ -2560,6 +2884,7 @@ window.__ModuleLoader__.load({
             kv('schema', selected.schemaVersion || '旧版'),
             sessionNode,
             kv('step', selected.step),
+            kv('轨迹锚点', jumpTarget),
             kv('通道', `${auditChannelLabel(selected.channel)} / ${selected.kind}`),
             kv('阶段', selected.stage),
             kv('触发', selected.trigger),
@@ -2745,7 +3070,7 @@ window.__ModuleLoader__.load({
     /** 待嵌入自动刷新:最多 300 次 × 1.5s(后端挂着时不无限轮询)。 */
     const PENDING_POLL_LIMIT = 300
 
-    function MemoryPanel({ openSession, sessionInfo } = {}) {
+    function MemoryPanel({ openSession, sessionInfo, openTrajectory, audience = 'panel', lockSession } = {}) {
       const [records, setRecords] = React.useState([])
       const [scopes, setScopes] = React.useState([])
       const [embedServer, setEmbedServer] = React.useState(null)
@@ -2765,6 +3090,21 @@ window.__ModuleLoader__.load({
       const [tab, setTab] = React.useState('data')
       const [pendingTick, setPendingTick] = React.useState(0)
       const [creating, setCreating] = React.useState(false)
+
+      // 从轨迹/会话头部带进来的焦点：面板可能正停在「记录」页，先切到「审计」，
+      // 具体的 session/entry 过滤由 AuditTab 挂载时消费。
+      React.useEffect(() => {
+        const sync = () => { if (peekAuditFocus(audience) !== null) setTab('audit') }
+        sync()
+        try {
+          if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') window.addEventListener(AUDIT_FOCUS_EVENT, sync)
+        } catch { /* 无事件环境 */ }
+        return () => {
+          try {
+            if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') window.removeEventListener(AUDIT_FOCUS_EVENT, sync)
+          } catch { /* cleanup 失败不影响面板 */ }
+        }
+      }, [audience])
 
       const load = async (query, scopeF, semanticF) => {
         setLoading(true); setError('')
@@ -3210,18 +3550,176 @@ window.__ModuleLoader__.load({
             : tab === 'tree'
               ? treeBody
               : tab === 'audit'
-                ? h(AuditTab, { scopes, records, openRecord, openSession, sessionInfo })
+                ? h(AuditTab, {
+                    scopes,
+                    records,
+                    openRecord,
+                    openSession,
+                    sessionInfo,
+                    audience,
+                    lockSession,
+                    openTrajectory,
+                  })
                 : overviewBody,
       )
+    }
+
+    /**
+     * 会话内的「记忆审计」视图：和 Chat/Trajectory 同一个 view ring。
+     *
+     * 它拿到 owner 传下来的 `openView(view, focus)`，所以从这里跳轨迹是宿主
+     * 官方支持的深链路径，不依赖任何内部字段。主面板（侧栏/设置）不在 view
+     * ring 里，走 `conversationStoreFor` 的 bridge。
+     */
+    function MemoryAuditView({ sessionId, openView, sessionInfo }) {
+      const openTrajectory = (focus) => {
+        try {
+          if (typeof openView === 'function') openView('trajectory', focus)
+        } catch { /* 视图不可用时保持在本页 */ }
+      }
+      return h('div', { className: 'memp mem-view' },
+        h('div', { className: 'mem-view-head' },
+          h('b', null, '记忆审计'),
+          h('span', { className: 'muted' }, '本会话的注入评估、投递与记忆工具调用；选中一条可在轨迹里精确定位。'),
+          h('span', { className: 'spacer' }),
+          h('button', {
+            className: 'linkbtn',
+            onClick: () => openMemoryAuditPanel({ sessionId }),
+          }, '打开完整面板'),
+        ),
+        h('div', { className: 'mem-view-body' },
+          h(AuditTab, {
+            scopes: [],
+            records: [],
+            sessionInfo,
+            lockSession: sessionId,
+            audience: 'view',
+            openTrajectory,
+          }),
+        ),
+      )
+    }
+
+    /** 会话头部的入口：有选中轨迹行时自动带上 callId，直接落到那组审计。 */
+    function MemoryHeaderAction({ sessionId }) {
+      return h('button', {
+        className: 'mem-head-btn',
+        title: '查看本会话的记忆审计（若轨迹里选中了工具行，会定位到该调用）',
+        onClick: () => {
+          const callId = selectedTrajectoryCallId()
+          openMemoryAuditPanel({
+            sessionId,
+            ...(callId !== undefined ? { callId } : {}),
+          })
+        },
+      }, '记忆审计')
+    }
+
+    /**
+     * Trajectory 行上的记忆徽标。
+     *
+     * Trajectory 不提供行级 slot，选中状态也只存在于组件内部。这里用宿主已经
+     * 渲染到 DOM 上的稳定属性（`data-selected` / `data-trajectory-row-key`：
+     * `kind\0call\0<callId>`）做只读观察，再把一个 fixed 徽标浮在选中行右侧。
+     * 它不插入表格、不改轨迹结构；选择器失配时什么都不显示。
+     */
+    function TrajectoryMemoryBadge() {
+      const [badge, setBadge] = React.useState(null)
+      const cache = React.useRef(new Map())
+      React.useEffect(() => {
+        let disposed = false
+        let raf = 0
+        const rafFn = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : ((fn) => setTimeout(fn, 16))
+        const cancelFn = typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : ((id) => clearTimeout(id))
+        const schedule = () => {
+          if (disposed || raf !== 0) return
+          raf = rafFn(() => { raf = 0; tick() })
+        }
+        const tick = () => {
+          try {
+            if (typeof document === 'undefined' || typeof window === 'undefined') return
+            const row = document.querySelector('tr[data-selected="true"][data-trajectory-row-key]')
+            const callId = trajectoryRowCallId(row)
+            const sessionId = currentSessionId()
+            if (!row || callId === undefined || sessionId === undefined) {
+              setBadge(null)
+              return
+            }
+            const rect = row.getBoundingClientRect()
+            const position = {
+              top: Math.max(4, rect.top + 4),
+              left: Math.max(8, Math.min(window.innerWidth - 132, rect.right - 122)),
+            }
+            const key = `${sessionId}|${callId}`
+            const cached = cache.current.get(key)
+            const now = Date.now()
+            if (cached && cached.pending === true) return
+            if (cached && now - cached.at < 4000) {
+              setBadge(cached.entries.length === 0 ? null : { ...position, sessionId, callId, entries: cached.entries })
+              return
+            }
+            cache.current.set(key, { at: now, pending: true, entries: [] })
+            api(`audit?session=${encodeURIComponent(sessionId)}&operation=${encodeURIComponent(callId)}&limit=20`)
+              .then((value) => {
+                const entries = value && Array.isArray(value.entries) ? value.entries : []
+                cache.current.set(key, { at: Date.now(), pending: false, entries })
+                if (!disposed) schedule()
+              })
+              .catch(() => {
+                cache.current.set(key, { at: Date.now(), pending: false, entries: [] })
+              })
+          } catch { /* 观察失败：保持无徽标 */ }
+        }
+        let observer = null
+        try {
+          observer = new MutationObserver(schedule)
+          observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['data-selected'],
+          })
+        } catch { observer = null }
+        const onScroll = () => schedule()
+        let onResize = onScroll
+        try {
+          window.addEventListener('scroll', onScroll, true)
+          window.addEventListener('resize', onResize)
+        } catch { /* 非浏览器环境 */ }
+        schedule()
+        return () => {
+          disposed = true
+          if (raf !== 0) cancelFn(raf)
+          try { observer?.disconnect() } catch { /* 已断开 */ }
+          try {
+            window.removeEventListener('scroll', onScroll, true)
+            window.removeEventListener('resize', onResize)
+          } catch { /* 非浏览器环境 */ }
+        }
+      }, [])
+      if (badge === null) return null
+      return h('button', {
+        className: 'mem-traj-chip',
+        style: { top: badge.top, left: badge.left },
+        title: '这次工具调用有记忆审计记录；点击在记忆面板里查看',
+        onClick: () => {
+          openMemoryAuditPanel({
+            sessionId: badge.sessionId,
+            callId: badge.callId,
+            ...(badge.entries[0]?.id ? { entryId: badge.entries[0].id } : {}),
+          })
+          setBadge(null)
+        },
+      }, h('span', { className: 'dot' }), `记忆 ${badge.entries.length}`)
     }
 
     const inject = ['slots']
 
     /** 侧栏入口打开的主界面页面(整块可滚动,内容就是面板本体)。 */
-    function MemoryPage({ openSession, sessionInfo } = {}) {
+    function MemoryPage({ openSession, sessionInfo, openTrajectory } = {}) {
       return h('div', { className: 'mem-page' },
         h('div', { className: 'mem-page-head' }, h('h2', null, '记忆系统')),
-        h(MemoryPanel, { openSession, sessionInfo }),
+        h(MemoryPanel, { openSession, sessionInfo, openTrajectory, audience: 'panel' }),
       )
     }
 
@@ -3264,6 +3762,7 @@ window.__ModuleLoader__.load({
 
         const slots = ctx.get('slots')
         if (slots === undefined) return
+        clientCtx = ctx
 
         /** 宿主 uiWorkspace 服务：打开会话 / 读取会话摘要（旧宿主缺失时静默降级）。 */
         const workspaceService = () => {
@@ -3297,7 +3796,12 @@ window.__ModuleLoader__.load({
 
         slots.inject('settings.section', () => slots.register(
           { name: 'settings.section', id: 'memory', order: 24, label: NAV_LABEL },
-          () => React.createElement(MemoryPanel, { openSession, sessionInfo }),
+          () => React.createElement(MemoryPanel, {
+            openSession,
+            sessionInfo,
+            audience: 'panel',
+            openTrajectory: jumpAuditEntryToTrajectory,
+          }),
         ))
 
         // 侧栏入口(可选):开启后在左侧栏「插件」下方多一个「记忆系统」,点击在主界面打开面板。
@@ -3316,7 +3820,11 @@ window.__ModuleLoader__.load({
             }
             try {
               sidebarDisposers = [
-                slots.inject('main', () => slots.register({ name: 'main', key: 'memory' }, () => React.createElement(MemoryPage, { openSession, sessionInfo }))),
+                slots.inject('main', () => slots.register({ name: 'main', key: 'memory' }, () => React.createElement(MemoryPage, {
+                  openSession,
+                  sessionInfo,
+                  openTrajectory: jumpAuditEntryToTrajectory,
+                }))),
                 slots.inject('sidebar.panellist', () => slots.register(
                   { name: 'sidebar.panellist', id: 'memory', order: 20, label: () => NAV_LABEL },
                   () => React.createElement(NavLineIcon),
@@ -3332,6 +3840,41 @@ window.__ModuleLoader__.load({
         if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
           window.addEventListener('dsh-memory:settings', syncSidebar)
           ctx.effect(() => () => window.removeEventListener('dsh-memory:settings', syncSidebar), 'dsh-memory: sidebar entry')
+        }
+
+        // ===== 会话轨迹 / 视图环 / 浮层集成 =====
+        // 每一条都单独兜底：宿主没有这个槽（旧版本/精简组合）时只是少一个入口，
+        // 绝不能让整个 client apply 失败。
+        try {
+          slots.inject('conversation.view', () => slots.register({
+            name: 'conversation.view',
+            id: 'memory',
+            order: 20,
+            label: () => '记忆',
+            inject: (sessionId) => ({ sessionId, sessionInfo }),
+          }, MemoryAuditView))
+        } catch (error) {
+          console.warn('[dsh-memory] 记忆审计视图注册失败:', error?.message)
+        }
+        try {
+          slots.inject('conversation.session.header.actions', () => slots.register({
+            name: 'conversation.session.header.actions',
+            id: 'memory-audit',
+            order: 20,
+            label: () => '记忆审计',
+            inject: (sessionId) => ({ sessionId }),
+          }, MemoryHeaderAction))
+        } catch (error) {
+          console.warn('[dsh-memory] 会话头部记忆入口注册失败:', error?.message)
+        }
+        try {
+          slots.inject('shell.overlay', () => slots.register({
+            name: 'shell.overlay',
+            id: 'memory-audit-badge',
+            order: 60,
+          }, () => React.createElement(TrajectoryMemoryBadge)))
+        } catch (error) {
+          console.warn('[dsh-memory] 轨迹记忆徽标注册失败:', error?.message)
         }
       } catch (error) {
         console.error('[dsh-memory] client apply 失败(已吞掉):', error?.message)
@@ -3458,6 +4001,17 @@ window.__ModuleLoader__.load({
       NavLineIcon: NavLineIcon,
       NAV_DOM: NAV_DOM,
       paintNavIcon: paintNavIcon,
+      // 审计 ↔ 轨迹桥（测试只覆盖纯解析/焦点总线，不碰宿主 slot 实例）
+      MemoryAuditView: MemoryAuditView,
+      MemoryHeaderAction: MemoryHeaderAction,
+      TrajectoryMemoryBadge: TrajectoryMemoryBadge,
+      auditEntryCallId: auditEntryCallId,
+      trajectoryRowCallId: trajectoryRowCallId,
+      requestAuditFocus: requestAuditFocus,
+      takeAuditFocus: takeAuditFocus,
+      conversationStoreFor: conversationStoreFor,
+      setConversationView: setConversationView,
+      setClientCtx: (value) => { clientCtx = value },
     }
     return module.exports
   },
