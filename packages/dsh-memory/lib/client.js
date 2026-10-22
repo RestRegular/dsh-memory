@@ -2185,6 +2185,30 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 轨迹行可见区域：表格滚动容器（`_tablePane`）的上下边界，再扣掉 sticky 表头。
+     * fixed 定位的浮层不会被表格的 overflow 裁剪，所以必须自己做这个裁剪；
+     * 否则行滚到表头/工具栏上方后，图标还会留在原地。
+     */
+    function trajectoryRowClip(row) {
+      try {
+        if (!row || typeof row.closest !== 'function') return null
+        const pane = row.closest('[class*="_tablePane"]')
+        if (!pane) return null
+        const paneRect = pane.getBoundingClientRect()
+        if (paneRect.height <= 0) return null
+        const table = row.closest('table')
+        const head = table && typeof table.querySelector === 'function' ? table.querySelector('thead') : null
+        const headRect = head ? head.getBoundingClientRect() : null
+        return {
+          top: Math.max(paneRect.top, headRect ? headRect.bottom : paneRect.top),
+          bottom: paneRect.bottom,
+        }
+      } catch {
+        return null
+      }
+    }
+
+    /**
      * `conversation.session` 注册时把 per-session store 交给 slot 服务；服务把实例
      * 放在 `_stores` 的 handle 记录里，按 session id 解析。这是主面板唯一能拿到
      * `openView` 的路径（slot 只把 actions 交给注册者自己）。
@@ -3662,6 +3686,11 @@ window.__ModuleLoader__.load({
               return
             }
             const rect = row.getBoundingClientRect()
+            const clip = trajectoryRowClip(row)
+            if (clip !== null && (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5)) {
+              setBadge(null)
+              return
+            }
             const position = {
               top: Math.max(4, rect.top + 4),
               left: Math.max(8, Math.min(window.innerWidth - 132, rect.right - 122)),
@@ -3750,18 +3779,22 @@ window.__ModuleLoader__.load({
           try {
             if (disposed || typeof document === 'undefined' || typeof window === 'undefined') return
             const sessionId = currentSessionId()
-            if (sessionId === undefined) { setMarks([]); return }
+            if (sessionId === undefined) { setMarks((prev) => prev.length === 0 ? prev : []); return }
             const rows = [...document.querySelectorAll('tr[data-trajectory-row-key]')]
-            if (rows.length === 0) { setMarks([]); return }
+            if (rows.length === 0) { setMarks((prev) => prev.length === 0 ? prev : []); return }
             const visible = new Map()
             for (const row of rows) {
               const callId = trajectoryRowCallId(row)
               if (callId === undefined) continue
               const rect = row.getBoundingClientRect()
               if (rect.bottom < 0 || rect.top > window.innerHeight || rect.height <= 0) continue
+              // fixed 浮层不受表格 overflow 裁剪：行必须完整落在滚动容器（扣掉
+              // sticky 表头）内，否则行滚到表头上方时图标会留在原地。
+              const clip = trajectoryRowClip(row)
+              if (clip !== null && (rect.top < clip.top - 0.5 || rect.bottom > clip.bottom + 0.5)) continue
               visible.set(callId, rect)
             }
-            if (visible.size === 0) { setMarks([]); return }
+            if (visible.size === 0) { setMarks((prev) => prev.length === 0 ? prev : []); return }
             const cached = cacheRef.current.get(sessionId)
             const now = Date.now()
             if (cached && cached.pending === true) return

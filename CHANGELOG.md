@@ -2,6 +2,12 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.14.3 — 轨迹行图标按滚动容器裁剪
+
+- **根因**：行左侧的年轮图标是 `shell.overlay` 里的 `position:fixed` 元素，不受轨迹表格 `overflow` 裁剪。行滚到表头/工具栏上方后，它的 `getBoundingClientRect()` 仍可能落在浏览器视口内，图标就留在原地，看起来“超出范围还显示”。
+- **修复**：用 `row.closest('[class*="_tablePane"]')` 的上下边界，再扣掉 sticky 表头（`thead.getBoundingClientRect().bottom`）作为可见界；行不完全落在界内就不渲染标记。选中行的「记忆 N」徽标同样做这个裁剪。
+- 回归测试：表头上方的 call-3 即使有审计也不标记；完全可见的 call-1 正常标记。
+
 ## 0.14.2 — 修复轨迹 callId 解析，审计页签不再全空；行内有审计图标
 
 - **根因**：Trajectory 把 `trajectoryVirtualRecordKey()` 的结果写入 `data-trajectory-row-key`，而该函数会先 `encodeURIComponent`，DOM 上实际是 `tool%00call%00<callId>`。旧解析按原始 `\0call\0` 分隔符找，永远拿不到 callId，详情页签就用空锚点查询，所以无论点哪条记录都没有审计内容；行徽标也因此从不出现。现在先 `decodeURIComponent` 再解析，并剥掉 `\0summary\0<kind>` 后缀；未编码的旧格式也继续兼容。
