@@ -17,10 +17,10 @@ import { estimateTokens } from '../provider/rerank.js'
 
 const HEADER =
   '以下是本项目 / 全局已有的记忆摘要（按重要度挑出的前几条；' +
-  '需要原文用 memory_search，删除用 memory_forget）：'
+  '需要原文用 memory_get（先用 memory_search 定位），删除用 memory_forget）：'
 
 const HINT_HEADER = '相关记忆索引（正文未注入）：'
-const HINT_FOOTER = '这些条目的正文尚未加载；遇到相关任务时，按标签或 ID 用 memory_search 取正文。'
+const HINT_FOOTER = '这些条目的正文尚未加载；遇到相关任务时，按 ID 用 memory_get 取正文，按标签用 memory_search 定位。'
 
 /** 一条正文被省略的原因。统计口径互斥:每条记录只归入一个原因。 */
                                                                                      

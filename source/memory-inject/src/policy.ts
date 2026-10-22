@@ -6,6 +6,8 @@ export const POLICY_TEXT = `## 记忆系统
 
 本会话挂着一个本地记忆库，工具：memory_search / memory_list / memory_get / memory_save / memory_forget（可按会话、项目、全局等作用域读写）。
 
+memory_search 只返回印象（ID、作用域、类型、标签和少量摘要）；判断相关后再用 memory_get(ids, fields) 取正文。fields 省略 = content + scope + kind + tags；只要摘要用 ["summary"]，只要正文用 ["content"]，需要重要度 / 时间 / 触发词等再显式加上对应字段。
+
 遇到以下情况先查记忆，不要凭猜测开始：
 - 不确定这个项目以前怎么做、有没有既定约定、某个坑是否踩过；
 - 用户的话里出现「上次 / 之前 / 还是那样」这类指代。

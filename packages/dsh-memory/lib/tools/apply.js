@@ -19,6 +19,7 @@ import {
                           
                 
 } from './index.js'
+import { renderGetResult, renderSearchResult } from './render.js'
 import { resolveCurrentScopes, scopeKind,               } from '../provider/scope.js'
 
 export const name = 'dsh-tool-memory'
@@ -104,10 +105,7 @@ export function apply(ctx     , config                   = {}) {
 
   register(tools.memory_search, (value, _args, exec) => {
     const agent = (exec                                   )?.agent
-    if (value.records.length === 0) return '没有找到相关记忆。'
-    return value.records
-      .map((h) => `[${h.score.toFixed(3)}] (${renderScope(h.scope, agent)}/${h.kind}) ${h.content}`)
-      .join('\n')
+    return renderSearchResult(value, (scope) => renderScope(scope, agent))
   })
 
   register(tools.memory_forget, (value) => (value.removed === 0 ? '没有匹配的记忆。' : `已删除 ${value.removed} 条记忆。`))
@@ -123,13 +121,7 @@ export function apply(ctx     , config                   = {}) {
 
   register(tools.memory_get, (value, _args, exec) => {
     const agent = (exec                                   )?.agent
-    const body = value.records.map((r) => {
-      const tags = Array.isArray(r.tags) && r.tags.length > 0 ? ` · ${r.tags.join(', ')}` : ''
-      return `[${r.id}] (${renderScope(r.scope, agent)}/${r.kind}${tags})\n${r.content}`
-    }).join('\n\n')
-    const missing = value.missing.length > 0 ? `未找到：${value.missing.join(', ')}` : ''
-    if (body === '') return missing || '没有找到记忆。'
-    return missing === '' ? body : `${body}\n\n${missing}`
+    return renderGetResult(value, (scope) => renderScope(scope, agent))
   })
 }
 

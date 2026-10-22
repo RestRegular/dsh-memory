@@ -47,7 +47,7 @@ test('renderRecallBlock respects token budget and topK', () => {
   const block = renderRecallBlock(hits, cfg)
   assert.ok(block)
   assert.ok(block!.tokens <= 80, `within budget, got ${block!.tokens}`)
-  assert.ok(block!.text.includes('memory_search'))
+  assert.ok(block!.text.includes('memory_get'))
   // topK cap
   const rich = { ...defaultInjectConfig, tokenBudget: 10_000, topK: 3 }
   const block2 = renderRecallBlock(hits, rich)!

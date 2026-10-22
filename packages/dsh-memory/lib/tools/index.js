@@ -22,10 +22,25 @@ import { canonicalWorkspacePath, normalizeScopeInput, resolveScopeRef } from '..
                                               
  
 
+/** provider 的 getByIds 返回的记录形状（工具层只读这些字段）。 */
+                                  
+            
+               
+              
+                 
+                
+                    
+                   
+                   
+                    
+                     
+                     
+ 
+
 /** 只有这一层需要的能力子集(provider 在宿主里提供,测试里可以 mock)。 */
                                     
                                                               
-                                                                                                                                                    
+                                                                                                                                                                     
                                                                      
                                                                                                                         
                                      
@@ -35,7 +50,7 @@ import { canonicalWorkspacePath, normalizeScopeInput, resolveScopeRef } from '..
                                               
                                                    
                                          
-                                                                                                                                                      
+                                             
                                     
                                                                      
      
@@ -255,12 +270,30 @@ export function memorySaveTool(opts                    )                        
   }
 }
 
+/** memory_search / memory_get(summary) 的默认摘要长度（字符）。 */
+export const DEFAULT_SUMMARY_CHARS = 160
+
+/** 摘要字数上限：默认 160，允许调用方在 20~2000 之间调整。 */
+export function resolveSummaryChars(value         )         {
+  const n = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(n)) return DEFAULT_SUMMARY_CHARS
+  return Math.min(2000, Math.max(20, Math.round(n)))
+}
+
+/** 空白折叠 + 截断。memory_search 的“少量摘要”和 memory_get 的 summary 字段共用。 */
+export function summarize(content        , chars         = DEFAULT_SUMMARY_CHARS)         {
+  const flat = String(content).replace(/\s+/g, ' ').trim()
+  return flat.length <= chars ? flat : `${flat.slice(0, chars)}…`
+}
+
                              
                
                 
                
                                                  
                              
+                          
+                       
  
 
                             
@@ -268,7 +301,9 @@ export function memorySaveTool(opts                    )                        
                
                
               
+                
                    
+                                           
                  
  
 
@@ -279,12 +314,13 @@ export function memorySaveTool(opts                    )                        
 export function memorySearchTool(opts                    )                                     {
   return {
     name: 'memory_search',
-    description: 'Search saved memories by keyword or meaning (lexical + local vector recall).',
+    description: 'Search saved memories by keyword or meaning (lexical + local vector recall). Returns id/scope/kind/tags and a short summary; use memory_get for full content.',
     parameters: {
       query: { type: 'string', required: true },
       scope: { type: 'string', description: SCOPE_DESCRIPTION },
       topK: { type: 'number', description: '1~20' },
       includeSuperseded: { type: 'boolean', description: '默认 false；true 时把已被 supersede 的旧版本也返回（历史核对）' },
+      summaryChars: { type: 'number', description: `每条摘要的字数上限（默认 ${DEFAULT_SUMMARY_CHARS}，20~2000）` },
     },
     async execute(args            , exec          )                        {
       const service = svc(opts)
@@ -301,6 +337,7 @@ export function memorySearchTool(opts                    )                      
         // 省略 scope:三路合并(会话 + 项目 + global)
         scopes = readScopes(opts, service, agentOf(exec))
       }
+      const chars = resolveSummaryChars(args.summaryChars)
       try {
         const hits = await service.search({
           text: args.query,
@@ -315,8 +352,9 @@ export function memorySearchTool(opts                    )                      
             score: h.score,
             scope: h.record.scope,
             kind: h.record.kind,
+            tags: Array.isArray(h.record.tags) ? h.record.tags : [],
             updatedAt: h.record.updatedAt,
-            content: h.record.content,
+            summary: summarize(h.record.content, chars),
           })),
         }
       } catch (error) {
@@ -428,18 +466,109 @@ export function memoryListTool(opts                    )                        
   }
 }
 
-                                          
+/** memory_get 可按需取得的字段。id 始终返回，不在此列。 */
+export const GET_FIELDS = [
+  'content',
+  'summary',
+  'scope',
+  'kind',
+  'tags',
+  'importance',
+  'createdAt',
+  'updatedAt',
+  'expiresAt',
+  'triggers',
+  'supersedes',
+]         
+
+                                                  
+
+/** 省略 fields 时的默认视图：与旧版 memory_get 看到的内容一致。 */
+export const DEFAULT_GET_FIELDS             = ['content', 'scope', 'kind', 'tags']
+
+                          
+               
+                                                   
+                              
+                                
+                       
+ 
+
+                                                                           
+
                             
-                                                                                                                                     
+                      
+                                   
+                    
                    
  
+
+const FIELD_BY_LOWER = new Map                  (GET_FIELDS.map((field) => [field.toLowerCase(), field]))
+
+/** 解析并校验 fields：接受数组，也接受逗号/空格分隔的字符串。 */
+export function resolveGetFields(raw                   )             {
+  if (raw === undefined || raw === null) return [...DEFAULT_GET_FIELDS]
+  const items = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(/[,\s]+/) : null
+  if (items === null) {
+    throw new MemoryToolError('FIELDS_INVALID', `fields must be an array or a comma-separated string; allowed: ${GET_FIELDS.join(', ')}`)
+  }
+  const fields             = []
+  const invalid           = []
+  for (const item of items) {
+    const key = String(item).trim().toLowerCase()
+    if (key === '') continue
+    const field = FIELD_BY_LOWER.get(key)
+    if (field !== undefined) {
+      if (!fields.includes(field)) fields.push(field)
+    } else if (!invalid.includes(key)) {
+      invalid.push(key)
+    }
+  }
+  if (invalid.length > 0) {
+    throw new MemoryToolError('FIELDS_INVALID', `unknown field(s): ${invalid.join(', ')}; allowed: ${GET_FIELDS.join(', ')}`)
+  }
+  if (fields.length === 0) {
+    throw new MemoryToolError('FIELDS_EMPTY', `fields 不能为空；可用：${GET_FIELDS.join(', ')}`)
+  }
+  return fields
+}
+
+function pickGetFields(
+  record                 ,
+  fields            ,
+  summaryChars        ,
+)            {
+  const out            = { id: record.id }
+  for (const field of fields) {
+    switch (field) {
+      case 'content': out.content = record.content; break
+      case 'summary': out.summary = summarize(record.content, summaryChars); break
+      case 'scope': out.scope = record.scope; break
+      case 'kind': out.kind = record.kind; break
+      case 'tags': out.tags = Array.isArray(record.tags) ? record.tags : []; break
+      case 'importance': out.importance = record.importance; break
+      case 'createdAt': out.createdAt = record.createdAt; break
+      case 'updatedAt': out.updatedAt = record.updatedAt; break
+      case 'expiresAt': if (record.expiredAt !== undefined) out.expiresAt = record.expiredAt; break
+      case 'triggers': if (Array.isArray(record.triggers)) out.triggers = record.triggers; break
+      case 'supersedes': if (record.supersedes !== undefined && record.supersedes !== '') out.supersedes = record.supersedes; break
+    }
+  }
+  return out
+}
 
 export function memoryGetTool(opts                    )                               {
   return {
     name: 'memory_get',
-    description: 'Fetch memories by id or by the 8-char id prefix shown in recall/digest summaries. Fast path: no retrieval needed.',
+    description: 'Fetch memories by id or by the 8-char id prefix shown in search/recall/digest output. Default fields: content + scope + kind + tags; pass fields to fetch only what you need (e.g. ["summary"], ["tags"], ["updatedAt"]).',
     parameters: {
       ids: { type: 'array', items: { type: 'string' }, description: '记忆 id 或摘要开头的 8 位前缀,1~50 个', required: true },
+      fields: {
+        type: 'array',
+        items: { type: 'string' },
+        description: `只取这些字段，省略=${DEFAULT_GET_FIELDS.join('+')}；可选：${GET_FIELDS.join(' / ')}（id 始终返回）`,
+      },
+      summaryChars: { type: 'number', description: `summary 字段的字数上限（默认 ${DEFAULT_SUMMARY_CHARS}，20~2000）` },
     },
     async execute(args         )                     {
       const service = svc(opts)
@@ -450,13 +579,13 @@ export function memoryGetTool(opts                    )                         
       if (typeof service.getByIds !== 'function') {
         throw toolError(new Error('当前 provider 不支持 memory_get（请升级 @restregular/dsh-memory）'))
       }
+      const fields = resolveGetFields(args.fields)
+      const chars = resolveSummaryChars(args.summaryChars)
       try {
         const found = service.getByIds(ids)
         return {
-          records: found.map((r) => ({
-            id: r.id, scope: r.scope, kind: r.kind, content: r.content,
-            tags: r.tags, importance: r.importance, updatedAt: r.updatedAt,
-          })),
+          records: found.map((r) => pickGetFields(r, fields, chars)),
+          fields,
           missing: ids.filter((token) => !found.some((r) => r.id === token || r.id.startsWith(token))),
         }
       } catch (error) {

@@ -2,6 +2,14 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.16.0 — memory_search 只回印象，memory_get 按字段取
+
+- **`memory_search` 不再返回正文**：每条结果只给 8 位 id、作用域、类型、标签和一段短摘要（默认 160 字），避免一次检索把整篇记忆塞进上下文。摘要长度可用 `summaryChars` 调整（20~2000）。返回结构从 `content` 改为 `summary`，正文统一走 `memory_get`。
+- **`memory_get` 新增 `fields`**：可选择性地取 `content` / `summary` / `scope` / `kind` / `tags` / `importance` / `createdAt` / `updatedAt` / `expiresAt` / `triggers` / `supersedes`。省略时保持旧视图（`content + scope + kind + tags`）；`id` 始终返回。未知字段明确报 `FIELDS_INVALID`，空列表报 `FIELDS_EMPTY`。`summary` 支持 `summaryChars`（默认 160，20~2000）。
+- 渲染逻辑抽到不依赖宿主的 `tool-memory/src/render.ts`：检索一行一条、取记录时按 fields 拼元数据，只取元数据时不输出正文行；单测直接断言模型看到的文字。
+- 提示文案同步：系统提示的「记忆使用策略」、会话摘要页脚、旧式召回头部都改为“先 `memory_search` 定位、再 `memory_get` 取正文”，不再让模型去 `memory_search` 里找原文。
+- 回归测试：搜索不带正文、摘要截断与上下界；`fields` 的选择性取用 / 逗号字符串 / 未知字段 / 空列表 / missing；默认视图不变；搜索与取记录的文本渲染格式。
+
 ## 0.15.2 — 导出 / 导入保留流程触发词与状态过期时间
 
 - 0.15.0 / 0.15.1 新增的 `triggers` 与 `expiredAt` 之前没有进入 `exportAll`，导出再导入会把流程触发词丢掉、把状态记忆重新当成新状态（TTL 重算）。现在两者都随纯文本导出往返；`expiredAt` 导入时作为绝对时间写回，不再重算 TTL。

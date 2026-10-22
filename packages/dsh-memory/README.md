@@ -39,7 +39,7 @@ JSONL 落盘 · 本机向量检索 · 五个模型工具 · 自动召回 · 硬�
 
 | 能力 | 说明 |
 | --- | --- |
-| **五个工具** | `memory_save` / `memory_search` / `memory_list` / `memory_get` / `memory_forget`。摘要每行带 8 位 id，`memory_get` 直接取全文 |
+| **五个工具** | `memory_save` / `memory_search` / `memory_list` / `memory_get` / `memory_forget`。`memory_search` 只回印象（8 位 id / 作用域 / 类型 / 标签 / 短摘要），正文和元数据用 `memory_get` 的 `fields` 按需取 |
 | **四种作用域** | 会话 / 项目 / `global` / 自定义名。默认写进当前会话，读默认合并会话 + 项目 + global；项目作用域可起别名 |
 | **双通道检索** | 词法（IDF + 中文 bigram）**+** 向量（本机 llama-server 的 OpenAI 兼容 `/v1/embeddings`）。向量缺席自动降级，不报错、不阻塞 |
 | **自动召回** | 每轮按用户问题召回；新会话第一步注入项目 / global 摘要；发布、部署、工具失败等行为按标签触发定向召回 |
@@ -164,12 +164,22 @@ memory_save({
 ### 3. 检索、取全文、列出、忘记
 
 ```jsonc
-memory_search({ "query": "pnpm 装依赖", "topK": 5 })
+memory_search({ "query": "pnpm 装依赖", "topK": 5 })              // 只回 id / 作用域 / 类型 / 标签 / 摘要
 memory_search({ "query": "旧的发布流程", "includeSuperseded": true }) // 默认隐藏被修正/覆盖的旧版本
-memory_get({ "ids": ["3f2a9c1d"] })
+memory_get({ "ids": ["3f2a9c1d"] })                                // 默认：正文 + scope + kind + tags
+memory_get({ "ids": ["3f2a9c1d"], "fields": ["summary", "updatedAt"] })
+memory_get({ "ids": ["3f2a9c1d"], "fields": ["content"] })         // 只要正文
 memory_list({ "limit": 20 })
 memory_forget({ "id": "3f2a9c1d" })          // 按内容删：memory_forget({ query, scope })
 ```
+
+`memory_search` 不再返回正文：每条只有 8 位 id、作用域、类型、标签和摘要（默认 160 字，
+`summaryChars` 可调 20~2000）。判断相关后用 `memory_get` 取正文或元数据：
+
+- `fields` 省略 = `content + scope + kind + tags`（与旧版看到的一致）；
+- 只取摘要：`["summary"]`；只取正文：`["content"]`；
+- 元数据可选 `importance` / `createdAt` / `updatedAt` / `expiresAt` / `triggers` / `supersedes`；
+- `id` 始终返回；未知字段会明确报 `FIELDS_INVALID`，不会静默忽略。
 
 `memory_search` 省略 `scope` 时合并**会话 + 项目 + global**（按来源标注、按 id 去重）；
 `scope: "all"` 查所有已发现的作用域，写入路径会明确拒绝 `all`。
