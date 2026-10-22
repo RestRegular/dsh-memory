@@ -12,6 +12,7 @@ JSONL 落盘 · 本机向量检索 · 五个模型工具 · 自动召回 · 硬�
 [![npm downloads](https://img.shields.io/npm/dm/@restregular/dsh-memory.svg)](https://www.npmjs.com/package/@restregular/dsh-memory)
 [![license](https://img.shields.io/npm/l/@restregular/dsh-memory.svg)](https://github.com/RestRegular/dsh-memory/blob/main/LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522.13-5FA04E.svg)](https://nodejs.org/)
+[![Listed on dsh-plugin.org](https://dsh-plugin.org/badges/listed.svg)](https://dsh-plugin.org/plugins/restregular/dsh-memory)
 
 [npm 包](https://www.npmjs.com/package/@restregular/dsh-memory) · [问题反馈](https://github.com/RestRegular/dsh-memory/issues) · [更新日志](https://github.com/RestRegular/dsh-memory/blob/main/CHANGELOG.md)
 
