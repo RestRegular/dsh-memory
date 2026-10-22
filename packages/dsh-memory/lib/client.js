@@ -106,7 +106,7 @@ window.__ModuleLoader__.load({
       '.memp .empty{color:var(--dsw-alias-label-secondary);font-size:12.5px;padding:16px 2px;text-align:center}',
       // 语义检索:搜索框旁的 toggle(轨道 + 圆点,沿用 .toggle 的宿主 token 配色,
       // 深浅色都由 --dsw-alias-switch-thumb / brand-primary / label-primary-foreground
-      // 决定,不再写死颜色)+ 结果说明行 + 结果卡上的相关度
+      // 决定,不再写死颜色)+ 结果说明行 + 结果卡上的排序得分
       '.memp .toolbar .semantic{flex:none;padding:4px 10px 4px 5px}',
       '.memp .toolbar .semantic-label{font-size:12px;line-height:1.6}',
       '.memp .toolbar .semantic-state{font-size:11px;color:var(--dsw-alias-label-secondary)}',
@@ -808,8 +808,10 @@ window.__ModuleLoader__.load({
           score !== null && score !== undefined && Number.isFinite(Number(score))
             ? h('span', {
                 className: 'badge score',
-                title: '检索得分：向量相似度 / 词法命中，再按时效与重要度加权后的排序分',
-              }, `相关度 ${Number(score).toFixed(2)}`)
+                // 这是**排序分**,不是概率:向量/词法命中 × 重要度 × 时效 × 访问次数加权,
+                // 访问次数多时可能大于 1。叫「相关度」会让人误以为一定在 0~1 之间。
+                title: '检索得分 = 向量/词法命中 × 重要度 × 时效 × 访问次数；只用于结果排序，可能大于 1',
+              }, `得分 ${Number(score).toFixed(2)}`)
             : null,
           rec.supersedes
             ? h('span', {

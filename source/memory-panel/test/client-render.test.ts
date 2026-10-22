@@ -1104,7 +1104,7 @@ test('记录页语义检索:开关、/search 请求、结果说明与相关度�
   assert.ok(text.includes('语义排序'), `结果说明标出向量参与了排序(${text.slice(0, 200)})`)
   assert.ok(text.includes('命中 1 条'), '结果条数')
   assert.ok(text.includes('向量覆盖 2/2 条'), '向量覆盖率')
-  assert.ok(text.includes('相关度 0.80'), '结果卡显示检索得分')
+  assert.ok(text.includes('得分 0.80'), '结果卡显示检索得分')
   assert.match(text, /发布前检查 devcred 凭据/, '命中内容来自 /search')
   const pressed = findSemanticToggle()
   assert.equal(pressed!.props?.['aria-checked'], true, '开关状态跟随')

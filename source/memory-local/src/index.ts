@@ -1574,10 +1574,13 @@ export class LocalMemoryService implements MemoryServiceApi {
       .slice(0, recallN)
 
     // --- channel 3: LLM rerank (optional; any skip/failure keeps recall order) ---
-    const finalScores = new Map<string, number>(ranked.map((c) => [c.id, shape(c)]))
+    // 键必须是 **record.id**。这里曾经写成 `c.id`(Cand 上没有 id 字段),所有候选都落到
+    // 同一个 `undefined` 键上:排序数组本身是对的,但每条命中拿到的都是最后一个候选的
+    // 分数(面板上表现为「每条相关度都一样」),重排的候选 id 也全成了 undefined。
+    const finalScores = new Map<string, number>(ranked.map((c) => [c.record.id, shape(c)]))
     if (this.cfg.llm.enabled && this.llmInvoke && ranked.length >= 2) {
-      const asCands = ranked.map((c) => ({ id: c.id, content: c.record.content, recallScore: finalScores.get(c.id)! }))
-      const cacheKey = RerankCache.key(query.text, ranked.map((c) => c.id), this.cfg.llm.model)
+      const asCands = ranked.map((c) => ({ id: c.record.id, content: c.record.content, recallScore: finalScores.get(c.record.id)! }))
+      const cacheKey = RerankCache.key(query.text, ranked.map((c) => c.record.id), this.cfg.llm.model)
       let outcome = this.rerankCache.get(cacheKey)
       if (!outcome) {
         outcome = await rerank({
@@ -1595,11 +1598,16 @@ export class LocalMemoryService implements MemoryServiceApi {
           finalScores.set(id, score)
         }
       }
+      // 重排必须能改变顺序,否则它只改了显示分数、召回序列原样输出。没有重排时
+      // finalScores 就等于 shape(),这个二次排序与原顺序完全一致(同一套 tie-break)。
+      ranked.sort((a, b) => finalScores.get(b.record.id)! - finalScores.get(a.record.id)!
+        || scopeTier(a.record.scope) - scopeTier(b.record.scope)
+        || a.record.id.localeCompare(b.record.id))
     }
 
     const hits: MemoryHit[] = ranked.map((c) => ({
       record: internal.touch === false ? c.record : touch(c.record),
-      score: round4(finalScores.get(c.id)!),
+      score: round4(finalScores.get(c.record.id)!),
     }))
 
     this.store.scheduleFlush()
