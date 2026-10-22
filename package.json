@@ -1,23 +1,75 @@
 {
-  "name": "dsh-memory-workspace",
+  "name": "@restregular/dsh-memory",
+  "version": "0.12.7",
   "private": true,
-  "version": "0.1.0",
-  "description": "DeepSeek Harness 记忆系统 — workspace (sources + built packages).",
+  "description": "DeepSeek Harness 记忆系统(单包单入口):JSONL 存储 + 本地向量检索(BGE-M3)+ 五个模型工具 + 自动召回注入 + 管理面板。",
+  "icon": "./packages/dsh-memory/icon.svg",
   "type": "module",
+  "exports": {
+    ".": "./packages/dsh-memory/lib/index.js",
+    "./client": "./packages/dsh-memory/lib/client.js",
+    "./locale/en.json": "./packages/dsh-memory/locale/en.json",
+    "./locale/zh.json": "./packages/dsh-memory/locale/zh.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "packages/dsh-memory/lib/",
+    "packages/dsh-memory/locale/",
+    "packages/dsh-memory/cordis.patch.yml",
+    "packages/dsh-memory/icon.svg",
+    "packages/dsh-memory/README.md",
+    "packages/dsh-memory/CHANGELOG.md",
+    "packages/dsh-memory/LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./packages/dsh-memory/cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/dsh-llm": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RestRegular/dsh-memory"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "memory",
+    "bge-m3",
+    "embeddings",
+    "recall",
+    "panel"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "license": "MIT",
   "scripts": {
     "build": "node tools/build-single-package.mjs --scope @restregular --version 0.12.7 --repo https://github.com/RestRegular/dsh-memory",
     "build:split": "node tools/build-npm-packages.mjs --scope @restregular --version 0.1.0 --repo https://github.com/RestRegular/dsh-memory --repo-dir packages/dsh-memory --out .build && node tools/place-built.mjs",
     "verify": "node tools/build-single-package.mjs --scope @restregular --version 0.12.7 --out .verify --no-place",
     "verify:split": "node tools/verify-installed-packages.mjs . --scope @restregular",
     "test": "node --experimental-strip-types --test source/*/test/*.test.ts"
-  },
-  "keywords": [
-    "dsh-plugin",
-    "deepseek-harness",
-    "memory"
-  ],
-  "license": "MIT",
-  "engines": {
-    "node": ">=22.13.0"
   }
 }

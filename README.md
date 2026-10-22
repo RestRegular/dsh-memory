@@ -71,6 +71,14 @@ JSONL 落盘 · 本机向量检索 · 五个模型工具 · 自动召回 · 硬�
 
 ## 安装
 
+一条命令装进 Web profile：
+
+```bash
+dsh plugin --profile web add @restregular/dsh-memory
+```
+
+也可以手动加进 profile 的依赖（桌面端 `~/.dsh/profiles/desktop`，Web 端 `~/.dsh/profiles/web`）：
+
 ```bash
 pnpm add @restregular/dsh-memory
 # 或
