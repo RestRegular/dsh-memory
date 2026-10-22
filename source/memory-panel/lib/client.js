@@ -796,7 +796,18 @@ window.__ModuleLoader__.load({
       const [copied, setCopied] = React.useState(false)
 
       // 从审计页点 memory ID 跳过来时自动展开目标记录。
-      React.useEffect(() => { if (focus) setExpanded(true) }, [focus])
+      // 记录列表可能很长，展开后还要把它滚进视口，否则用户看到的是列表顶部。
+      const cardRef = React.useRef(null)
+      React.useEffect(() => {
+        if (!focus) return undefined
+        setExpanded(true)
+        const node = cardRef.current
+        if (node === null || typeof node.scrollIntoView !== 'function') return undefined
+        const timer = setTimeout(() => {
+          try { node.scrollIntoView({ block: 'center', behavior: 'smooth' }) } catch { /* 滚动失败不影响展开 */ }
+        }, 60)
+        return () => clearTimeout(timer)
+      }, [focus])
 
       const copyId = () => {
         try {
@@ -837,7 +848,7 @@ window.__ModuleLoader__.load({
         setTags(rec.tags.join(', ')); setImportance(rec.importance)
       }
 
-      return h('div', { className: 'rec' + (focus ? ' focus' : '') },
+      return h('div', { className: 'rec' + (focus ? ' focus' : ''), ref: cardRef },
         h('div', {
           className: 'rec-head',
           role: 'button',
@@ -2687,7 +2698,7 @@ window.__ModuleLoader__.load({
       const openMemoryId = async (id) => {
         const record = findRecord(id) || await fetchRecord(id)
         hideTip()
-        if (typeof openRecord === 'function') openRecord(record?.id ?? id, record?.scope)
+        if (typeof openRecord === 'function') openRecord(record?.id ?? id, record?.scope, record)
       }
       const openSessionId = (id) => {
         hideTip()
@@ -3155,6 +3166,7 @@ window.__ModuleLoader__.load({
       const [semantic, setSemantic] = React.useState(false)
       const [searchInfo, setSearchInfo] = React.useState(null)
       const [focusRecord, setFocusRecord] = React.useState(null)
+      const [focusRecordData, setFocusRecordData] = React.useState(null)
       const [loading, setLoading] = React.useState(true)
       const [error, setError] = React.useState('')
       const [tab, setTab] = React.useState('data')
@@ -3212,8 +3224,11 @@ window.__ModuleLoader__.load({
       React.useEffect(() => { load('', '') }, [])
 
       /** 审计里的记忆 ID → 切到「记录」页并展开对应记录。 */
-      const openRecord = (id, scope) => {
+      const openRecord = (id, scope, record = null) => {
         setFocusRecord(id)
+        // 目标记录可能不在当前筛选结果里（作用域/搜索/分页），先把它拿在手上，
+        // 列表里没有时补一张卡，保证跳过去一定能展开。
+        setFocusRecordData(record && record.id ? record : null)
         setTab('data')
         setQ('')
         // 语义模式是按查询排名的:跳转要看到那条记录,必须回到普通列表。
@@ -3568,12 +3583,17 @@ window.__ModuleLoader__.load({
           })
         : null
       const emptyText = searchInfo ? '没有语义相关的记忆' : filtering ? '没有匹配的记忆' : '还没有记忆'
-      const listBody = !loading && !error && records.length === 0
+      // 从审计跳过来的目标记录如果不在当前加载结果里，先把它补到列表最前面，
+      // 否则跳转后列表里根本没有这张卡，focus 自然也无法展开。
+      const displayRecords = focusRecordData !== null && !records.some((rec) => rec.id === focusRecordData.id)
+        ? [focusRecordData, ...records]
+        : records
+      const listBody = !loading && !error && displayRecords.length === 0
         ? h('div', { className: 'empty' },
             emptyText,
             searchInfo ? h('div', { className: 'muted' }, '换个说法试试；刚写入的记录可能还没嵌入向量。') : null)
         : h('div', { className: 'list' },
-            records.map((rec) => h(RecordCard, { key: rec.id, rec, score: rec.score, focus: focusRecord === rec.id, vectorOn: configured && vectorEnabled, labels: labels, onSaved: () => { setPendingTick(0); load() }, onDeleted: () => { setPendingTick(0); load() } })))
+            displayRecords.map((rec) => h(RecordCard, { key: rec.id, rec, score: rec.score, focus: focusRecord === rec.id, vectorOn: configured && vectorEnabled, labels: labels, onSaved: () => { setPendingTick(0); load() }, onDeleted: () => { setPendingTick(0); load() } })))
 
       // 服务页底部:一句号召 + 两个外链(Star / issue)。放在内容最后,不打扰上面的状态卡。
       const footer = h('div', { className: 'footer' },

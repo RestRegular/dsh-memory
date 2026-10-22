@@ -1768,6 +1768,22 @@ test('主面板审计详情走 jumpAuditEntryToTrajectory（不需要 openTrajec
   }
 })
 
+test('从审计跳到记录页时,带 focus 的记录卡自动展开', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const RecordCard = (exports.__test as { RecordCard: (p: Record<string, unknown>) => unknown }).RecordCard
+  const rec = makeRecord()
+  const element = () => hooks.React.createElement(RecordCard, { rec, focus: true, onSaved: () => {}, onDeleted: () => {} })
+  let current: RenderNode | null = render(element(), hooks)
+  hooks.setRerender(() => { current = render(element(), hooks) })
+  hooks.runEffects()
+  for (let i = 0; i < 3; i++) await Promise.resolve()
+  const classNames = collect(current).map((n) => String(n.props?.className ?? ''))
+  assert.ok(classNames.includes('rec focus'), '目标记录带 focus 高亮')
+  assert.ok(classNames.includes('content'), '目标记录自动展开,不需要再点一次')
+  hooks.resetAll()
+})
+
 test('审计详情能把 operationId 精确送到轨迹视图', async () => {
   const { exports, hooks } = await loadBundle()
   hooks.resetAll()

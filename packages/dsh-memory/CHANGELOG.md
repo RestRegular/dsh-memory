@@ -2,6 +2,13 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.14.6 — 审计记忆 ID 跳转后自动展开并滚到目标记录
+
+- **现象**：在审计详情里点某个记忆 ID，会切到记录页，但目标记录没有展开，看起来像没跳成功。
+- **原因**：`openRecord` 只设置了 `focusRecord`，没有把目标记录滚进可视区；目标记录如果不在当前筛选/已加载结果里，列表里甚至没有这张卡，自然也无法展开。
+- **修复**：`RecordCard` 在 `focus` 时先展开，再用 `scrollIntoView({block:'center'})` 把卡片滚到视口中央；`openRecord` 同时接收记录对象，目标不在当前列表时把它补到列表最前面，保证跳过去一定能看到并展开。
+- 回归测试：带 `focus` 的记录卡自动展开。
+
 ## 0.14.5 — 修复记忆面板审计「在轨迹中定位」不生效
 
 - **根因**：主面板把 `jumpAuditEntryToTrajectory`（签名是 `(entry) => Promise`）当成 `openTrajectory(focus)` 回调传给 `AuditTab`。按钮把 `callId` 字符串传进去，`jumpAuditEntryToTrajectory` 读不到 `entry.sessionId`，直接按 `no_session` 返回，实际什么都没发生；UI 还误报“已定位到轨迹”。
