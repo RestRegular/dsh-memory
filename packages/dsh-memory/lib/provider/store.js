@@ -781,6 +781,9 @@ export class MemoryStore {
         rec.accessCount += 1
         rec.importance = Math.max(rec.importance, input.importance ?? defaults.importance)
         if (input.supersedes) rec.supersedes = input.supersedes
+        // 同一内容重写 = 刷新状态:TLL 重新计时;显式去掉过期时间时一并清掉。
+        if (input.expiredAt !== undefined) rec.expiredAt = input.expiredAt
+        else delete rec.expiredAt
         s.insert(rec) // 去重命中的也是一次写:进增量,flush 时落盘
         return { record: rec, deduped: true }
       }

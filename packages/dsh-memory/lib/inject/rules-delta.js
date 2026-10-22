@@ -60,6 +60,8 @@ export function derivedHistoryOf(agent         )                                
                          
                                                           
                  
+                                        
+                                                            
  
 
 /**
@@ -121,6 +123,7 @@ maybeInjectDetailed(agent         , memory                  , cfg               
     records: unseen,
     changes,
     ...(text !== undefined ? { tokens: rendered.tokens } : {}),
+    ...(text !== undefined ? { injectedEntries: rendered.stats.injectedEntries } : {}),
   }
 }
 

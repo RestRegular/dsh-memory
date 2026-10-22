@@ -41,6 +41,7 @@ export type AuditOmitReason =
   | 'budget'
   | 'superseded'
   | 'expired'
+  | 'rule'
   | 'tag_mismatch'
   | 'dedup'
   | 'excluded'

@@ -59,7 +59,7 @@ test('content validation', async () => {
   await assert.rejects(() => svc.save({ scope: PROJECT, kind: 'note', content: 'x'.repeat(5000) }), /CONTENT_TOO_LONG/)
 })
 
-test('supersedes validation and penalty wiring', async () => {
+test('supersedes: default search excludes retired records, includeSuperseded brings history back', async () => {
   const r1 = await svc.save({ scope: PROJECT, kind: 'fact', content: 'API 端口是 3000' })
   await assert.rejects(
     () => svc.save({ scope: PROJECT, kind: 'fact', content: 'API 端口是 4000', supersedes: 'no-such-id' }),
@@ -67,12 +67,24 @@ test('supersedes validation and penalty wiring', async () => {
   )
   const r2 = await svc.save({ scope: PROJECT, kind: 'fact', content: 'API 端口改为 4000', supersedes: r1.id })
   assert.equal(r2.supersedes, r1.id)
-  // superseded record still retrievable but should rank below the correction
-  const hits = await svc.search({ text: 'API 端口', scope: PROJECT })
-  if (hits.length >= 2) {
-    const ids = hits.map((h) => h.record.id)
-    assert.ok(ids.indexOf(r2.id) < ids.indexOf(r1.id), 'correction outranks superseded record')
-  }
+  const current = await svc.search({ text: 'API 端口', scope: PROJECT })
+  assert.deepEqual(current.map((h) => h.record.id), [r2.id], '默认不返回退役版本')
+  const history = await svc.search({ text: 'API 端口', scope: PROJECT, includeSuperseded: true } as never)
+  assert.ok(history.some((h) => h.record.id === r1.id), '显式 includeSuperseded 仍可取历史')
+  assert.ok(history.some((h) => h.record.id === r2.id))
+})
+
+test('state: default TTL, expired hidden from search/list, getByIds still returns it', async () => {
+  const state = await svc.save({
+    scope: PROJECT, kind: 'state', content: '当前部署在测试环境，验证后需要回滚',
+    ttlMs: 30,
+  } as never)
+  assert.ok(state.expiredAt && state.expiredAt > Date.now() - 1000)
+  assert.equal((await svc.list({ scope: PROJECT })).some((r) => r.id === state.id), true, '未过期时可见')
+  await new Promise((resolve) => setTimeout(resolve, 45))
+  assert.equal((await svc.list({ scope: PROJECT })).some((r) => r.id === state.id), false, '过期后默认 list 隐藏')
+  assert.equal((await svc.search({ text: '部署 测试环境 回滚', scope: PROJECT })).some((h) => h.record.id === state.id), false)
+  assert.ok(svc.getByIds([state.id]).some((r) => r.id === state.id), 'memory_get 仍可取过期正文')
 })
 
 test('forget by id and by query', async () => {

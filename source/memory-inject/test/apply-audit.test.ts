@@ -72,18 +72,19 @@ function setup(options: {
   return { handlers, attached, sections, memory, settings }
 }
 
-function input() {
+function input(overrides: Record<string, unknown> = {}) {
   return {
     agent: { session: { id: 's1', header: { cwd: 'D:/repo' } } },
     step: 1,
     messages: [{ role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: '准备发布' }] }],
+    ...overrides,
   }
 }
 
-async function runPreStep(handlers: Map<string, (...args: any[]) => unknown>, decision?: Record<string, unknown>) {
+async function runPreStep(handlers: Map<string, (...args: any[]) => unknown>, decision?: Record<string, unknown>, overrides?: Record<string, unknown>) {
   const handler = handlers.get('agent/pre-step')
   assert.ok(handler)
-  return handler!(input(), async () => decision ?? { kind: 'continue', messages: [] })
+  return handler!(input(overrides), async () => decision ?? { kind: 'continue', messages: [] })
 }
 
 test('pre-step: 评估事件与 delivery 事件分离，未拿到宿主回执记 unknown', async () => {
@@ -241,6 +242,64 @@ test('记忆工具和没有 description 的工具不触发高风险召回信号'
   const anchor = entries.find((entry) => entry.stage === 'tool_call')
   assert.ok(anchor, 'memory_search 仍保留轨迹锚点')
   assert.equal(anchor!.operationId, 'call-mem')
+})
+
+test('同一轮最多一次 signal 召回:第二个信号只落 drop 审计,不再检索', async () => {
+  const settings = {
+    ...defaultInjectSettings,
+    autoRecall: { ...defaultInjectSettings.autoRecall, enabled: true, useMemoryTags: false, tags: ['release', 'deploy'] },
+    recall: { ...defaultInjectSettings.recall, enabled: true },
+    digest: { ...defaultInjectSettings.digest, enabled: false },
+    rules: { ...defaultInjectSettings.rules, enabled: false },
+    policy: { ...defaultInjectSettings.policy, enabled: false },
+  }
+  let searches = 0
+  const hit = { record: record('mem-sig', '发布前先检查凭据', ['release']), score: 0.9 }
+  const { handlers, attached } = setup({
+    settings,
+    search: async () => { searches += 1; return [hit] },
+  })
+  const onEvent = handlers.get('session/event')!
+  onEvent({ id: 's1' }, {
+    type: 'tool/call',
+    data: { name: 'ops_bash', callId: 'c1', turn: 1, step: 1, arguments: JSON.stringify({ description: '准备发布' }) },
+  })
+  await runPreStep(handlers, undefined, { turn: 1, step: 1 })
+  assert.equal(searches, 1)
+
+  onEvent({ id: 's1' }, {
+    type: 'tool/call',
+    data: { name: 'ops_bash', callId: 'c2', turn: 1, step: 2, arguments: JSON.stringify({ description: '部署第二个环境' }) },
+  })
+  await runPreStep(handlers, undefined, { turn: 1, step: 2 })
+  assert.equal(searches, 1, '同一轮第二个信号不能再次检索;普通召回也因同一 query 去重')
+  const dropped = attached.current!.list().find((entry) => entry.stage === 'signal_dropped')
+  assert.ok(dropped)
+  assert.ok(['same_tag', 'same_query', 'turn_capped'].includes(dropped!.reasonCode ?? ''))
+})
+
+test('规则正文写进会话注入状态后,recall 不再重复注入同一条规则', async () => {
+  const settings = {
+    ...defaultInjectSettings,
+    autoRecall: { ...defaultInjectSettings.autoRecall, enabled: false },
+    recall: { ...defaultInjectSettings.recall, enabled: true },
+    digest: { ...defaultInjectSettings.digest, enabled: false },
+    rules: { ...defaultInjectSettings.rules, enabled: true },
+    policy: { ...defaultInjectSettings.policy, enabled: false },
+    turnEnd: { ...defaultInjectSettings.turnEnd, enabled: false },
+  }
+  const rule = { ...record('rule-1', '发布前必须检查凭据', ['release']), kind: 'rule' }
+  const { handlers, attached } = setup({
+    settings,
+    listSync: (query) => (query as { kind?: string }).kind === 'rule' ? [rule] : [],
+    search: async () => [{ record: rule, score: 0.9 }],
+  })
+  const decision = await runPreStep(handlers, undefined, { turn: 1, step: 1 }) as { messages: unknown[] }
+  assert.equal(decision.messages.length, 0, '规则只应在系统提示里出现一次')
+  const recall = attached.current!.list().find((entry) => entry.channel === 'recall' && entry.kind === 'evaluation')
+  assert.ok(recall)
+  assert.ok((recall!.dedup?.skipped ?? 0) >= 1)
+  assert.deepEqual(recall!.selected?.newlyAddedIds ?? [], [])
 })
 
 

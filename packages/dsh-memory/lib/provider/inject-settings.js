@@ -33,6 +33,19 @@
                   
  
 
+/** 状态型记忆(kind=state)的默认有效期。过期后默认隐藏,但 memory_get 仍可取。 */
+                                
+                                            
+               
+ 
+
+/** 流程索引:系统提示里按当前工作区/触发词列出的 procedure 目录。 */
+                                     
+                  
+                  
+                     
+ 
+
                                 
                                            
                   
@@ -94,15 +107,21 @@ export const DEFAULT_AUTO_RECALL_TAGS           = [
                         
                       
                                 
+                      
+                                
                           
                           
  
+
+export const DEFAULT_STATE_TTL_MS = 7 * 86_400_000
 
 export const defaultInjectSettings                 = {
   recall: { enabled: true, topK: 5, tokenBudget: 500 },
   digest: { enabled: true, topK: 8, tokenBudget: 800, hintBudget: 160, hintMaxItems: 6 },
   impression: { enabled: true, chars: 120 },
   policy: { enabled: true },
+  state: { ttlMs: DEFAULT_STATE_TTL_MS },
+  procedures: { enabled: true, maxItems: 10, tokenBudget: 500 },
   rules: { enabled: true, maxItems: 10, tokenBudget: 300, delta: true },
   autoRecall: {
     enabled: true,
@@ -148,10 +167,15 @@ export function normalizeInjectSettings(raw         , base                 = def
   const digest = section('digest')
   const impression = section('impression')
   const policy = section('policy')
+  const state = section('state')
+  const procedures = section('procedures')
   const rules = section('rules')
   const autoRecall = section('autoRecall')
   const turnEnd = section('turnEnd')
   const sidebar = section('sidebar')
+  // 兼容方案里的 `inject.stateTtlMs` 写法;新配置统一放到 state.ttlMs。
+  const legacyStateTtl = (r                            ).stateTtlMs
+  const stateTtlInput = state.ttlMs ?? legacyStateTtl
   const rawTags = Array.isArray(autoRecall.tags) ? autoRecall.tags : base.autoRecall.tags
   const normalizedTags           = []
   const seenTags = new Set        ()
@@ -182,6 +206,14 @@ export function normalizeInjectSettings(raw         , base                 = def
       chars: clampInt(impression.chars, 40, 800, base.impression.chars),
     },
     policy: { enabled: bool(policy.enabled, base.policy.enabled) },
+    state: {
+      ttlMs: clampInt(stateTtlInput, 60_000, 365 * 86_400_000, base.state.ttlMs),
+    },
+    procedures: {
+      enabled: bool(procedures.enabled, base.procedures.enabled),
+      maxItems: clampInt(procedures.maxItems, 1, 30, base.procedures.maxItems),
+      tokenBudget: clampInt(procedures.tokenBudget, 50, 4000, base.procedures.tokenBudget),
+    },
     rules: {
       enabled: bool(rules.enabled, base.rules.enabled),
       maxItems: clampInt(rules.maxItems, 1, 40, base.rules.maxItems),

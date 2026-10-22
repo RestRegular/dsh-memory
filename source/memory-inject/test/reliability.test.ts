@@ -104,19 +104,30 @@ test('摘要:标签索引也有独立预算和条数上限,溢出会报告', () 
   assert.ok(rendered!.text.includes('另有'))
 })
 
-test('摘要/规则:superseded 旧记录不进入正文、索引或常驻规则', () => {
+test('摘要:superseded 旧记录与 rule 都不进入正文、索引或常驻规则', () => {
+  const oldFact = rec('旧发布结论', { id: 'old-fact', tags: ['release'] })
+  const newFact = rec('新发布结论', { id: 'new-fact', supersedes: 'old-fact' })
+  const digest = renderDigest([oldFact, newFact], { ...digestCfg, topK: 8, tokenBudget: 800 })!
+  assert.equal(digest.stats.omittedSuperseded, 1)
+  assert.deepEqual(digest.stats.bodyIds, ['new-fact'])
+  assert.ok(!digest.stats.hintIds.includes('old-fact'))
+  assert.ok(!digest.text.includes('旧发布结论'))
+
+  // 规则已经常驻系统提示(rules 段),摘要必须排除它,避免同一个 id 两个通道重复。
   const oldRule = rec('旧发布规则', { id: 'old-rule', kind: 'rule', tags: ['release'] })
   const newRule = rec('新发布规则', { id: 'new-rule', kind: 'rule', supersedes: 'old-rule' })
-  const digest = renderDigest([oldRule, newRule], { ...digestCfg, topK: 8, tokenBudget: 800 })!
-  assert.equal(digest.stats.omittedSuperseded, 1)
-  assert.deepEqual(digest.stats.bodyIds, ['new-rule'])
-  assert.ok(!digest.stats.hintIds.includes('old-rule'))
-  assert.ok(!digest.text.includes('旧发布规则'))
+  assert.equal(renderDigest([oldRule, newRule], { ...digestCfg, topK: 8, tokenBudget: 800 }), null)
+  const mixed = renderDigest([oldRule, newRule, oldFact, newFact], { ...digestCfg, topK: 8, tokenBudget: 800 })!
+  assert.equal(mixed.stats.omittedRules, 2)
+  assert.ok(!mixed.stats.bodyIds.includes('new-rule'))
+  assert.ok(!mixed.stats.hintIds.includes('new-rule'))
+  assert.ok(!mixed.text.includes('新发布规则'))
 
   const rules = renderRules([oldRule, newRule], { ...rulesCfg, maxItems: 10, tokenBudget: 500 })!
   assert.equal(rules.stats.omittedSuperseded, 1)
   assert.ok(rules.text.includes('新发布规则'))
   assert.ok(!rules.text.includes('旧发布规则'))
+  assert.deepEqual(rules.stats.injectedEntries, [{ id: 'new-rule', updatedAt: 0 }])
 })
 
 test('规则:mandatory 排最前,超出预算时明确警告而不是静默丢弃', () => {
@@ -278,6 +289,20 @@ test('行为信号:标签触发、失败分类、description 优先', () => {
   assert.equal(store.note('s1', signal), false, '相同信号不重复排队')
   assert.equal(store.take('s1')?.key, signal.key)
   assert.equal(store.take('s1'), undefined)
+})
+
+test('状态型记忆:注入带“使用前验证”前缀,过期正文不进入召回', async () => {
+  const live = rec('当前部署在测试环境', { id: 'state-live', kind: 'state', tags: ['deploy'], expiredAt: Date.now() + 60_000 })
+  const digest = renderDigest([live], { ...digestCfg, topK: 8, tokenBudget: 800 })!
+  assert.ok(digest.text.includes('【状态，使用前验证】'))
+
+  const expired = rec('当前部署在生产环境', { id: 'state-old', kind: 'state', expiredAt: Date.now() - 1000 })
+  const injector = new MemoryInjector(async () => [hit(expired), hit(live)], { ...defaultInjectConfig, tokenBudget: 500 }, {})
+  const input = { messages: [msg('user', '现在部署在哪')] }
+  const result = await injector.maybeInjectDetailed(input, input, { query: '部署环境', sessionId: 'state-s' })
+  assert.deepEqual(result?.ids, ['state-live'])
+  assert.ok(result?.text?.includes('【状态，使用前验证】'))
+  assert.ok(!result?.text?.includes('当前部署在生产环境'))
 })
 
 test('自动召回链路:标签命中后补正文,正文已注入则去重', async () => {

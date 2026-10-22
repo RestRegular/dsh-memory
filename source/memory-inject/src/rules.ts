@@ -69,6 +69,8 @@ export interface RulesStats {
   truncated: boolean
   /** 实际进入规则段的 id。 */
   injectedIds: string[]
+  /** 实际进入规则段的 id + 版本(写入会话注入状态,避免 recall 重复注入同一条规则)。 */
+  injectedEntries: Array<{ id: string; updatedAt: number }>
   /** 被省略的 id 与互斥原因。 */
   omitted: Array<{ id: string; reason: 'top_k' | 'budget' | 'superseded' }>
   omittedIds: string[]
@@ -103,6 +105,7 @@ function renderLines(
   let tokens = estimateTokens(header) + 4
   const lines: string[] = []
   const injectedIds: string[] = []
+  const injectedEntries: Array<{ id: string; updatedAt: number }> = []
   let omittedTopK = 0
   let omittedBudget = 0
   let budgetExhausted = false
@@ -135,6 +138,7 @@ function renderLines(
     }
     lines.push(line)
     injectedIds.push(record.id)
+    injectedEntries.push({ id: record.id, updatedAt: record.updatedAt })
     tokens += cost
     if (mandatory) mandatoryInjected += 1
   }
@@ -151,6 +155,7 @@ function renderLines(
     mandatoryOmitted,
     truncated: omitted.length > 0,
     injectedIds,
+    injectedEntries,
     omitted,
     omittedIds: omitted.map((entry) => entry.id),
   }

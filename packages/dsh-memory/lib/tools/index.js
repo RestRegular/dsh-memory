@@ -151,6 +151,10 @@ function resolveScope(
                  
                      
                      
+                                                 
+                    
+                                         
+                
  
 
                              
@@ -177,15 +181,17 @@ function resolveWorkspacePath(raw        , agent         )         {
 export function memorySaveTool(opts                    )                                 {
   return {
     name: 'memory_save',
-    description: 'Save a durable memory (fact, decision, preference, procedure, rule) for future sessions.',
+    description: 'Save a durable memory (fact, decision, preference, procedure, rule, state) for future sessions.',
     parameters: {
       content: { type: 'string', description: 'Self-contained declarative sentence, readable without context', required: true },
       scope: { type: 'string', description: `${SCOPE_DESCRIPTION};配合 path 时表示该工作区作用域的显示名（别名）` },
       path: { type: 'string', description: '工作区目录路径；给出后写入 project:<路径>，此时 scope 用作该作用域的显示名（别名，可省略 = 用路径本身）' },
-      kind: { type: 'string', enum: ['fact', 'decision', 'preference', 'procedure', 'note', 'rule'] },
+      kind: { type: 'string', enum: ['fact', 'decision', 'preference', 'procedure', 'note', 'rule', 'state'] },
       tags: { type: 'array', items: { type: 'string' } },
       importance: { type: 'number', description: '0~1, higher = more important' },
       supersedes: { type: 'string', description: 'Record id this corrects/replaces' },
+      expiresAt: { type: 'number', description: '过期时间(毫秒时间戳)。kind=state 不传时按设置里的默认 TTL(7 天)' },
+      ttlMs: { type: 'number', description: '相对有效期(毫秒)。与 expiresAt 二选一，expiresAt 优先' },
     },
     async execute(args          , exec          )                      {
       const service = svc(opts)
@@ -233,6 +239,8 @@ export function memorySaveTool(opts                    )                        
           ...(args.tags ? { tags: args.tags } : {}),
           ...(args.importance !== undefined ? { importance: args.importance } : {}),
           ...(args.supersedes ? { supersedes: args.supersedes } : {}),
+          ...(typeof args.expiresAt === 'number' ? { expiresAt: args.expiresAt } : {}),
+          ...(typeof args.ttlMs === 'number' ? { ttlMs: args.ttlMs } : {}),
           source: { origin: 'explicit' },
         })
         return { id: record.id, scope: record.scope, ...(alias !== undefined ? { scopeName: alias } : {}), deduped: false }
@@ -247,6 +255,8 @@ export function memorySaveTool(opts                    )                        
                
                 
                
+                                                 
+                             
  
 
                             
@@ -270,6 +280,7 @@ export function memorySearchTool(opts                    )                      
       query: { type: 'string', required: true },
       scope: { type: 'string', description: SCOPE_DESCRIPTION },
       topK: { type: 'number', description: '1~20' },
+      includeSuperseded: { type: 'boolean', description: '默认 false；true 时把已被 supersede 的旧版本也返回（历史核对）' },
     },
     async execute(args            , exec          )                        {
       const service = svc(opts)
@@ -292,6 +303,7 @@ export function memorySearchTool(opts                    )                      
           ...(resolved.scope !== undefined ? { scope: resolved.scope } : {}),
           ...(scopes !== undefined ? { scopes } : {}),
           ...(args.topK !== undefined ? { topK: args.topK } : {}),
+          ...(args.includeSuperseded === true ? { includeSuperseded: true } : {}),
         })
         return {
           records: hits.map((h) => ({

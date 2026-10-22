@@ -69,6 +69,8 @@ export function orderRules(records                         )                 {
                     
                      
                        
+                                                        
+                                                           
                        
                                                                            
                       
@@ -103,6 +105,7 @@ function renderLines(
   let tokens = estimateTokens(header) + 4
   const lines           = []
   const injectedIds           = []
+  const injectedEntries                                           = []
   let omittedTopK = 0
   let omittedBudget = 0
   let budgetExhausted = false
@@ -135,6 +138,7 @@ function renderLines(
     }
     lines.push(line)
     injectedIds.push(record.id)
+    injectedEntries.push({ id: record.id, updatedAt: record.updatedAt })
     tokens += cost
     if (mandatory) mandatoryInjected += 1
   }
@@ -151,6 +155,7 @@ function renderLines(
     mandatoryOmitted,
     truncated: omitted.length > 0,
     injectedIds,
+    injectedEntries,
     omitted,
     omittedIds: omitted.map((entry) => entry.id),
   }

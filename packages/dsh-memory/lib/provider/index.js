@@ -686,7 +686,7 @@ export class LocalMemoryService                             {
    *
    * 默认排除已被 supersede 的旧记录;需要历史/审计时显式 includeSuperseded。
    */
-  listSync(input                                                                                         = {})                 {
+  listSync(input                                                                                                                   = {})                 {
     const wanted = (input.scopes ?? []).map((scope) => this.canonicalScope(scope))
     const seen = new Set             ()
     const stores               = []
@@ -697,10 +697,13 @@ export class LocalMemoryService                             {
       if (s) stores.push(s)
     }
     const retired = input.includeSuperseded ? new Set        () : new Set(this.supersededIds(wanted))
+    const now = Date.now()
     const out                 = []
     for (const s of stores) {
       for (const rec of s.records.values()) {
         if (retired.has(rec.id)) continue
+        // 过期 state 默认不参与任何自动注入/规则渲染;memory_get(id) 与面板仍可取。
+        if (!input.includeExpired && rec.expiredAt !== undefined && rec.expiredAt < now) continue
         if (input.kind !== undefined && rec.kind !== input.kind) continue
         out.push(rec)
       }
@@ -1336,6 +1339,20 @@ export class LocalMemoryService                             {
     if (input.supersedes && !this.store.scope(scope).records.get(input.supersedes)) {
       throw memoryError('SUPERSEDES_UNKNOWN', `supersedes target ${input.supersedes} not found in ${scope}`)
     }
+    // 状态型记忆(state)默认带 TTL:写入时算一次绝对 expiresAt,读取时只比较时间。
+    // 显式 expiresAt 优先;ttlMs 对任何 kind 都生效(便于测试/特殊用途)。
+    const timing = input                                                              
+    const explicitExpiresAt = typeof timing.expiresAt === 'number' && Number.isFinite(timing.expiresAt)
+      ? timing.expiresAt
+      : undefined
+    const explicitTtl = typeof timing.ttlMs === 'number' && Number.isFinite(timing.ttlMs) && timing.ttlMs > 0
+      ? timing.ttlMs
+      : undefined
+    const stateTtl = input.kind === 'state' ? this.injectSettings().state.ttlMs : undefined
+    const expiresAt = explicitExpiresAt
+      ?? (explicitTtl !== undefined ? Date.now() + explicitTtl
+        : stateTtl !== undefined ? Date.now() + stateTtl : undefined)
+    const saveInput = expiresAt !== undefined ? { ...input, expiredAt: expiresAt } : input
     // design §11: keep credentials out of the plaintext store and the embedder
     if (this.cfg.secrets.enabled) {
       const findings = scanSecrets(content)
@@ -1347,7 +1364,7 @@ export class LocalMemoryService                             {
       }
     }
     const { record } = this.store.save(
-      { ...input, scope, content },
+      { ...saveInput, scope, content },
       { importance: input.source?.origin === 'auto' ? 0.4 : 0.8, source: { origin: 'explicit' } },
     ) 
     void this.embedRecord(record).catch(() => {})
@@ -1475,8 +1492,10 @@ export class LocalMemoryService                             {
     // 面板的语义检索复用这条流水线,但它是"看一眼"的浏览:不写访问计数,也不在
     // 没有任何向量时白跑一次嵌入请求。这两个开关只给面板的 searchForPanel 用,
     // 工具 / 注入调用不会传。
-    const internal = query                                                       
+    const internal = query                                                                                                              
     const allowVector = internal.vector !== false && this.cfg.vector.enabled && this.cfg.vector.configured
+    const includeSuperseded = internal.includeSuperseded === true
+    const includeExpired = internal.includeExpired === true
 
     // 候选 scope:显式 pin(单值)优先;否则用调用方给的合并集合(query.scopes,
     // 工具 / 注入传"会话 + 项目 + global");两者都没有才退回旧的 project + global。
@@ -1496,6 +1515,15 @@ export class LocalMemoryService                             {
       stores.push({ store, scope, isGlobal: scope === 'global' })
     }
 
+    // 退役(superseded)记录默认不参与召回:它们只是被新记录修正过的历史版本,
+    // 继续返回会让模型拿旧结论当现行事实。memory_get(id)/面板历史仍可直接取。
+    const retired = new Set        ()
+    for (const { store } of stores) {
+      for (const record of store.records.values()) {
+        if (record.supersedes) retired.add(record.supersedes)
+      }
+    }
+
     // --- channel 1: lexical recall, scored per scope with local IDF ---
                                                                                 
     const candidates = new Map              ()
@@ -1509,7 +1537,8 @@ export class LocalMemoryService                             {
       const stats = buildStats(tokenSets)
       for (let i = 0; i < all.length; i++) {
         const rec = all[i] 
-        if (rec.expiredAt && rec.expiredAt < now) continue
+        if (!includeExpired && rec.expiredAt && rec.expiredAt < now) continue
+        if (!includeSuperseded && retired.has(rec.id)) continue
         const lex = lexicalScore(queryTokens, tokenSets[i] , stats)
         if (lex <= 0) continue
         // Weak-only overlap (no shared word/bigram) must clear the "real hit"
@@ -1539,30 +1568,27 @@ export class LocalMemoryService                             {
         }
       }
       for (const [id, sim] of vectorScores) {
+        if (!includeSuperseded && retired.has(id)) continue
         const existing = candidates.get(id)
         if (existing) {
           existing.recallScore = Math.max(existing.recallScore, sim) // best channel wins
-        } else {
-          const rec = this.findById(id)
-          if (rec && !(rec.expiredAt && rec.expiredAt < now)) {
-            if (!(rec.scope === 'global' && sim < this.cfg.globalThreshold)) {
-              candidates.set(id, { record: rec, recallScore: sim, isGlobal: rec.scope === 'global' })
-            }
-          }
+          continue
+        }
+        const rec = this.findById(id)
+        if (!rec) continue
+        if (!includeExpired && rec.expiredAt !== undefined && rec.expiredAt < now) continue
+        if (!(rec.scope === 'global' && sim < this.cfg.globalThreshold)) {
+          candidates.set(id, { record: rec, recallScore: sim, isGlobal: rec.scope === 'global' })
         }
       }
     }
 
     // shape with recency/importance, sort, cut
-    const supersededIds = new Set        ()
-    for (const { store } of stores) {
-      for (const r of store.records.values()) if (r.supersedes) supersededIds.add(r.supersedes)
-    }
     const shape = (c      )         =>
       recordScore(c.recallScore, c.record.importance, c.record.accessCount, c.record.lastAccessedAt, {
         now,
         halfLifeDays: this.cfg.halfLifeDays,
-        superseded: supersededIds.has(c.record.id),
+        superseded: retired.has(c.record.id),
       })
 
     // 稳定 tie-break:同分时 session > project > 自定义 > global,再同分按 record id ——
@@ -1657,9 +1683,12 @@ export class LocalMemoryService                             {
       text: input.text,
       scopes,
       topK: input.topK ?? 20,
+      // 面板是**历史浏览器**:退役/过期记录也要能搜到,否则用户无法从面板确认旧版本。
+      includeSuperseded: true,
+      includeExpired: true,
       vector,
       touch: false,
-    }                                                     )
+    }                                                                                                          )
     // 嵌入请求失败会被 EmbedClient 熔断(markDown),所以"跑完还健康"就等于向量通道
     // 真的产出了分数;否则这次只能算词法排序。
     const vectorRan = vector && this.embed.isHealthy
@@ -1718,18 +1747,29 @@ export class LocalMemoryService                             {
    * 一律走 `peek`,所以列一个不存在的 scope 只会得到空数组,不会造出文件。
    */
   async list(input                  = {})                          {
+    const internal = input                                                                               
     const wanted = (input.scope !== undefined
       ? [input.scope]
       : (input.scopes ?? []).length > 0
         ? input.scopes 
         : [this.defaultProjectScope]).map((scope) => this.canonicalScope(scope))
     const seen = new Set             ()
-    let records                 = []
+    const stores               = []
     for (const scope of wanted) {
       if (seen.has(scope)) continue
       seen.add(scope)
       const store = this.store.peek(scope)
-      if (store) records.push(...store.records.values())
+      if (store) stores.push(store)
+    }
+    const retired = internal.includeSuperseded ? new Set        () : new Set(this.supersededIds(wanted))
+    const now = Date.now()
+    let records                 = []
+    for (const store of stores) {
+      for (const rec of store.records.values()) {
+        if (retired.has(rec.id)) continue
+        if (internal.includeExpired !== true && rec.expiredAt !== undefined && rec.expiredAt < now) continue
+        records.push(rec)
+      }
     }
     if (input.kind) records = records.filter((r) => r.kind === input.kind)
     records.sort((a, b) => b.updatedAt - a.updatedAt)
@@ -1771,6 +1811,8 @@ export class LocalMemoryService                             {
                     
                    
                        
+                  
+                      
    )                        {
     const normalized = normalizeScopeInput(input.scope)
     if (!normalized.ok) throw memoryError('SCOPE_INVALID', normalized.message)
@@ -1783,7 +1825,9 @@ export class LocalMemoryService                             {
       content: String(input.content ?? ''),
       ...(input.tags !== undefined ? { tags: input.tags } : {}),
       ...(input.importance !== undefined ? { importance: input.importance } : {}),
-    })
+      ...(input.ttlMs !== undefined ? { ttlMs: input.ttlMs } : {}),
+      ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+    }                   )
   }
 
   /**

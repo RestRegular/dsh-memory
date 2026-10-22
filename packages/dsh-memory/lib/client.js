@@ -83,6 +83,7 @@ window.__ModuleLoader__.load({
       '.memp .badge{border:1px solid var(--dsw-alias-border-l1);border-radius:5px;padding:0 6px;line-height:1.7;color:var(--dsw-alias-label-secondary);flex:none}',
       '.memp .badge.scope{color:var(--dsw-alias-brand-primary);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.memp .badge.corrected{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary)}',
+      '.memp .badge.expired{color:#C0563B;border-color:color-mix(in srgb,#C0563B 55%,transparent)}',
       '.memp .tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}',
       '.memp .tag{font-size:11px;line-height:1.7;padding:0 6px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2)}',
       '.memp .meta{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12px;color:var(--dsw-alias-label-secondary)}',
@@ -311,6 +312,7 @@ window.__ModuleLoader__.load({
       '.memp .tn-badge{border-radius:999px;padding:0 5px;line-height:1.55;font-size:9.5px;border:1px solid transparent;flex:none}',
       '.memp .tn-badge.corr{color:color-mix(in srgb,#D9A441 62%,var(--dsw-alias-label-primary));background:color-mix(in srgb,#D9A441 14%,transparent);border-color:color-mix(in srgb,#D9A441 35%,transparent)}',
       '.memp .tn-badge.old{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l1)}',
+      '.memp .tn-badge.expired{color:color-mix(in srgb,#C0563B 70%,var(--dsw-alias-label-primary));background:color-mix(in srgb,#C0563B 12%,transparent);border-color:color-mix(in srgb,#C0563B 30%,transparent)}',
       '.memp .tn-time{margin-left:auto;flex:none;font-size:9.5px;opacity:.75}',
       '.memp .tn-content{font-size:11.5px;line-height:1.45;color:var(--dsw-alias-label-secondary);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}',
       '.memp .tree-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:8px;color:var(--dsw-alias-label-secondary);font-size:12.5px;line-height:1.6;text-align:center;padding:24px;z-index:1}',
@@ -504,6 +506,21 @@ window.__ModuleLoader__.load({
       return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
     }
 
+    /** 过期时间的人话描述:还剩多久 / 已过期多久。 */
+    function expiryText(ts) {
+      if (!ts) return '永不过期'
+      const diff = Number(ts) - Date.now()
+      const abs = Math.abs(diff)
+      const days = Math.floor(abs / 86_400_000)
+      const hours = Math.floor((abs % 86_400_000) / 3_600_000)
+      const span = days > 0 ? `${days} 天${hours > 0 ? ` ${hours} 小时` : ''}` : `${Math.max(1, hours)} 小时`
+      return diff >= 0 ? `还剩 ${span}` : `已过期 ${span}`
+    }
+
+    function isExpired(rec) {
+      return rec && rec.expiredAt !== null && rec.expiredAt !== undefined && Number(rec.expiredAt) < Date.now()
+    }
+
     /**
      * scope 键 → 展示标签。优先用 /status 返回的 `label`(服务端能查会话标题、能解析
      * project 的 cwd);服务端没给(旧 provider / 还没加载到)时用本地回退。
@@ -518,7 +535,7 @@ window.__ModuleLoader__.load({
     }
 
     /** 记忆类型 → 中文名 + 树里的强调色(与宿主主题无关的固定色相,底色用 color-mix 自适应)。 */
-    const KIND_ORDER = ['fact', 'decision', 'preference', 'procedure', 'note', 'rule']
+    const KIND_ORDER = ['fact', 'decision', 'preference', 'procedure', 'note', 'rule', 'state']
     const KIND_META = {
       fact: { label: '事实', color: '#5B8DEF' },
       decision: { label: '决策', color: '#D99A2B' },
@@ -526,6 +543,7 @@ window.__ModuleLoader__.load({
       procedure: { label: '流程', color: '#3FAE7A' },
       note: { label: '笔记', color: '#7C8AA0' },
       rule: { label: '规则', color: '#9B6BE0' },
+      state: { label: '状态', color: '#4AA3B8' },
     }
 
     function kindMeta(kind) {
@@ -791,6 +809,9 @@ window.__ModuleLoader__.load({
       const [kind, setKind] = React.useState(rec.kind)
       const [tags, setTags] = React.useState(rec.tags.join(', '))
       const [importance, setImportance] = React.useState(rec.importance)
+      const [ttlDays, setTtlDays] = React.useState(
+        rec.expiredAt ? Math.max(1, Math.round((Number(rec.expiredAt) - Date.now()) / 86_400_000)) : 7,
+      )
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState('')
       const [copied, setCopied] = React.useState(false)
@@ -830,6 +851,7 @@ window.__ModuleLoader__.load({
             kind,
             importance: Number(importance) || 0,
             tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
+            ...(kind === 'state' ? { ttlMs: Math.max(1, Number(ttlDays) || 7) * 86_400_000 } : {}),
           })
           setEditing(false)
           onSaved()
@@ -846,6 +868,7 @@ window.__ModuleLoader__.load({
         setEditing(false)
         setContent(rec.content); setKind(rec.kind)
         setTags(rec.tags.join(', ')); setImportance(rec.importance)
+        setTtlDays(rec.expiredAt ? Math.max(1, Math.round((Number(rec.expiredAt) - Date.now()) / 86_400_000)) : 7)
       }
 
       return h('div', { className: 'rec' + (focus ? ' focus' : ''), ref: cardRef },
@@ -883,6 +906,12 @@ window.__ModuleLoader__.load({
                 title: `已被 #${rec.supersededBy} 修正（旧记录仍可检索，只是排序降权）`,
               }, '已被修正')
             : null,
+          isExpired(rec)
+            ? h('span', {
+                className: 'badge expired',
+                title: `过期于 ${fmtTime(rec.expiredAt)}；默认检索/摘要/召回会隐藏，memory_get 仍可取`,
+              }, '已过期')
+            : null,
           // 只在"待嵌入"时提示:已嵌入是常态,向量没启用时这条也没有行动价值。
           !rec.embedded && vectorOn ? h('span', { className: 'pending', title: '待嵌入:向量服务就绪后会自动补上' }, '待嵌入') : null,
           h('span', { className: 'time', title: `更新于 ${fmtTime(rec.updatedAt)}` }, fmtTime(rec.updatedAt)),
@@ -896,7 +925,7 @@ window.__ModuleLoader__.load({
                     h('div', { className: 'editrow' },
                       // 类型也用同一个自绘下拉(全站不再有原生 select)
                       h(Dropdown, {
-                        items: ['fact', 'decision', 'preference', 'procedure', 'note', 'rule'].map((k) => ({ value: k, label: k })),
+                        items: ['fact', 'decision', 'preference', 'procedure', 'note', 'rule', 'state'].map((k) => ({ value: k, label: k })),
                         value: kind,
                         disabled: busy,
                         onChange: (next) => setKind(next),
@@ -904,6 +933,10 @@ window.__ModuleLoader__.load({
                       h('input', { type: 'text', style: { width: 170 }, value: tags, placeholder: '标签, 逗号分隔', onChange: (e) => setTags(e.target.value) }),
                       h('label', null, '重要度 ',
                         h('input', { type: 'number', min: 0, max: 1, step: 0.1, value: importance, onChange: (e) => setImportance(e.target.value) })),
+                      kind === 'state'
+                        ? h('label', null, '有效期(天) ',
+                            h('input', { type: 'number', min: 1, max: 365, step: 1, value: ttlDays, onChange: (e) => setTtlDays(e.target.value) }))
+                        : null,
                     ),
                     h('div', { className: 'acts' },
                       h('button', { disabled: busy, onClick: save }, busy ? '保存中…' : '保存'),
@@ -919,6 +952,12 @@ window.__ModuleLoader__.load({
                     ),
                     rec.tags && rec.tags.length > 0
                       ? h('div', { className: 'tags' }, rec.tags.map((tag) => h('span', { className: 'tag', key: tag }, tag)))
+                      : null,
+                    rec.expiredAt
+                      ? h('div', { className: 'meta' },
+                          h('span', { className: 'meta-label' }, '过期'),
+                          h('span', { className: isExpired(rec) ? 'meta-done' : '' }, `${fmtTime(rec.expiredAt)}（${expiryText(rec.expiredAt)}）`),
+                        )
                       : null,
                   ),
             )
@@ -967,6 +1006,9 @@ window.__ModuleLoader__.load({
             : null,
           rec.supersededBy
             ? h('span', { className: 'tn-badge old', title: `已被 #${rec.supersededBy} 修正` }, '已修正')
+            : null,
+          isExpired(rec)
+            ? h('span', { className: 'tn-badge expired', title: `过期于 ${fmtTime(rec.expiredAt)}` }, '已过期')
             : null,
           h('span', { className: 'tn-time' }, shortTime(rec.updatedAt)),
         ),
@@ -1067,6 +1109,13 @@ window.__ModuleLoader__.load({
           ),
           h('div', { className: 'rowline' }, h('span', null, '创建'), h('b', null, fmtTime(rec.createdAt))),
           h('div', { className: 'rowline' }, h('span', null, '更新'), h('b', null, fmtTime(rec.updatedAt))),
+          rec.expiredAt
+            ? h('div', { className: 'rowline' },
+                h('span', null, '过期'),
+                h('b', null, `${fmtTime(rec.expiredAt)}（${expiryText(rec.expiredAt)}）`),
+                isExpired(rec) ? h('span', { className: 'tn-badge expired' }, '已过期') : null,
+              )
+            : null,
           h('div', { className: 'rowline' },
             h('span', null, 'id'),
             h('code', { className: 'td-id', title: '点击复制完整 id', onClick: copyId }, rec.id),
@@ -1776,6 +1825,14 @@ window.__ModuleLoader__.load({
         ],
       },
       {
+        key: 'state', title: '状态记忆',
+        desc: 'kind=state 的默认有效期；注入时带「状态，使用前验证」前缀，过期后默认不进检索/摘要/召回。',
+        hint: '过期不会自动删除：面板和 memory_get 仍能取到，方便核对历史。',
+        fields: [
+          { k: 'ttlMs', label: '默认有效期(天)', type: 'num', min: 1, max: 365, step: 1, scale: 86_400_000, hint: '设置里存毫秒；面板按天编辑。' },
+        ],
+      },
+      {
         key: 'rules', title: '硬性规则',
         desc: '把 kind=rule 的记忆放进系统提示常驻段；旧会话下一轮补一条新增 / 变更的规则。',
         hint: '关闭只影响系统提示常驻段，规则本身仍可被 memory_search 检索。',
@@ -1864,8 +1921,9 @@ window.__ModuleLoader__.load({
           field.hint ? h('span', { className: 'setfield-hint' }, field.hint) : null,
         ),
         h('input', {
-          type: 'number', min: field.min, max: field.max, step: field.step, value: value,
-          onChange: (e) => onPatch(Number(e.target.value)),
+          type: 'number', min: field.min, max: field.max, step: field.step,
+          value: field.scale ? Math.round(Number(value) / field.scale) : value,
+          onChange: (e) => onPatch(field.scale ? Number(e.target.value) * field.scale : Number(e.target.value)),
         }),
       )
     }
@@ -2050,6 +2108,7 @@ window.__ModuleLoader__.load({
       const [content, setContent] = React.useState('')
       const [tags, setTags] = React.useState('')
       const [importance, setImportance] = React.useState(0.6)
+      const [ttlDays, setTtlDays] = React.useState(7)
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState('')
 
@@ -2071,6 +2130,7 @@ window.__ModuleLoader__.load({
             content,
             tags: tags.split(',').map((t) => t.trim()).filter(Boolean),
             importance: Number(importance),
+            ...(kind === 'state' ? { ttlMs: Math.max(1, Number(ttlDays) || 7) * 86_400_000 } : {}),
           })
           setBusy(false)
           onCreated()
@@ -2091,10 +2151,11 @@ window.__ModuleLoader__.load({
               })
             : null,
           h(Dropdown, {
-            items: ['fact', 'decision', 'preference', 'procedure', 'note', 'rule'].map((k) => ({ value: k, label: k })),
+            items: ['fact', 'decision', 'preference', 'procedure', 'note', 'rule', 'state'].map((k) => ({ value: k, label: k })),
             value: kind, disabled: busy, onChange: setKind,
           }),
           kind === 'rule' ? h('span', { className: 'warn' }, '规则会进入系统提示常驻段') : null,
+          kind === 'state' ? h('span', { className: 'warn' }, '状态会带“使用前验证”前缀，过期后默认隐藏') : null,
         ),
         h('div', { className: 'row' },
           h('textarea', {
@@ -2111,6 +2172,10 @@ window.__ModuleLoader__.load({
             })),
           h('label', null, '重要度 ',
             h('input', { type: 'number', min: 0, max: 1, step: 0.1, value: importance, onChange: (e) => setImportance(e.target.value) })),
+          kind === 'state'
+            ? h('label', null, '有效期(天) ',
+                h('input', { type: 'number', min: 1, max: 365, step: 1, value: ttlDays, onChange: (e) => setTtlDays(e.target.value) }))
+            : null,
           h('button', { onClick: submit, disabled: busy || content.trim() === '' || resolvedScope === '' }, busy ? '保存中…' : '保存'),
           h('button', { className: 'linkbtn', onClick: onCancel, disabled: busy }, '取消'),
         ),

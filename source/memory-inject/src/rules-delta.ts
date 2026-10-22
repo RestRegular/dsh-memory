@@ -60,6 +60,8 @@ export interface RulesDeltaOutcome {
   records: MemoryRecord[]
   changes: Array<{ id: string; reason: 'new' | 'edited' }>
   tokens?: number
+  /** 实际进入增量消息的规则 id + 版本(供会话注入状态去重)。 */
+  injectedEntries?: Array<{ id: string; updatedAt: number }>
 }
 
 /**
@@ -121,6 +123,7 @@ maybeInjectDetailed(agent: unknown, memory: RulesScopeSource, cfg: RulesSettings
     records: unseen,
     changes,
     ...(text !== undefined ? { tokens: rendered.tokens } : {}),
+    ...(text !== undefined ? { injectedEntries: rendered.stats.injectedEntries } : {}),
   }
 }
 

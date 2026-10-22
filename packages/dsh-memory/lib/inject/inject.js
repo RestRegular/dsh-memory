@@ -9,6 +9,7 @@
 import { estimateTokens } from '../provider/rerank.js'
 import { normalizeScopeInput } from '../provider/scope.js'
 import { textHasTag } from './signals.js'
+import { recordKindPrefix } from './digest.js'
 import { InjectionState } from './state.js'
 
                                
@@ -230,7 +231,7 @@ export function renderRecallBlock(
       omitted.push({ id: h.record.id, reason: 'budget' })
       continue
     }
-    const line = `- ${h.record.id.slice(0, 8)} ${h.record.content.replace(/\s+/g, ' ').slice(0, chars)}`
+    const line = `- ${h.record.id.slice(0, 8)} ${recordKindPrefix(h.record)}${h.record.content.replace(/\s+/g, ' ').slice(0, chars)}`
     const cost = estimateTokens(line) + 1
     if (tokens + cost > cfg.tokenBudget) {
       budgetExhausted = true
@@ -289,6 +290,7 @@ export function recallText(text        )         {
                   
                       
                              
+                          
                         
                                                                                
  
@@ -353,6 +355,12 @@ export class MemoryInjector {
         retrieval: { ok: false, count: 0, error: 'retrieval_failed', errorCode: 'retrieval_failed' },
       }
     }
+    // 过期状态由 provider 的检索层过滤;这里再兜一道,防止旧 provider 把过期
+    // state 当成当前事实注入。memory_get(id) 仍可直接取到历史正文。
+    const now = Date.now()
+    const retrieved = hits
+    hits = hits.filter((hit) => !(hit.record.expiredAt !== undefined && hit.record.expiredAt < now))
+    const expiredExcluded = retrieved.length - hits.length
     // 成功检索后记住查询(即使没有新正文):同一 query 的后续 step 不再重复全量检索。
     this.state.setLastQuery(sessionId, query)
 
@@ -379,7 +387,7 @@ export class MemoryInjector {
     const block = renderRecallBlock(freshHits, cfg, optionsForRender)
     const base               = {
       ids: [], candidates: candidates.length, dedupSkipped: deduplicated.length, updated, omitted: [], query,
-      tokens: 0, rawHits: hits.length, tagFiltered, supersededExcluded,
+      tokens: 0, rawHits: hits.length, tagFiltered, supersededExcluded, expiredExcluded,
       retrieval: { ok: true, count: hits.length },
     }
     if (!block) return base

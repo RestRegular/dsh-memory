@@ -28,10 +28,12 @@ JSONL 落盘 · 本机向量检索 · 五个模型工具 · 自动召回 · 硬�
 | 新会话从零开始，换个窗口就问不出上次的结论 | 结论落成记忆；新会话第一步注入摘要，之后每轮按问题召回 |
 | 同一个坑反复踩，上次查到的命令又要再查一遍 | 发布 / 部署 / 工具失败等行为会触发定向召回；查到的做法直接复用 |
 | 写了规则没人执行，改过的规则旧会话不知道 | `kind: rule` 进系统提示常驻段；新增或编辑会补一条提醒 |
+| 临时状态被当成永久事实 | `kind: state` 带默认 7 天 TTL 和「使用前验证」前缀；过期后默认隐藏，但不会自动删除 |
 | 云端记忆不可控，敏感内容不敢写 | 全部本地 JSONL；写入前过凭据扫描；检索默认不联网 |
 
 它也不是「把聊天记录整段塞给模型」：每条记忆是一句自洽的话，按作用域、类型和重要度管理；
-召回有 token 预算与去重，旧结论可以用 `supersedes` 标注修正，而不是悄悄覆盖。
+召回有 token 预算与去重；旧结论可以用 `supersedes` 标注修正，被修正的旧版本默认不再参与
+检索 / 摘要 / 召回（历史仍可用 `memory_get` 和面板查看），而不是悄悄覆盖。
 
 ## 功能
 
@@ -43,6 +45,7 @@ JSONL 落盘 · 本机向量检索 · 五个模型工具 · 自动召回 · 硬�
 | **自动召回** | 每轮按用户问题召回；新会话第一步注入项目 / global 摘要；发布、部署、工具失败等行为按标签触发定向召回 |
 | **印象形态** | 每轮只给每条记忆的短摘要；模型判断相关但需要细节时再 `memory_get` 取全文，省 token 也不丢信息 |
 | **硬性规则** | `kind: rule` 进系统提示常驻段；旧会话会收到新增 / 编辑提醒；超预算有明确警告，不静默丢弃 |
+| **状态记忆** | `kind: state` 默认 7 天 TTL；注入带「状态，使用前验证」；过期后默认不进检索 / 摘要 / 召回，但 `memory_get` 与面板仍可取 |
 | **可视化管理** | 记录浏览 / 搜索 / 新建 / 编辑 / 删除；**记录页可主动做语义检索**（与 `memory_search` 同一套排序）；记忆树展示作用域、类型与修正链；设置改完即存；导入导出 |
 | **一键向量后端** | 面板里下载 llama.cpp 运行时与内置模型，按 CPU / 内存 / 显卡推荐；换模型自动重建向量 |
 | **跨进程安全** | 每个作用域一把写锁，锁内重新读盘再合并；多个 DSH 实例或 MCP server 共用一个 store 不丢数据 |
@@ -148,9 +151,10 @@ try/catch——任何一半失败都只记一行日志，绝不让 DSH 启动失
 ```jsonc
 memory_save({
   "content": "本仓库用 pnpm 11 安装依赖；PATH 上的 pnpm 10 会报 ERR_PNPM_UNEXPECTED_STORE。",
-  "kind": "procedure",            // fact / decision / preference / procedure / note / rule
+  "kind": "procedure",            // fact / decision / preference / procedure / note / rule / state
   "tags": ["pnpm", "toolchain"],
   "importance": 0.8,              // 0~1
+  "expiresAt": 1793836800000,     // 可选：过期时间(ms)；kind=state 不传时按默认 TTL(7 天)，也可传 ttlMs
   "path": "D:/repositories/dsh-memory" // 可选：写入 project:<该路径>
 })
 ```
@@ -159,6 +163,7 @@ memory_save({
 
 ```jsonc
 memory_search({ "query": "pnpm 装依赖", "topK": 5 })
+memory_search({ "query": "旧的发布流程", "includeSuperseded": true }) // 默认隐藏被修正/覆盖的旧版本
 memory_get({ "ids": ["3f2a9c1d"] })
 memory_list({ "limit": 20 })
 memory_forget({ "id": "3f2a9c1d" })          // 按内容删：memory_forget({ query, scope })
@@ -193,7 +198,7 @@ memory_forget({ "id": "3f2a9c1d" })          // 按内容删：memory_forget({ q
 | 层 | 触发 | 作用 |
 | --- | --- | --- |
 | `recall` | 每轮 `agent/pre-step` | 按本轮用户问题检索，按 topK / token 预算注入；默认只给每条 120 字摘要 + `memory_get` 指引 |
-| `digest` | 会话第一步 | 注入项目 + global 概览：按重要度 × 新鲜度挑选；正文超预算时附可检索的标签索引 |
+| `digest` | 会话第一步 | 注入项目 + global 概览：按重要度 × 新鲜度挑选；`kind=rule` 不进摘要（已常驻系统提示）；正文超预算时附可检索的标签索引 |
 | `policy` | 系统提示常驻 | 什么时候查记忆、查到怎么复用、查不到时低风险推断 / 高风险先问用户 |
 | `rules` | 系统提示常驻 | `kind: rule` 的硬性规则，限量与预算；`mandatory` / `pinned` 排在最前 |
 | `turnEnd` | 每轮结束（默认关） | 下一轮开头提醒「有可复用结论先落盘」 |
@@ -212,7 +217,10 @@ memory_forget({ "id": "3f2a9c1d" })          // 按内容删：memory_forget({ q
 ### 去重与修正
 
 - 召回按 **sessionId + 记忆 id / 版本** 去重；只给过标签的记录，任务命中后可补正文；内容更新会重新评估。
-- 被 `supersedes` 指向的旧记录不再进入摘要、规则段和自动召回；`memory_search` / `memory_get` 仍可查历史。
+- 被 `supersedes` 指向的旧记录不再进入 `memory_search`、`memory_list`、摘要、规则段和自动召回；`memory_get(id)` 与面板仍可查历史。需要历史检索时 `memory_search({ includeSuperseded: true })`。
+- 摘要排除 `kind=rule`；规则段实际进入系统提示的 id 会写进会话注入状态，recall 不再重复注入同一条规则。
+- 同一轮最多发生一次 signal 驱动召回；同 tag / 同 query 的第二个信号只记一条 `signal_dropped` 审计。
+- `kind=state` 过期后默认从检索 / 摘要 / 召回 / 列表隐藏，但数据不删除；`memory_get` 与面板仍可取。
 - compaction 后重置摘要与注入去重状态。
 
 ## 检索

@@ -128,6 +128,8 @@ export function apply(ctx         , config                     = {}) {
   const callMeta = new Map                                                ()
   const sessionScopes = new Map                  ()
   const sessionAutoScopes = new Map                  ()
+  /** 本轮已经发生过的 signal 驱动召回:每轮最多一次,同 tag/query 也跳过。 */
+  const signalRecallTurn = new Map                                                                    ()
   const tagCache = new Map                                        ()
   /** 系统提示 rules 段的同源渲染缓存：pre-step 算一次，section 回调复用。 */
   const rulesCache = new Map                                                               ()
@@ -390,6 +392,7 @@ export function apply(ctx         , config                     = {}) {
           })
           injectionState.clear(sessionId)
           signals.clear(sessionId)
+          signalRecallTurn.delete(sessionId)
           digester.reset(sessionId)
           sessionScopes.delete(sessionId)
           sessionAutoScopes.delete(sessionId)
@@ -552,7 +555,8 @@ export function apply(ctx         , config                     = {}) {
     const exclude = excludedIds(memory, scopes)
     const excludeAuto = excludedIds(memory, autoScopes)
     const signal = sessionId === undefined ? undefined : signals.take(sessionId)
-    const usableSignal = autoScopes === undefined ? undefined : signal
+    let usableSignal = autoScopes === undefined ? undefined : signal
+    const turnKey = turn ?? step
     const userQuery = pickQueryText(input.messages         )
     const phase = detectPhase(userQuery)
     const userQueryField = sanitizeAuditText(userQuery)
@@ -575,6 +579,19 @@ export function apply(ctx         , config                     = {}) {
     }
     const settings = settingsOf()
 
+    // 每轮最多一次 signal 驱动召回:一轮里的第二个信号不再强制检索。
+    // 同 tag / 同 query 的重复信号单独给出更精确的审计原因。
+    let signalDropReason                    
+    if (usableSignal !== undefined && sessionId !== undefined) {
+      const used = signalRecallTurn.get(sessionId)
+      if (used !== undefined && used.turn === turnKey) {
+        signalDropReason = used.tag !== undefined && usableSignal.tag !== undefined && used.tag === usableSignal.tag
+          ? 'same_tag'
+          : used.query === usableSignal.query ? 'same_query' : 'turn_capped'
+        usableSignal = undefined
+      }
+    }
+
     // 本步的评估先收集，等最终消息组装/校验完成后再统一写 evaluation + delivery。
     // 这样可以准确表达“评估选中了 X”与“消息真的追加了吗”两件不同的事。
     const staged               = []
@@ -584,7 +601,8 @@ export function apply(ctx         , config                     = {}) {
 
     if (signal !== undefined && usableSignal === undefined) {
       recordAudit(auditBase('signal', {
-        kind: 'signal', stage: 'signal_dropped', outcome: 'skipped', reasonCode: 'auto_scope_unavailable',
+        kind: 'signal', stage: 'signal_dropped', outcome: 'skipped',
+        reasonCode: signalDropReason ?? 'auto_scope_unavailable',
         trigger: signal.reason, phase: signal.phase,
         ...(signal.callId !== undefined ? { operationId: signal.callId } : {}),
         signal: {
@@ -626,6 +644,9 @@ export function apply(ctx         , config                     = {}) {
         if (delta.text !== undefined) {
           parts.push(delta.text)
           messageChannels.add('rules_delta')
+          if (sessionId !== undefined && delta.injectedEntries !== undefined) {
+            injectionState.markContent(sessionId, delta.injectedEntries)
+          }
           stage(auditBase('rules_delta', {
             kind: 'evaluation', stage: 'rendered', outcome: 'success', reasonCode: 'delta_rendered',
             selected: { contentIds: delta.changes.map((change) => change.id), hintIds: [], count: delta.records.length },
@@ -734,6 +755,11 @@ export function apply(ctx         , config                     = {}) {
           }))
         } else {
           if (sessionId !== undefined) rulesCache.set(sessionId, { at: Date.now(), scopes: promptScopes, render: rendered.render })
+          // 规则正文已经进入系统提示常驻段；写进会话注入状态后,recall 不会再
+          // 把同一条规则当"新记忆"重复塞进对话消息。
+          if (sessionId !== undefined && rendered.render.stats.injectedEntries.length > 0) {
+            injectionState.markContent(sessionId, rendered.render.stats.injectedEntries)
+          }
           const rulesStats = rendered.render.stats
           const rulesOutcome = rulesStats.candidates === 0 ? 'skipped' : rulesStats.injected === 0 ? 'partial' : 'success'
           const rulesReason = rulesStats.candidates === 0 ? 'no_candidates' : rulesStats.injected === 0 ? 'all_omitted' : 'system_prompt_shared_render'
@@ -799,6 +825,14 @@ export function apply(ctx         , config                     = {}) {
     } else {
       const recallScopes = usableSignal === undefined ? scopes : autoScopes
       const recallExclude = usableSignal === undefined ? exclude : excludeAuto
+      if (usableSignal !== undefined && sessionId !== undefined) {
+        signalRecallTurn.set(sessionId, {
+          turn: turnKey,
+          key: usableSignal.key,
+          ...(usableSignal.tag !== undefined ? { tag: usableSignal.tag } : {}),
+          query: usableSignal.query,
+        })
+      }
       const recall = await injector.maybeInjectDetailed(
         { messages: input.messages         , signal: input.signal, ...(recallScopes !== undefined ? { scopes: recallScopes } : {}), ...(sessionId !== undefined ? { sessionId } : {}) },
         { messages: decision.messages          },

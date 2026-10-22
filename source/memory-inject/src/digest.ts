@@ -5,10 +5,11 @@
  * 挑几条,让模型一开始就知道有哪些旧结论可复用,而不是先搜一遍。
  *
  * 0.9.6 起,摘要不再静默截断:
- *   - 返回完整的候选/注入/省略统计与每条省略原因(top_k / budget / superseded / expired);
+ *   - 返回完整的候选/注入/省略统计与每条省略原因(top_k / budget / superseded / expired / rule);
  *   - 被省略的正文会生成一段**独立的标签索引**,让模型知道哪些领域还有未展开的记忆;
  *   - 标签索引有自己的 token 预算与条数上限,不会反过来挤爆正文;
- *   - 退役(superseded)记录默认不进入摘要正文,也不生成索引。
+ *   - 退役(superseded)记录默认不进入摘要正文,也不生成索引;
+ *   - kind=rule 的记录不进摘要:硬性规则已经常驻系统提示,再列一遍是跨通道重复。
  */
 import type { MemoryRecord } from 'dsh-memory'
 import { estimateTokens } from '../../memory-local/src/rerank.ts'
@@ -22,7 +23,7 @@ const HINT_HEADER = '相关记忆索引（正文未注入）：'
 const HINT_FOOTER = '这些条目的正文尚未加载；遇到相关任务时，按标签或 ID 用 memory_search 取正文。'
 
 /** 一条正文被省略的原因。统计口径互斥:每条记录只归入一个原因。 */
-export type DigestOmitReason = 'top_k' | 'budget' | 'superseded' | 'expired'
+export type DigestOmitReason = 'top_k' | 'budget' | 'superseded' | 'expired' | 'rule'
 
 export interface DigestOmission {
   id: string
@@ -50,6 +51,7 @@ export interface DigestStats {
   omittedBudget: number
   omittedSuperseded: number
   omittedExpired: number
+  omittedRules: number
   truncated: boolean
   omitted: DigestOmission[]
   hint: DigestHintStats
@@ -191,11 +193,20 @@ function renderHintIndex(omitted: readonly MemoryRecord[], cfg: DigestSettings):
   return { text, tokens, injected: lines.length, omittedTopK, omittedBudget, injectedIds }
 }
 
+/** 一条记录在摘要/召回里的行首标签。状态型记忆必须提示“使用前验证”。 */
+export function recordKindPrefix(record: MemoryRecord): string {
+  return record.kind === 'state' ? '【状态，使用前验证】' : ''
+}
+
+export function digestLine(record: MemoryRecord): string {
+  return `- ${record.id.slice(0, 8)} [${digestScopeLabel(record.scope)}/${record.kind}] ${recordKindPrefix(record)}${record.content.replace(/\s+/g, ' ').slice(0, 160)}`
+}
+
 /**
  * 摘要的完整计划:正文 + 截断统计 + 标签索引。
  *
- * 统计口径:先按退役/过期过滤,再按排序依次尝试注入;`selected` 以外的记录
- * 只会归入 `top_k`、`budget`、`superseded`、`expired` 之一。
+ * 统计口径:先按规则/退役/过期过滤,再按排序依次尝试注入;`selected` 以外的记录
+ * 只会归入 `top_k`、`budget`、`superseded`、`expired`、`rule` 之一。
  */
 export function renderDigest(records: readonly MemoryRecord[], cfg: DigestSettings, now = Date.now()): DigestRender | null {
   if (records.length === 0) return null
@@ -205,7 +216,14 @@ export function renderDigest(records: readonly MemoryRecord[], cfg: DigestSettin
   const omitted: DigestOmission[] = []
   let omittedSuperseded = 0
   let omittedExpired = 0
+  let omittedRules = 0
   for (const record of records) {
+    // 规则已经常驻系统提示(rules 段);摘要再列一遍就是同一个 id 在两个通道出现。
+    if (record.kind === 'rule') {
+      omittedRules += 1
+      omitted.push({ id: record.id, reason: 'rule', kind: record.kind, tags: tagsOf(record) })
+      continue
+    }
     if (retired.has(record.id)) {
       omittedSuperseded += 1
       omitted.push({ id: record.id, reason: 'superseded', kind: record.kind, tags: tagsOf(record) })
@@ -239,7 +257,7 @@ export function renderDigest(records: readonly MemoryRecord[], cfg: DigestSettin
       omitted.push({ id: record.id, reason: 'budget', kind: record.kind, tags: tagsOf(record) })
       continue
     }
-    const line = `- ${record.id.slice(0, 8)} [${digestScopeLabel(record.scope)}/${record.kind}] ${record.content.replace(/\s+/g, ' ').slice(0, 160)}`
+    const line = digestLine(record)
     const cost = estimateTokens(line) + 1
     if (tokens + cost > cfg.tokenBudget) {
       budgetExhausted = true
@@ -254,7 +272,7 @@ export function renderDigest(records: readonly MemoryRecord[], cfg: DigestSettin
 
   const hint = renderHintIndex(hintCandidates, cfg)
   const bodyText = selected.length > 0
-    ? `${HEADER}\n${selected.map((record) => `- ${record.id.slice(0, 8)} [${digestScopeLabel(record.scope)}/${record.kind}] ${record.content.replace(/\s+/g, ' ').slice(0, 160)}`).join('\n')}`
+    ? `${HEADER}\n${selected.map((record) => digestLine(record)).join('\n')}`
     : ''
   const text = [bodyText, hint.text].filter((part) => part !== null && part !== '').join('\n\n')
   if (text === '') return null
@@ -267,6 +285,7 @@ export function renderDigest(records: readonly MemoryRecord[], cfg: DigestSettin
     omittedBudget,
     omittedSuperseded,
     omittedExpired,
+    omittedRules,
     truncated: omitted.length > 0,
     omitted,
     hint: {
