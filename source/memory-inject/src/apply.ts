@@ -67,6 +67,7 @@ import {
   highRiskSignal,
   memoryGetRequestsContent,
   memoryGetResultIds,
+  memorySaveResultIds,
   textTagSignal,
   todoText,
   toolCallDescription,
@@ -149,6 +150,8 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
   const callMeta = new Map<string, { name: string; description?: string }>()
   /** memory_get 调用 → 这次是否取正文；tool/result 到达后用来写 content_injected。 */
   const memoryGetCalls = new Map<string, boolean>()
+  /** memory_save 调用中还没等到结果的 callId；成功后把被保存的记录记为 content_injected。 */
+  const memorySaveCalls = new Set<string>()
   const sessionScopes = new Map<string, string[]>()
   const sessionAutoScopes = new Map<string, string[]>()
   /** 本轮已经发生过的 signal 驱动召回:每轮最多一次,同 tag/query 也跳过。 */
@@ -287,6 +290,54 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
       const found = memory.getByIds(ids)
       if (found.length === 0) return
       injectionState.markContent(sessionId, found.map((record) => ({ id: record.id, updatedAt: record.updatedAt })))
+    } catch { /* 去重状态是尽力而为，不能影响工具结果 */ }
+  }
+
+  /** 记住这次 memory_save 的 callId；结果成功到达后才知道记录 id。 */
+  const rememberMemorySaveCall = (callId: unknown): void => {
+    if (typeof callId !== 'string' || callId === '') return
+    memorySaveCalls.add(callId)
+    if (memorySaveCalls.size > 500) {
+      const oldest = memorySaveCalls.values().next()
+      if (!oldest.done) memorySaveCalls.delete(oldest.value)
+    }
+  }
+
+  /**
+   * memory_save 成功 → 这条记忆的正文**已经由模型自己写进上下文**（写入语句就在
+   * tool/call 的参数里），和 memory_get 取正文同一口径记为 content_injected：
+   * 本会话后续的摘要 / 召回不再把刚写进去的内容原样塞回来（0.17.0 之前的实况是
+   * 下一轮 recall 会把保存的记忆再注入一遍，然后才被去重）。
+   *
+   * 只在保存成功时标记：失败 / 被拒绝的保存没有可信的记录 id，也没有"正文已在
+   * 上下文里"这一事实。与 memory_get 一样，去重标记独立于 autoRecall 开关。
+   */
+  const markMemorySaveContent = (
+    sessionId: string,
+    memory: MemoryWithInject,
+    event: unknown,
+    context: { turn?: number; step?: number; callId?: string } = {},
+  ): void => {
+    try {
+      const ids = memorySaveResultIds(event)
+      if (ids.length === 0 || typeof memory.getByIds !== 'function') return
+      const found = memory.getByIds(ids)
+      if (found.length === 0) return
+      injectionState.markContent(sessionId, found.map((record) => ({ id: record.id, updatedAt: record.updatedAt })))
+      // 这条状态变化要能从审计里查到，否则后续 recall 的 dedup 列表会显得没来由。
+      recordAudit({
+        kind: 'lifecycle',
+        channel: 'lifecycle',
+        stage: 'content_pinned',
+        outcome: 'success',
+        reasonCode: 'saved_in_context',
+        trigger: 'memory_save',
+        sessionId,
+        ...(context.callId !== undefined ? { operationId: context.callId } : {}),
+        ...(context.turn !== undefined ? { turn: context.turn } : {}),
+        ...(context.step !== undefined ? { step: context.step } : {}),
+        selected: { contentIds: found.map((record) => record.id), hintIds: [], count: found.length },
+      })
     } catch { /* 去重状态是尽力而为，不能影响工具结果 */ }
   }
 
@@ -511,6 +562,7 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
           for (const key of tagCache.keys()) if (key.startsWith(`${sessionId}|`)) tagCache.delete(key)
           callMeta.clear()
           memoryGetCalls.clear()
+          memorySaveCalls.clear()
           return
         }
 
@@ -518,13 +570,24 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
         // 普通每轮召回 / 摘要仍会注入同一段正文。这里在 autoRecall 闸门前记录。
         if (type === 'tool/call' && data.name === 'memory_get') {
           rememberMemoryGetCall(data.callId, memoryGetRequestsContent(data.arguments))
+        } else if (type === 'tool/call' && data.name === 'memory_save') {
+          rememberMemorySaveCall(data.callId)
         } else if (type === 'tool/result') {
           const callId = (data.message as { source?: { callId?: unknown } } | undefined)?.source?.callId
           if (typeof callId === 'string') {
             const takesContent = memoryGetCalls.get(callId)
             memoryGetCalls.delete(callId)
-            if (takesContent === true && memory !== undefined && !toolResultFailure(event).isError) {
+            const isError = toolResultFailure(event).isError
+            if (takesContent === true && memory !== undefined && !isError) {
               markMemoryGetContent(sessionId, memory, event)
+            } else if (memorySaveCalls.delete(callId) && memory !== undefined && !isError) {
+              const turn = typeof data.turn === 'number' ? data.turn : undefined
+              const step = typeof data.step === 'number' ? data.step : undefined
+              markMemorySaveContent(sessionId, memory, event, {
+                callId,
+                ...(turn !== undefined ? { turn } : {}),
+                ...(step !== undefined ? { step } : {}),
+              })
             }
           }
         }

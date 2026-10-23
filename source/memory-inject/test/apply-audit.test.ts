@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { registerHooks } from 'node:module'
 import { InjectAuditStore } from '../src/audit.ts'
+import { memorySaveResultIds } from '../src/signals.ts'
 import { defaultInjectSettings } from '../../memory-local/src/inject-settings.ts'
 
 const STUB = 'data:text/javascript,' + encodeURIComponent(`
@@ -515,6 +516,114 @@ test('去重状态持久化：插件重载后从工作区 .dsh/dsh-memory 恢复
     rmSync(workspace, { recursive: true, force: true })
   }
 })
+
+// memory_save = 模型自己把正文写进上下文（tool/call 的参数）。成功后必须和
+// memory_get 取正文一样记为 content_injected，否则下一次召回会把刚保存的记忆再塞一遍。
+const SAVE_ID = '11112222-3333-4444-5555-666677778888'
+
+function fireMemorySave(
+  handlers: Map<string, (...args: any[]) => unknown>,
+  options: { callId?: string; text?: string; isError?: boolean; session?: unknown; result?: boolean } = {},
+): void {
+  const onEvent = handlers.get('session/event')
+  assert.ok(onEvent)
+  const callId = options.callId ?? 'call-save'
+  const session = options.session ?? { id: 's1' }
+  onEvent!(session, {
+    type: 'tool/call',
+    data: {
+      name: 'memory_save',
+      callId,
+      turn: 1,
+      step: 3,
+      arguments: JSON.stringify({ content: '发布前检查 devcred 凭据', tags: ['release'] }),
+    },
+  })
+  if (options.result === false) return
+  onEvent!(session, {
+    type: 'tool/result',
+    data: {
+      turn: 1,
+      step: 3,
+      message: {
+        role: 'tool',
+        isError: options.isError ?? false,
+        source: { callId },
+        content: [{ type: 'text', text: options.text ?? `已保存记忆 ${SAVE_ID} @ D:/repo` }],
+      },
+    },
+  })
+}
+
+test('memory_save 结果解析：按 UUID 取记录 id，不看文案', () => {
+  const event = (text: string) => ({ data: { message: { content: [{ type: 'text', text }] } } })
+  assert.deepEqual(memorySaveResultIds(event(`已保存记忆 ${SAVE_ID} @ D:/repo`)), [SAVE_ID])
+  assert.deepEqual(memorySaveResultIds(event(`已更新既有记忆（内容相同，去重）：${SAVE_ID} @ 项目`)), [SAVE_ID])
+  // 本地化 / 措辞变化不影响：只要文本里有记录 id 就能取到。
+  assert.deepEqual(memorySaveResultIds(event(`Saved memory ${SAVE_ID} in global`)), [SAVE_ID])
+  assert.deepEqual(memorySaveResultIds(event('没有 id 的说明文本')), [])
+  assert.deepEqual(memorySaveResultIds({}), [])
+})
+
+test('memory_save 成功后：下一次召回不再把刚保存的记忆注入一遍，审计留 content_pinned', async () => {
+  const hit = { record: { ...record(SAVE_ID, '发布前检查 devcred 凭据', ['release']), updatedAt: 100 }, score: 0.9 }
+  const { handlers, attached } = setup({
+    settings: contentOnlySettings(),
+    search: async () => [hit],
+    getByIds: () => [{ id: SAVE_ID, updatedAt: 100 }],
+  })
+  fireMemorySave(handlers)
+  const pinned = attached.current!.list().find((entry) => entry.stage === 'content_pinned')
+  assert.ok(pinned, '保存成功要留下会话级去重标记的审计')
+  assert.equal(pinned!.reasonCode, 'saved_in_context')
+  assert.equal(pinned!.operationId, 'call-save')
+  assert.deepEqual(pinned!.selected?.contentIds ?? [], [SAVE_ID])
+
+  const decision = await runPreStep(handlers, undefined, { turn: 2, step: 2 }) as { messages: unknown[] }
+  assert.equal(decision.messages.length, 0, '正文已在保存时进入上下文，召回不应再追加')
+  const recall = attached.current!.list().find((entry) => entry.channel === 'recall' && entry.kind === 'evaluation')
+  assert.ok(recall)
+  assert.ok((recall!.dedup?.skipped ?? 0) >= 1)
+  assert.deepEqual(recall!.dedup?.ids ?? [], [SAVE_ID])
+})
+
+test('memory_save 失败：不标记，后续召回照常注入', async () => {
+  const hit = { record: { ...record(SAVE_ID, '发布前检查 devcred 凭据', ['release']), updatedAt: 100 }, score: 0.9 }
+  const { handlers, attached } = setup({
+    settings: contentOnlySettings(),
+    search: async () => [hit],
+    getByIds: () => [{ id: SAVE_ID, updatedAt: 100 }],
+  })
+  fireMemorySave(handlers, { isError: true, text: 'memory_save failed: SCOPE_DISABLED' })
+  assert.equal(attached.current!.list().some((entry) => entry.stage === 'content_pinned'), false)
+  const decision = await runPreStep(handlers, undefined, { turn: 2, step: 2 }) as { messages: unknown[] }
+  assert.equal(decision.messages.length, 1, '保存失败不能吃掉后续召回')
+})
+
+test('memory_save 后记录有更新：仍可重新注入新版本', async () => {
+  const updated = { ...record(SAVE_ID, '发布前检查 devcred 凭据（已更新）', ['release']), updatedAt: 200 }
+  const { handlers } = setup({
+    settings: contentOnlySettings(),
+    search: async () => [{ record: updated, score: 0.9 }],
+    getByIds: () => [{ id: SAVE_ID, updatedAt: 100 }],
+  })
+  fireMemorySave(handlers)
+  const decision = await runPreStep(handlers, undefined, { turn: 2, step: 2 }) as { messages: unknown[] }
+  assert.equal(decision.messages.length, 1, '版本变化后应重新注入')
+})
+
+test('memory_save 去重命中（内容相同）同样算正文已在上下文', async () => {
+  const hit = { record: { ...record(SAVE_ID, '发布前检查 devcred 凭据', ['release']), updatedAt: 300 }, score: 0.9 }
+  const { handlers } = setup({
+    settings: contentOnlySettings(),
+    search: async () => [hit],
+    getByIds: () => [{ id: SAVE_ID, updatedAt: 300 }],
+  })
+  fireMemorySave(handlers, { text: `已更新既有记忆（内容相同，去重）：${SAVE_ID} @ 项目` })
+  const decision = await runPreStep(handlers, undefined, { turn: 2, step: 2 }) as { messages: unknown[] }
+  assert.equal(decision.messages.length, 0)
+})
+
 
 
 

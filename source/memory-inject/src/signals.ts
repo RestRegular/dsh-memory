@@ -420,6 +420,36 @@ export function memoryGetResultIds(event: unknown): string[] {
   return ids.slice(0, 50)
 }
 
+/** 记录 id 的形态:`newId()` 生成 randomUUID,这里只认完整 UUID。 */
+const RECORD_ID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
+
+/**
+ * 从 `memory_save` 的 tool/result 里取这次写入 / 去重命中的记录 id。
+ *
+ * 工具结果的渲染只有两种形态:「已保存记忆 <id> @ <scope>」与
+ * 「已更新既有记忆(内容相同,去重):<id> @ <scope>」,id 是 randomUUID。
+ * 这里**不按文案匹配**(本地化/措辞改动不该让去重失效),只按 UUID 形态取候选;
+ * 调用方还会用 `getByIds` 校验一次存在性,所以 scope 名字里的偶然片段不会误伤。
+ */
+export function memorySaveResultIds(event: unknown): string[] {
+  const data = (event as { data?: Record<string, unknown> } | undefined)?.data
+  const message = data?.message as { content?: Array<{ type?: string; text?: string }> } | undefined
+  const text = Array.isArray(message?.content)
+    ? message.content.filter((block) => block?.type === 'text' && typeof block.text === 'string').map((block) => block.text as string).join('\n')
+    : ''
+  if (text === '') return []
+  const seen = new Set<string>()
+  const ids: string[] = []
+  for (const match of text.matchAll(RECORD_ID_PATTERN)) {
+    const id = match[0]
+    if (seen.has(id)) continue
+    seen.add(id)
+    ids.push(id)
+    if (ids.length >= 10) break
+  }
+  return ids
+}
+
 /**
  * 每个会话只保留**最新一条未消费**的信号;相同 key 不重复排队。
  * `take()` 消费后保留 lastKey,同一失败不会因为重复事件反复搜索。

@@ -2,6 +2,17 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.17.1 — memory_save 成功即把这条记忆记为「正文已注入」
+
+- **现象**：在同一个会话里 `memory_save` 成功后，下一轮（或同一轮后续步骤）的召回会把刚保存的那条记忆再注入一遍，然后再被会话级去重标记。实况样本：某会话 turn 1 末尾保存一条发布记录，turn 2 第一步的召回又把它作为「相关记忆」塞回上下文，之后同一条再也不出现。
+- **根因**：0.16.1 只把 `memory_get` 取正文记成 `content_injected`；`memory_save` 的正文其实也进了上下文 —— 写入语句就是模型产出的 `tool/call` 参数 —— 但保存路径没有写会话注入状态，于是下一次召回把它当成「还没注入过的新记忆」。
+- **修复**：`session/event` 里跟踪 `memory_save` 的 `callId`；`tool/result` 成功、且能从结果里解析出记录 id 时（`getByIds` 再校验存在性），把该记录按 `updatedAt` 记为 `content_injected`。
+  - 只按 UUID 形态解析记录 id，不依赖结果文案，本地化 / 措辞改动不会让去重失效。
+  - 保存失败 / 被拒绝不标记；记录之后被更新（`updatedAt` 变化）仍会重新评估并重新注入。
+  - 去重标记独立于 `autoRecall` 开关，和 `memory_get` 的口径一致；compaction 时随会话状态一起清空。
+- **审计**：保存成功时写一条 `kind=lifecycle / stage=content_pinned / reasonCode=saved_in_context` 事件（带 `operationId` = 这次 save 的 callId、`selected.contentIds`），面板按记忆 id 能查到「它为什么后面被去重跳过」。
+- 回归测试：结果解析（保存 / 去重命中 / 非中文文案 / 无 id）、成功后下一次召回被去重且审计可见、保存失败不标记、版本变化重新注入、去重命中同样标记。
+
 ## 0.17.0 — 会话去重状态持久化到工作区 `.dsh/dsh-memory`
 
 - **状态现在可以跨插件重载 / 宿主重启恢复**：`InjectionState` 可按会话挂一个持久化 store，首次接触会话时读一次盘，之后写入由 store 合并。
