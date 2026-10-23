@@ -471,14 +471,14 @@ function resolveScopeSelection(memory, rawScope) {
 }
 
 /** 面板已知的记忆类型(与工具的 kind enum 一致)。 */
-const KNOWN_KINDS = ['fact', 'decision', 'preference', 'procedure', 'note', 'rule', 'state']
-
 /**
- * 会话「记忆可见域」的完整快照:自己的覆盖 + 生效策略 + 可选范围目录(含每个 scope
- * 的类型统计)。
+ * 会话「记忆可见域」的完整快照:自己的覆盖 + 生效策略 + 可选范围目录。
  *
  * 自己的覆盖(null = 没设置)用于面板上的"恢复默认";effective 用于预选(子 Agent
- * 会话会继承父会话的覆盖);scopes 是本次会话可以勾选的全部具体作用域键 + 类型。
+ * 会话会继承父会话的覆盖);defaults 是"没有显式覆盖时 Agent 实际会读的集合",
+ * 首次打开面板时按它预选,而不是显示成什么都没选。
+ *
+ * 0.19.1 起不再支持按记忆类型收窄:目录只返回 scope,不再返回 kinds。
  */
 function visibilityPayload(ctx, memory, sessionId) {
   let session
@@ -499,34 +499,6 @@ function visibilityPayload(ctx, memory, sessionId) {
 
   let refs
   try { if (session !== undefined) refs = resolveCurrentScopes({ session }) } catch { refs = undefined }
-  const stats = typeof memory.scopeStats === 'function' ? memory.scopeStats() : []
-  const kindStats = typeof memory.scopeKindStats === 'function' ? memory.scopeKindStats() : []
-  const byScope = new Map()
-  for (const item of Array.isArray(stats) ? stats : []) {
-    if (item && typeof item.scope === 'string') byScope.set(item.scope, { ...item, kinds: [] })
-  }
-  // 即使还没有任何记录,也要能把"当前会话 / 当前项目 / global"勾进可见范围。
-  const ensure = (scope) => {
-    if (typeof scope === 'string' && scope !== '' && !byScope.has(scope)) {
-      byScope.set(scope, { scope, records: 0, pendingEmbeds: 0, kinds: [] })
-    }
-  }
-  ensure(refs?.session)
-  ensure(refs?.project)
-  ensure('global')
-  for (const item of Array.isArray(kindStats) ? kindStats : []) {
-    const bucket = item && typeof item.scope === 'string' ? byScope.get(item.scope) : undefined
-    if (bucket === undefined || typeof item.kind !== 'string' || item.kind === '') continue
-    bucket.kinds.push({ kind: item.kind, records: Number(item.records) || 0 })
-  }
-  const rank = (scope) => scope === refs?.session ? 0 : scope === refs?.project ? 1 : scope === 'global' ? 2 : 3
-  const scopes = [...byScope.values()]
-    .sort((a, b) => rank(a.scope) - rank(b.scope) || String(a.scope).localeCompare(String(b.scope)))
-    .map((item) => ({
-      ...item,
-      kinds: [...item.kinds].sort((a, b) => KNOWN_KINDS.indexOf(a.kind) - KNOWN_KINDS.indexOf(b.kind) || a.kind.localeCompare(b.kind)),
-      label: item.name ?? scopeLabel(ctx, item.scope),
-    }))
   // 没有显式覆盖时,面板仍预选"当前默认读取集合"(会话 + 项目 + global),
   // 让用户看到 Agent 现在实际能看到什么;保存后才变成显式覆盖。
   let defaults = []
@@ -534,6 +506,28 @@ function visibilityPayload(ctx, memory, sessionId) {
     const resolved = memory.resolveReadScopes?.(agentLike)
     if (Array.isArray(resolved)) defaults = resolved
   } catch { /* 降级为空 */ }
+
+  const stats = typeof memory.scopeStats === 'function' ? memory.scopeStats() : []
+  const byScope = new Map()
+  for (const item of Array.isArray(stats) ? stats : []) {
+    if (item && typeof item.scope === 'string') byScope.set(item.scope, { ...item })
+  }
+  // 即使还没有任何记录 / 宿主没给 sessions,也要能把默认集合里的 scope 勾出来。
+  const ensure = (scope) => {
+    if (typeof scope === 'string' && scope !== '' && !byScope.has(scope)) {
+      byScope.set(scope, { scope, records: 0, pendingEmbeds: 0 })
+    }
+  }
+  const sessionScope = refs?.session ?? defaults.find((scope) => scope.startsWith('session:'))
+  const projectScope = refs?.project ?? defaults.find((scope) => scope.startsWith('project:'))
+  ensure(sessionScope)
+  ensure(projectScope)
+  ensure('global')
+  for (const scope of defaults) ensure(scope)
+  const rank = (scope) => scope === sessionScope ? 0 : scope === projectScope ? 1 : scope === 'global' ? 2 : 3
+  const scopes = [...byScope.values()]
+    .sort((a, b) => rank(a.scope) - rank(b.scope) || String(a.scope).localeCompare(String(b.scope)))
+    .map((item) => ({ ...item, label: item.name ?? scopeLabel(ctx, item.scope) }))
   return {
     sessionId,
     override: own,
@@ -541,7 +535,6 @@ function visibilityPayload(ctx, memory, sessionId) {
     inherited,
     defaults,
     scopes,
-    kinds: KNOWN_KINDS,
   }
 }
 
@@ -633,8 +626,9 @@ async function handle(ctx, routePath, req, res) {
       if (sessionId === '') throw new ApiError(400, 'SESSION_REQUIRED', 'session 不能为空')
       let next = null
       const rawConfig = body?.visibility
-      // 新协议:{ visibility: { scopes: [{ scope, kinds? }], level } } | null
-      // 兼容 0.18 的 { scopes: string[] | null }:按"绝对限制 + 全部类型"处理。
+      // 新协议:{ visibility: { scopes: [{ scope }], level } } | null
+      // 兼容 0.19.0 的 { scopes: [{ scope, kinds? }] } 与 0.18 的 { scopes: string[] }:
+      // 0.19.1 起不再限制记忆类型,提交里的 kinds 一律忽略。
       const rawScopes = rawConfig !== null && rawConfig !== undefined && typeof rawConfig === 'object'
         ? rawConfig.scopes
         : body?.scopes
@@ -653,10 +647,7 @@ async function handle(ctx, routePath, req, res) {
             throw new ApiError(400, 'SCOPE_INVALID', `可见范围必须是具体作用域键: ${JSON.stringify(scopeRaw)}`)
           }
           if (normalized.scope === undefined || scopes.some((item) => item.scope === normalized.scope)) continue
-          const kinds = raw !== null && typeof raw === 'object' && Array.isArray(raw.kinds)
-            ? [...new Set(raw.kinds.map((kind) => String(kind).trim()).filter((kind) => kind !== ''))]
-            : []
-          scopes.push(kinds.length > 0 ? { scope: normalized.scope, kinds } : { scope: normalized.scope })
+          scopes.push({ scope: normalized.scope })
         }
         const levelRaw = rawConfig !== null && rawConfig !== undefined && typeof rawConfig === 'object' ? rawConfig.level : 'absolute'
         const level = levelRaw === 'normal' || levelRaw === 'none' ? levelRaw : 'absolute'

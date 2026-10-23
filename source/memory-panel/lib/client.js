@@ -491,7 +491,7 @@ window.__ModuleLoader__.load({
       '.mem-scope-btn.on{color:var(--dsw-alias-brand-primary);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-brand-primary) 9%,transparent)}',
       '.mem-scope-btn svg{flex:none}',
       // 毛玻璃浮窗:半透明 + backdrop blur;不支持 backdrop-filter 时退回实心底。
-      '.mem-scope-pop{position:fixed;z-index:80;width:360px;max-height:min(620px,80vh);display:flex;flex-direction:column;gap:9px;padding:14px;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l2,var(--dsw-alias-border-l1)) 70%,transparent);border-radius:16px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 66%,transparent);-webkit-backdrop-filter:blur(20px) saturate(1.4);backdrop-filter:blur(20px) saturate(1.4);box-shadow:0 22px 60px rgba(0,0,0,.34),inset 0 1px 0 rgba(255,255,255,.08);color:var(--dsw-alias-label-primary);font-size:13px;overflow:hidden}',
+      '.mem-scope-pop{position:fixed;z-index:80;width:340px;max-height:min(600px,80vh);display:flex;flex-direction:column;gap:9px;padding:14px;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l2,var(--dsw-alias-border-l1)) 60%,transparent);border-radius:14px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 78%,transparent);-webkit-backdrop-filter:blur(20px) saturate(1.35);backdrop-filter:blur(20px) saturate(1.35);box-shadow:0 10px 28px rgba(0,0,0,.18);color:var(--dsw-alias-label-primary);font-size:13px;overflow:hidden}',
       '@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.mem-scope-pop{background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-1))}}',
       '.mem-scope-head{display:flex;align-items:center;gap:8px}',
       '.mem-scope-head h4{margin:0;font-size:13px;font-weight:600;line-height:1.4}',
@@ -525,22 +525,17 @@ window.__ModuleLoader__.load({
       '.mem-scope-label{flex:1;min-width:0;padding:0;border:none;background:transparent;color:var(--dsw-alias-label-primary);font-size:12.5px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}',
       '.mem-scope-label:hover{color:var(--dsw-alias-brand-primary);border:none}',
       '.mem-scope-row .cnt{flex:none;color:var(--dsw-alias-label-secondary);font-size:10.5px}',
-      '.mem-kind-row{display:flex;flex-wrap:wrap;gap:4px;padding-left:24px}',
-      '.mem-kind-chip{display:inline-flex;align-items:center;gap:3px;padding:1px 7px;border:1px solid var(--dsw-alias-border-l1);border-radius:999px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:10.5px;line-height:1.7;cursor:pointer}',
-      '.mem-kind-chip:hover{border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 50%,var(--dsw-alias-border-l1));color:var(--dsw-alias-label-primary)}',
-      '.mem-kind-chip.on{border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 55%,var(--dsw-alias-border-l1));color:var(--dsw-alias-brand-primary);background:color-mix(in srgb,var(--dsw-alias-brand-primary) 10%,transparent)}',
-      '.mem-kind-chip i{font-style:normal;opacity:.65;font-size:9px}',
       '.mem-scope-foot{display:flex;align-items:center;gap:8px}',
       '.mem-scope-foot .spacer{flex:1}',
       '.mem-scope-reset{padding:6px 13px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer;transition:border-color .12s ease,color .12s ease}',
       '.mem-scope-reset:hover:not(:disabled){border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 55%,var(--dsw-alias-border-l1));color:var(--dsw-alias-brand-primary)}',
-      '.mem-scope-save{padding:6px 16px;border:1px solid var(--dsw-alias-brand-primary);border-radius:9px;background:linear-gradient(180deg,color-mix(in srgb,var(--dsw-alias-brand-primary) 92%,white 8%),var(--dsw-alias-brand-primary));color:var(--dsw-alias-label-on-brand,#fff);font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 4px 14px color-mix(in srgb,var(--dsw-alias-brand-primary) 30%,transparent);transition:filter .12s ease}',
+      '.mem-scope-save{padding:6px 16px;border:1px solid var(--dsw-alias-brand-primary);border-radius:9px;background:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-on-brand,#fff);font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px color-mix(in srgb,var(--dsw-alias-brand-primary) 24%,transparent);transition:filter .12s ease}',
       '.mem-scope-save:hover:not(:disabled){filter:brightness(1.06)}',
       '.mem-scope-reset:disabled,.mem-scope-save:disabled{opacity:.5;cursor:default;filter:none}',
       '.mem-scope-err{padding:5px 8px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#d33) 10%,transparent);color:var(--dsw-alias-state-error-primary,#d33);font-size:12px;line-height:1.5}',
       // 范围外访问审批浮层(全局 fixed;根节点带 .memp 以复用审计 hover 浮窗样式)
       '.mem-approval{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:90;width:min(520px,calc(100vw - 24px));max-height:min(70vh,620px);display:flex;flex-direction:column;pointer-events:none;padding:0;font-size:13px;color:var(--dsw-alias-label-primary)}',
-      '.mem-approval-card{pointer-events:auto;display:flex;flex-direction:column;gap:8px;padding:14px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d9a23b) 42%,var(--dsw-alias-border-l1));border-radius:16px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 72%,transparent);-webkit-backdrop-filter:blur(20px) saturate(1.35);backdrop-filter:blur(20px) saturate(1.35);box-shadow:0 22px 60px rgba(0,0,0,.36),inset 0 1px 0 rgba(255,255,255,.08);overflow:hidden}',
+      '.mem-approval-card{pointer-events:auto;display:flex;flex-direction:column;gap:8px;padding:14px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d9a23b) 42%,var(--dsw-alias-border-l1));border-radius:14px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 82%,transparent);-webkit-backdrop-filter:blur(20px) saturate(1.3);backdrop-filter:blur(20px) saturate(1.3);box-shadow:0 10px 26px rgba(0,0,0,.18);overflow:hidden}',
       '@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.mem-approval-card{background:var(--dsw-alias-bg-layer-1)}}',
       '.mem-approval-head{display:flex;align-items:center;gap:7px}',
       '.mem-approval-head b{font-size:13px;font-weight:600}',
@@ -4465,6 +4460,22 @@ window.__ModuleLoader__.load({
      * 弹层用 fixed 定位(按按钮 rect 往上开),避免被 composer 的 overflow 裁掉。
      * 视觉:毛玻璃背景 + 自定义勾选 + 类型 chips + 三档限制等级。
      */
+    /**
+     * 输入框里的「记忆范围」按钮 + 浮窗。
+     *
+     * 宿主 `conversation.input.right` 是 session 作用域的 list 槽,owner 会把
+     * `sessionId` 作为标准 prop 传进来,所以这里不需要 register 的 inject。
+     *
+     * 0.19.1 起:
+     *   - 打开会话就 GET 一次,按钮直接显示该会话的范围数量(不再等点击才刷新);
+     *   - 按钮只显示数字,不再显示「记忆可见域」文字;
+     *   - 首次打开且没有显式覆盖时,按服务端给的 defaults 预选默认范围;
+     *   - 不再按记忆类型收窄,只选作用域。
+     *
+     * 读写走 /memory/api/visibility:
+     *   GET  ?session=<id> → { override, effective, inherited, defaults, scopes }
+     *   POST { session, visibility: { scopes: [{ scope }], level } | null } → 同上
+     */
     function MemoryVisibilityButton({ sessionId } = {}) {
       const [open, setOpen] = React.useState(false)
       const [loading, setLoading] = React.useState(false)
@@ -4473,6 +4484,7 @@ window.__ModuleLoader__.load({
       const [data, setData] = React.useState(null)
       const [level, setLevel] = React.useState('normal')
       const [entries, setEntries] = React.useState({})
+      const [catalog, setCatalog] = React.useState([])
       const [search, setSearch] = React.useState('')
       const [anchor, setAnchor] = React.useState(null)
       const wrapRef = React.useRef(null)
@@ -4497,37 +4509,49 @@ window.__ModuleLoader__.load({
         }
       }, [open])
 
-      if (typeof sessionId !== 'string' || sessionId === '') return null
-
-      const allKindsOf = (value) => {
-        const list = value && Array.isArray(value.kinds) ? value.kinds.filter((kind) => typeof kind === 'string') : []
-        return list.length > 0 ? list : Object.keys(KIND_META)
-      }
-
       const applyPayload = (value) => {
         if (!value || typeof value !== 'object') return
         setData(value)
-        const config = value.override || value.effective || (Array.isArray(value.defaults) && value.defaults.length > 0
-          ? { level: 'normal', scopes: value.defaults.map((scope) => ({ scope })) }
-          : null)
-        const selected = config && Array.isArray(config.scopes) ? config.scopes.filter((rule) => rule && typeof rule.scope === 'string') : []
+        const config = (value.override && typeof value.override === 'object' && !Array.isArray(value.override))
+          ? value.override
+          : (value.effective && typeof value.effective === 'object' && !Array.isArray(value.effective) ? value.effective : null)
         setLevel(config && (config.level === 'absolute' || config.level === 'none') ? config.level : 'normal')
-        const kindsAll = allKindsOf(value)
-        const scopes = []
-        const catalog = Array.isArray(value.scopes) ? value.scopes : []
-        for (const item of catalog) {
-          if (item && typeof item.scope === 'string' && !scopes.includes(item.scope)) scopes.push(item.scope)
+        const selected = new Set()
+        const selectedRules = config && Array.isArray(config.scopes) ? config.scopes : []
+        for (const rule of selectedRules) {
+          const scope = typeof rule === 'string' ? rule : rule && typeof rule.scope === 'string' ? rule.scope : ''
+          if (scope !== '') selected.add(scope)
         }
-        for (const rule of selected) {
-          if (!scopes.includes(rule.scope)) scopes.push(rule.scope)
+        // 没有显式覆盖 / 生效策略时用 defaults(默认会话 + 项目 + global)预选。
+        // 服务端可能没把 defaults 放进目录(旧版或宿主缺 sessions),这里自己补齐。
+        if (selected.size === 0 && Array.isArray(value.defaults)) {
+          for (const scope of value.defaults) if (typeof scope === 'string' && scope !== '') selected.add(scope)
         }
-        const next = {}
-        for (const scope of scopes) {
-          const rule = selected.find((item) => item.scope === scope)
-          const kinds = rule && Array.isArray(rule.kinds) && rule.kinds.length > 0 ? rule.kinds.filter((kind) => kindsAll.includes(kind)) : [...kindsAll]
-          next[scope] = { enabled: rule !== undefined, kinds }
+        const nextCatalog = []
+        const seen = new Set()
+        for (const item of Array.isArray(value.scopes) ? value.scopes : []) {
+          if (!item || typeof item.scope !== 'string' || item.scope === '' || seen.has(item.scope)) continue
+          seen.add(item.scope)
+          nextCatalog.push(item)
         }
-        setEntries(next)
+        for (const scope of selected) {
+          if (seen.has(scope)) continue
+          seen.add(scope)
+          nextCatalog.push({ scope, label: scope, records: 0 })
+        }
+        // 旧服务端没有 defaults 时的兜底:至少把默认三路(会话 / 项目 / global)选上,
+        // 不要再出现"一打开什么都没选"。
+        if (selected.size === 0) {
+          for (const item of nextCatalog) {
+            if (item.scope === 'global' || item.scope.startsWith('session:') || item.scope.startsWith('project:')) {
+              selected.add(item.scope)
+            }
+          }
+        }
+        const nextEntries = {}
+        for (const item of nextCatalog) nextEntries[item.scope] = selected.has(item.scope)
+        setCatalog(nextCatalog)
+        setEntries(nextEntries)
       }
 
       const load = () => {
@@ -4538,6 +4562,12 @@ window.__ModuleLoader__.load({
           .catch((e) => setError(String((e && e.message) || e)))
           .finally(() => setLoading(false))
       }
+
+      // 打开会话就加载一次:按钮上的数字来自这个会话的设置,不需要用户先点按钮。
+      React.useEffect(() => {
+        if (typeof sessionId !== 'string' || sessionId === '') return
+        load()
+      }, [sessionId])
 
       const toggle = (event) => {
         if (open) { setOpen(false); return }
@@ -4555,38 +4585,13 @@ window.__ModuleLoader__.load({
       }
 
       const toggleScope = (scope) => {
-        const kindsAll = allKindsOf(data)
-        setEntries((prev) => {
-          const current = prev[scope]
-          return { ...prev, [scope]: { enabled: !(current && current.enabled), kinds: current && current.kinds.length > 0 ? current.kinds : [...kindsAll] } }
-        })
-      }
-
-      const toggleKind = (scope, kind) => {
-        setEntries((prev) => {
-          const current = prev[scope]
-          if (!current) return prev
-          const has = current.kinds.includes(kind)
-          if (has && current.kinds.length === 1) return prev // 至少保留一种类型;全部用「全部」按钮
-          const kinds = has ? current.kinds.filter((item) => item !== kind) : [...current.kinds, kind]
-          return { ...prev, [scope]: { ...current, kinds } }
-        })
-      }
-
-      const setAllKinds = (scope) => {
-        const kindsAll = allKindsOf(data)
-        setEntries((prev) => {
-          const current = prev[scope]
-          if (!current) return prev
-          return { ...prev, [scope]: { ...current, kinds: [...kindsAll] } }
-        })
+        setEntries((prev) => ({ ...prev, [scope]: !prev[scope] }))
       }
 
       const selectAll = () => {
-        const kindsAll = allKindsOf(data)
         setEntries((prev) => {
           const next = { ...prev }
-          for (const scope of Object.keys(next)) next[scope] = { enabled: true, kinds: next[scope].kinds.length > 0 ? next[scope].kinds : [...kindsAll] }
+          for (const key of Object.keys(next)) next[key] = true
           return next
         })
       }
@@ -4594,7 +4599,7 @@ window.__ModuleLoader__.load({
       const clearAll = () => {
         setEntries((prev) => {
           const next = { ...prev }
-          for (const scope of Object.keys(next)) next[scope] = { ...next[scope], enabled: false }
+          for (const key of Object.keys(next)) next[key] = false
           return next
         })
       }
@@ -4612,27 +4617,31 @@ window.__ModuleLoader__.load({
       }
 
       const saveDraft = () => {
-        const scopes = Object.entries(entries)
-          .filter(([, entry]) => entry && entry.enabled)
-          .map(([scope, entry]) => ({ scope, kinds: [...entry.kinds] }))
+        const scopes = catalog.filter((item) => entries[item.scope]).map((item) => ({ scope: item.scope }))
         if (scopes.length === 0) { setError('至少选择一个可见范围'); return }
         save({ scopes, level })
       }
 
-      const scopes = data && Array.isArray(data.scopes) ? data.scopes : []
-      const override = data && data.override && Array.isArray(data.override.scopes) ? data.override : null
+      if (typeof sessionId !== 'string' || sessionId === '') return null
+
+      const override = data && data.override && typeof data.override === 'object' && !Array.isArray(data.override)
+        ? data.override
+        : null
       const hasOverride = override !== null
-      const overrideCount = hasOverride ? override.scopes.length : 0
-      const selectedCount = Object.values(entries).filter((entry) => entry && entry.enabled).length
-      const kindsAll = allKindsOf(data)
+      const effectiveConfig = override
+        ?? (data && data.effective && typeof data.effective === 'object' && !Array.isArray(data.effective) ? data.effective : null)
+      const effectiveCount = effectiveConfig && Array.isArray(effectiveConfig.scopes)
+        ? effectiveConfig.scopes.length
+        : (data && Array.isArray(data.defaults) ? data.defaults.length : 0)
+      const selectedCount = catalog.filter((item) => entries[item.scope]).length
       const needle = search.trim().toLowerCase()
-      const visibleScopes = scopes.filter((item) => {
+      const visibleScopes = catalog.filter((item) => {
         if (!needle) return true
         return String(item.label || item.scope).toLowerCase().includes(needle) || String(item.scope).toLowerCase().includes(needle)
       })
       let popStyle = {}
       if (anchor) {
-        const width = 360
+        const width = 340
         const margin = 8
         const viewportW = (typeof window !== 'undefined' && Number(window.innerWidth)) || 1024
         const viewportH = (typeof window !== 'undefined' && Number(window.innerHeight)) || 768
@@ -4643,7 +4652,7 @@ window.__ModuleLoader__.load({
       }
 
       const levelMeta = [
-        { value: 'absolute', label: '绝对限制', hint: '范围外一律查不到' },
+        { value: 'absolute', label: '绝对限制', hint: '范围外查不到' },
         { value: 'normal', label: '普通限制', hint: '范围外需审批' },
         { value: 'none', label: '无限制', hint: '不限制读取' },
       ]
@@ -4652,23 +4661,25 @@ window.__ModuleLoader__.load({
         h('button', {
           type: 'button',
           className: `mem-scope-btn${hasOverride ? ' on' : ''}`,
-          title: '记忆可见域（本会话及子 Agent）',
-          'aria-label': '记忆可见域',
+          title: hasOverride
+            ? `本会话已设置记忆范围：${effectiveCount} 个作用域`
+            : `本会话使用默认记忆范围：${effectiveCount} 个作用域`,
+          'aria-label': `记忆范围 ${effectiveCount}`,
           'aria-expanded': open,
           onMouseDown: (event) => { try { event.preventDefault() } catch { /* keepFocus */ } },
           onClick: toggle,
         },
           h(NavLineIcon, { size: 14 }),
-          h('span', null, hasOverride ? `记忆可见域 ${overrideCount}` : '记忆范围'),
+          data === null ? null : h('span', null, String(effectiveCount)),
         ),
-        open ? h('div', { className: 'mem-scope-pop', style: popStyle, role: 'dialog', 'aria-label': '记忆可见域' },
+        open ? h('div', { className: 'mem-scope-pop', style: popStyle, role: 'dialog', 'aria-label': '记忆范围' },
           h('div', { className: 'mem-scope-head' },
-            h('h4', null, '记忆可见域'),
+            h('h4', null, '记忆范围'),
             h('span', { className: 'spacer' }),
             h('span', { className: 'mem-scope-count' }, `已选 ${selectedCount}`),
           ),
           h('div', { className: 'hint' },
-            'Agent 默认只能检索和读取勾选的作用域与类型；限制等级决定范围外怎么处理。'),
+            'Agent 默认只能检索和读取勾选的作用域；限制等级决定范围外怎么处理。'),
           data && data.inherited
             ? h('div', { className: 'hint' }, '当前继承自父会话；保存后在本会话独立生效。')
             : null,
@@ -4697,60 +4708,30 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', className: 'linkbtn', onClick: selectAll }, '全选'),
             h('button', { type: 'button', className: 'linkbtn', onClick: clearAll }, '取消全选'),
           ),
-          loading
+          loading && data === null
             ? h('div', { className: 'hint' }, '读取中…')
             : h('div', { className: 'mem-scope-list' },
                 visibleScopes.length === 0
                   ? h('div', { className: 'hint' }, needle ? '没有匹配的作用域。' : '还没有可选的范围。')
-                  : visibleScopes.map((item) => {
-                      const entry = entries[item.scope] || { enabled: false, kinds: [...kindsAll] }
-                      const kindCounts = new Map()
-                      for (const kind of Array.isArray(item.kinds) ? item.kinds : []) {
-                        if (kind && typeof kind.kind === 'string') kindCounts.set(kind.kind, Number(kind.records) || 0)
-                      }
-                      return h('div', { className: `mem-scope-item${entry.enabled ? ' on' : ''}`, key: item.scope },
-                        h('div', { className: 'mem-scope-row' },
-                          h('button', {
-                            type: 'button',
-                            role: 'checkbox',
-                            'aria-checked': entry.enabled,
-                            className: `mem-scope-check${entry.enabled ? ' on' : ''}`,
-                            onClick: () => toggleScope(item.scope),
-                            'aria-label': entry.enabled ? '取消选择' : '选择',
-                          }, h('span', { className: 'box' }, entry.enabled ? h('svg', { width: 11, height: 11, viewBox: '0 0 12 12', 'aria-hidden': 'true' }, h('path', { d: 'M2 6.2 4.7 9 10 3.4', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' })) : null)),
-                          h('button', {
-                            type: 'button',
-                            className: 'mem-scope-label',
-                            title: item.scope,
-                            onClick: () => toggleScope(item.scope),
-                          }, item.label || item.scope),
-                          h('span', { className: 'cnt' }, `${item.records ?? 0}`),
-                        ),
-                        entry.enabled
-                          ? h('div', { className: 'mem-kind-row' },
-                              h('button', {
-                                type: 'button',
-                                className: `mem-kind-chip${entry.kinds.length >= kindsAll.length ? ' on' : ''}`,
-                                onClick: () => setAllKinds(item.scope),
-                                title: '允许该作用域下所有类型',
-                              }, '全部'),
-                              kindsAll.map((kind) => {
-                                const on = entry.kinds.includes(kind)
-                                const label = kindMeta(kind).label
-                                const count = kindCounts.get(kind)
-                                return h('button', {
-                                  key: kind,
-                                  type: 'button',
-                                  className: `mem-kind-chip${on ? ' on' : ''}`,
-                                  'aria-pressed': on,
-                                  onClick: () => toggleKind(item.scope, kind),
-                                  title: `${label}${count === undefined ? '' : ` · ${count} 条`}`,
-                                }, label, count === undefined ? null : h('i', null, count))
-                              }),
-                            )
-                          : null,
-                      )
-                    }),
+                  : visibleScopes.map((item) => h('div', { className: `mem-scope-item${entries[item.scope] ? ' on' : ''}`, key: item.scope },
+                      h('div', { className: 'mem-scope-row' },
+                        h('button', {
+                          type: 'button',
+                          role: 'checkbox',
+                          'aria-checked': Boolean(entries[item.scope]),
+                          className: `mem-scope-check${entries[item.scope] ? ' on' : ''}`,
+                          onClick: () => toggleScope(item.scope),
+                          'aria-label': entries[item.scope] ? '取消选择' : '选择',
+                        }, h('span', { className: 'box' }, entries[item.scope] ? h('svg', { width: 11, height: 11, viewBox: '0 0 12 12', 'aria-hidden': 'true' }, h('path', { d: 'M2 6.2 4.7 9 10 3.4', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' })) : null)),
+                        h('button', {
+                          type: 'button',
+                          className: 'mem-scope-label',
+                          title: item.scope,
+                          onClick: () => toggleScope(item.scope),
+                        }, item.label || item.scope),
+                        h('span', { className: 'cnt' }, `${item.records ?? 0}`),
+                      ),
+                    )),
               ),
           error ? h('div', { className: 'mem-scope-err' }, error) : null,
           h('div', { className: 'mem-scope-foot' },
@@ -5057,7 +5038,7 @@ window.__ModuleLoader__.load({
             name: 'conversation.input.right',
             id: 'memory-visibility',
             order: 30,
-            label: () => '记忆可见域',
+            label: () => '记忆范围',
           }, MemoryVisibilityButton))
         } catch (error) {
           console.warn('[dsh-memory] 记忆可见范围按钮注册失败:', error?.message)

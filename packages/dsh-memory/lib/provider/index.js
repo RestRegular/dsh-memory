@@ -1378,8 +1378,8 @@ export class LocalMemoryService                             {
         case 'session': if (!this.cfg.sessionEnabled) continue; break
         default: if (!this.cfg.customEnabled) continue; break
       }
-      const kinds = Array.isArray(raw.kinds) ? raw.kinds.filter((kind) => typeof kind === 'string' && kind !== '') : []
-      out.push(kinds.length > 0 ? { scope, kinds } : { scope })
+      // 0.19.1 起不再按记忆类型收窄:旧文件里的 kinds 忽略,只保留作用域。
+      out.push({ scope })
     }
     return out
   }
@@ -1523,10 +1523,8 @@ export class LocalMemoryService                             {
       if (normalized.scope === undefined) continue
       const scope = this.canonicalScope(normalized.scope)
       if (out.some((item) => item.scope === scope)) continue
-      const kinds = Array.isArray(rule.kinds)
-        ? [...new Set(rule.kinds.filter((kind) => typeof kind === 'string' && kind.trim() !== '').map((kind) => kind.trim()))]
-        : []
-      out.push(kinds.length > 0 ? { scope, kinds } : { scope })
+      // 不再支持按记忆类型收窄:提交里的 kinds 一律忽略。
+      out.push({ scope })
     }
     if (out.length === 0) throw memoryError('SCOPE_EMPTY', '至少选择一个可见的记忆范围')
     const level                  = config.level === 'normal' || config.level === 'none' ? config.level : 'absolute'

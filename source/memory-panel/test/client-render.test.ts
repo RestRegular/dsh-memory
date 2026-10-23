@@ -1523,27 +1523,26 @@ test('client apply 注册记忆视图、轨迹徽标与详情页签', async () =
   assert.ok(injected.includes('conversation.input.right'))
 })
 
-test('输入框记忆范围按钮:按会话读取、勾选与保存', async () => {
+test('输入框记忆范围按钮:打开会话就显示数字、默认范围预选、保存只带 scope', async () => {
   const { exports, hooks } = await loadBundle()
   hooks.resetAll()
   const Button = (exports.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
   const calls: Array<{ url: string; init?: { method?: string; body?: string } }> = []
+  // 故意不返回 session scope 的目录项,验证客户端会用 defaults 自己补齐并预选。
   const payload = {
     sessionId: 's1',
     override: null,
-    effective: { level: 'normal', scopes: [{ scope: 'session:s1' }, { scope: 'global' }] },
+    effective: null,
     inherited: false,
-    kinds: ['fact', 'rule'],
+    defaults: ['session:s1', 'global'],
     scopes: [
-      { scope: 'session:s1', label: '当前会话', records: 2, pendingEmbeds: 0, kinds: [{ kind: 'fact', records: 2 }] },
-      { scope: 'project:D:/w', label: '项目', records: 1, pendingEmbeds: 0, kinds: [{ kind: 'fact', records: 1 }] },
-      { scope: 'global', label: '全局', records: 5, pendingEmbeds: 0, kinds: [{ kind: 'rule', records: 5 }] },
+      { scope: 'global', label: '全局', records: 5, pendingEmbeds: 0 },
     ],
   }
   const savedFetch = (globalThis as Record<string, unknown>).fetch
   ;(globalThis as Record<string, unknown>).fetch = async (url: string, init?: { method?: string; body?: string }) => {
     calls.push({ url, init })
-    if (init === undefined) {
+    if (init === undefined || init.method === 'GET') {
       return { status: 200, json: async () => ({ ok: true, value: payload }) }
     }
     const body = JSON.parse(String(init.body ?? '{}')) as { visibility: { scopes: unknown[]; level: string } | null }
@@ -1557,33 +1556,38 @@ test('输入框记忆范围按钮:按会话读取、勾选与保存', async () =
     const element = () => hooks.React.createElement(Button, { sessionId: 's1' })
     hooks.setRerender(() => { current = render(element(), hooks) })
     current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
+    assert.equal(calls[0]?.url, '/memory/api/visibility?session=s1', '打开会话就加载')
+    assert.equal(calls[0]?.init?.method, 'GET')
     const button = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))
     assert.ok(button, '输入框里渲染了记忆范围按钮')
-    assert.ok(textOf(current).includes('记忆范围'))
+    assert.equal(textOf(button), '2', '按钮只显示数字,不再显示文字')
     ;(button!.props!.onClick as (event: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 40, top: 500 }) } })
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    assert.equal(calls[0]?.url, '/memory/api/visibility?session=s1')
     const text = textOf(current)
-    assert.ok(text.includes('记忆可见域'))
-    assert.ok(text.includes('当前会话'))
+    assert.ok(text.includes('记忆范围'))
+    assert.ok(text.includes('session:s1'), '默认范围里客户端补齐的 scope 也会渲染')
     assert.ok(text.includes('全局'))
     assert.ok(text.includes('绝对限制') && text.includes('普通限制') && text.includes('无限制'), '三档限制等级')
-    assert.ok(text.includes('事实') && text.includes('规则'), '每个已选作用域展开类型 chips')
+    assert.ok(!text.includes('事实') && !text.includes('规则'), '不再显示类型 chips')
     const boxes = collect(current).filter((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-check'))
-    assert.equal(boxes.length, 3, '三个可选范围(自定义勾选框)')
-    assert.deepEqual(boxes.map((box) => box.props?.['aria-checked']), [true, false, true], '默认预选生效范围')
+    assert.equal(boxes.length, 2, '默认范围补齐为两层(当前会话 + 全局)')
+    assert.deepEqual(boxes.map((box) => box.props?.['aria-checked']), [true, true], '默认范围全部预选')
 
     const save = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '保存')
     assert.ok(save, '保存按钮存在')
     ;(save!.props!.onClick as () => void)()
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    assert.equal(calls[1]?.init?.method, 'POST')
-    const posted = JSON.parse(String(calls[1]?.init?.body ?? '{}')) as { session: string; visibility: { scopes: Array<{ scope: string }>; level: string } }
+    const post = calls.find((call) => call.init?.method === 'POST')
+    assert.ok(post, '保存走 POST')
+    const posted = JSON.parse(String(post?.init?.body ?? '{}')) as { session: string; visibility: { scopes: Array<{ scope: string }>; level: string } }
     assert.equal(posted.session, 's1')
-    assert.deepEqual(posted.visibility.scopes.map((item) => item.scope), ['session:s1', 'global'])
+    assert.deepEqual(posted.visibility.scopes.map((item) => item.scope).sort(), ['global', 'session:s1'])
+    assert.deepEqual(Object.keys(posted.visibility.scopes[0]), ['scope'], '不再提交 kinds')
     assert.equal(posted.visibility.level, 'normal')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch

@@ -104,19 +104,19 @@ test('覆盖会落盘,另一个 provider 实例能读到', () => {
   other.flushSync()
 })
 
-test('可按作用域限定记忆类型:global 只允许 rule', async () => {
+test('0.19.1 起记忆类型不再细化:提交的 kinds 被忽略,同 scope 的所有类型都可读', async () => {
   await svc.save({ scope: 'global', kind: 'rule', content: '全局规则 alpha' })
   await svc.save({ scope: 'global', kind: 'fact', content: '全局事实 alpha' })
   svc.setSessionVisibility('s1', { scopes: [{ scope: 'global', kinds: ['rule'] }], level: 'absolute' })
+  assert.deepEqual(svc.sessionVisibility('s1'), { scopes: [{ scope: 'global' }], level: 'absolute' }, 'kinds 不落盘')
   const agentCtx = { agent: agent({ id: 's1', cwd: 'D:/w' }) }
   const search = memorySearchTool({ getService: () => svc })
   const result = await search.execute({ query: 'alpha' }, agentCtx)
-  assert.deepEqual(result.records.map((r) => r.kind), ['rule'])
+  assert.deepEqual(result.records.map((r) => r.kind).sort(), ['fact', 'rule'])
   const get = memoryGetTool({ getService: () => svc })
   const facts = await svc.list({ scope: 'global', kind: 'fact' })
   const got = await get.execute({ ids: [facts[0]!.id] }, agentCtx)
-  assert.equal(got.records.length, 0, '类型不在白名单里也不能按 id 取正文')
-  assert.deepEqual(got.missing, [facts[0]!.id])
+  assert.equal(got.records.length, 1, '同 scope 的事实仍可读')
 })
 
 test('普通限制:范围外命中会发起一次审批;允许后返回、拒绝后隐藏', async () => {
@@ -163,7 +163,7 @@ test('可见域变更通知:下一次 take 拿到配置,再取为空', () => {
   assert.equal(svc.takeVisibilityNotice(agentCtx), undefined)
   svc.setSessionVisibility('s1', { scopes: [{ scope: 'global', kinds: ['rule'] }], level: 'normal' })
   assert.deepEqual(svc.takeVisibilityNotice(agentCtx), {
-    config: { scopes: [{ scope: 'global', kinds: ['rule'] }], level: 'normal' },
+    config: { scopes: [{ scope: 'global' }], level: 'normal' },
   })
   assert.equal(svc.takeVisibilityNotice(agentCtx), undefined)
 })

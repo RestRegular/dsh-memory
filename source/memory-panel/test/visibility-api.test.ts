@@ -38,7 +38,7 @@ function makeService(dir) {
   return new LocalMemoryService({ storeDir: dir, scopes: { global: true, project: true } })
 }
 
-test('面板 /visibility:GET 返回自己的覆盖、生效策略与带类型的范围目录', async () => {
+test('面板 /visibility:GET 返回自己的覆盖、生效策略与默认范围目录', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-visibility-'))
   const svc = makeService(dir)
   const session = { id: 's1', header: { id: 's1', cwd: 'D:/w' } }
@@ -54,16 +54,14 @@ test('面板 /visibility:GET 返回自己的覆盖、生效策略与带类型的
     assert.equal(value.effective, null, '没有覆盖时不伪造生效策略')
     const scopes = value.scopes.map((s) => s.scope)
     assert.deepEqual(scopes.slice(0, 3), ['session:s1', 'project:D:\\w', 'global'], '当前会话/项目/global 在最前')
-    assert.ok(Array.isArray(value.kinds) && value.kinds.includes('rule'), '返回已知类型目录')
-    const global = value.scopes.find((s) => s.scope === 'global')
-    assert.deepEqual(global.kinds, [{ kind: 'rule', records: 1 }], '每个 scope 带类型统计')
+    assert.deepEqual(value.defaults, ['session:s1', 'project:D:\\w', 'global'], '首次打开按默认集合预选')
   } finally {
     svc.flushSync()
     rmSync(dir, { recursive: true, force: true })
   }
 })
 
-test('面板 /visibility:POST 写入范围 + 类型 + 等级;空选择 400;恢复默认', async () => {
+test('面板 /visibility:POST 写入范围 + 等级;0.19.1 忽略 kinds;空选择 400;恢复默认', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-visibility-'))
   const svc = makeService(dir)
   const session = { id: 's1', header: { id: 's1', cwd: 'D:/w' } }
@@ -79,7 +77,7 @@ test('面板 /visibility:POST 写入范围 + 类型 + 等级;空选择 400;恢�
     assert.equal(set.out.status, 200)
     const override = set.out.body.value.override
     assert.equal(override.level, 'normal')
-    assert.deepEqual(override.scopes, [{ scope: 'session:s1' }, { scope: 'global', kinds: ['rule'] }])
+    assert.deepEqual(override.scopes, [{ scope: 'session:s1' }, { scope: 'global' }], 'kinds 不再落盘')
     assert.deepEqual(set.out.body.value.effective, override, '自己的覆盖就是生效策略')
 
     const empty = fakeRes()
