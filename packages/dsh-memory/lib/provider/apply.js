@@ -27,6 +27,15 @@ export class CordisMemoryService extends Service {
   constructor(ctx         , config                    = {}) {
     super(ctx, 'memory')
     this.impl = new LocalMemoryService(config)
+    // 会话可见范围的继承要沿 parentSession 链走;这里只放一个惰性查询,
+    // sessions 服务晚于本插件就绪也能在真正解析时拿到。
+    this.impl.setSessionLookup((id) => {
+      try {
+        return (ctx.get('sessions')                                                    )?.get?.(id)
+      } catch {
+        return undefined
+      }
+    })
     // 0.11.1:同一个目录因为 `D:/x` 与 `D:\x` 写法不同而分叉成两个 scope 的历史数据,
     // 在装配期合并一次(每进程一次;失败只影响合并,不影响读写)。
     try {
@@ -227,6 +236,21 @@ export class CordisMemoryService extends Service {
    */
   resolveReadScopes(agent         )                {
     return this.impl.resolveReadScopes(agent)
+  }
+
+  /** 显式「可见范围」覆盖(undefined = 未设置);工具用它判断是否限制 memory_get。 */
+  visibleScopes(agent         )                            {
+    return this.impl.visibleScopes(agent)
+  }
+
+  /** 面板:读取某会话自己的可见范围(null = 未设置)。 */
+  sessionVisibility(sessionId        )                  {
+    return this.impl.sessionVisibility(sessionId)
+  }
+
+  /** 面板:设置/清除某会话的可见范围(null = 恢复默认)。 */
+  setSessionVisibility(sessionId        , scopes                          )                  {
+    return this.impl.setSessionVisibility(sessionId, scopes)
   }
 
   /** 写路径默认 scope(省略 scope 时落到哪)。 */

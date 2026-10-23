@@ -1518,6 +1518,73 @@ test('client apply 注册记忆视图、轨迹徽标与详情页签', async () =
   assert.ok(injected.includes('conversation.view'))
   assert.ok(!injected.includes('conversation.session.header.actions'))
   assert.ok(injected.includes('shell.overlay'))
+  const visibility = registered.find((entry) => entry.spec.name === 'conversation.input.right')
+  assert.equal(visibility?.spec.id, 'memory-visibility', '输入框里的记忆可见范围按钮已注册')
+  assert.ok(injected.includes('conversation.input.right'))
+})
+
+test('输入框记忆范围按钮:按会话读取、勾选与保存', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const Button = (exports.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
+  const calls: Array<{ url: string; init?: { method?: string; body?: string } }> = []
+  const payload = {
+    sessionId: 's1',
+    override: null,
+    effective: ['session:s1', 'global'],
+    inherited: false,
+    scopes: [
+      { scope: 'session:s1', label: '当前会话', records: 2, pendingEmbeds: 0 },
+      { scope: 'project:D:/w', label: '项目', records: 1, pendingEmbeds: 0 },
+      { scope: 'global', label: '全局', records: 5, pendingEmbeds: 0 },
+    ],
+  }
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string, init?: { method?: string; body?: string }) => {
+    calls.push({ url, init })
+    if (init === undefined) {
+      return { status: 200, json: async () => ({ ok: true, value: payload }) }
+    }
+    const body = JSON.parse(String(init.body ?? '{}')) as { scopes: string[] | null }
+    return {
+      status: 200,
+      json: async () => ({ ok: true, value: { ...payload, override: body.scopes, effective: body.scopes ?? payload.effective } }),
+    }
+  }
+  try {
+    let current: RenderNode | null = null
+    const element = () => hooks.React.createElement(Button, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+
+    const button = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))
+    assert.ok(button, '输入框里渲染了记忆范围按钮')
+    assert.ok(textOf(current).includes('记忆范围'))
+    ;(button!.props!.onClick as (event: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 40, top: 500 }) } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    assert.equal(calls[0]?.url, '/memory/api/visibility?session=s1')
+    const text = textOf(current)
+    assert.ok(text.includes('记忆可见范围'))
+    assert.ok(text.includes('当前会话'))
+    assert.ok(text.includes('全局'))
+    const boxes = collect(current).filter((n) => n.tag === 'input')
+    assert.equal(boxes.length, 3, '三个可选范围')
+    assert.deepEqual(boxes.map((box) => box.props?.checked), [true, false, true], '默认预选生效范围')
+
+    const save = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '保存')
+    assert.ok(save, '保存按钮存在')
+    ;(save!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    assert.equal(calls[1]?.init?.method, 'POST')
+    const posted = JSON.parse(String(calls[1]?.init?.body ?? '{}')) as { session: string; scopes: string[] }
+    assert.equal(posted.session, 's1')
+    assert.deepEqual(posted.scopes, ['session:s1', 'global'])
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
 })
 
 test('记忆视图用 composer overlay 占满高度，滚动只发生在审计列表里', async () => {

@@ -26,7 +26,7 @@
 // scope 规范化与 provider 共用同一份实现。路径按**源码树位置**写:构建脚本的改写表
 // 会把它落成产物里的 `../provider/scope.js`(`lib/panel.js` → `lib/provider/scope.js`),
 // 在源码树里同一路径直接命中 source/memory-local/src —— 测试与真实加载都能解析。
-import { normalizeScopeInput } from '../../memory-local/src/scope.ts'
+import { normalizeScopeInput, resolveCurrentScopes } from '../../memory-local/src/scope.ts'
 
 
 function writeJson(res, body, status = 200) {
@@ -40,7 +40,7 @@ function writeJson(res, body, status = 200) {
 const CLIENT_ERROR_CODES = new Set([
   'SCOPE_INVALID', 'SCOPE_DISABLED', 'CONTENT_EMPTY', 'CONTENT_TOO_LONG',
   'SECRET_DETECTED', 'IMPORT_INVALID', 'IMPORT_TOO_LARGE', 'KIND_INVALID',
-  'QUERY_EMPTY', 'QUERY_INVALID',
+  'QUERY_EMPTY', 'QUERY_INVALID', 'SESSION_REQUIRED', 'SCOPE_EMPTY', 'SCOPE_NOT_VISIBLE',
 ])
 
 function writeError(res, error) {
@@ -470,6 +470,62 @@ function resolveScopeSelection(memory, rawScope) {
   return normalized.scope ?? null
 }
 
+/**
+ * 会话「记忆可见范围」的完整快照:自己的覆盖 + 实际生效集合 + 可选范围目录。
+ *
+ * 自己的覆盖(null = 没设置)用于面板上的"恢复默认";effective 用于预选(子 Agent
+ * 会话会继承父会话的覆盖);scopes 是本次会话可以勾选的全部具体作用域键。
+ */
+function visibilityPayload(ctx, memory, sessionId) {
+  let session
+  try { session = ctx.get('sessions')?.get?.(sessionId) } catch { session = undefined }
+  const agentLike = { session: session !== undefined ? session : { id: sessionId } }
+  const own = typeof memory.sessionVisibility === 'function' ? memory.sessionVisibility(sessionId) : null
+  let effective = null
+  let inherited = false
+  try {
+    if (typeof memory.visibleScopes === 'function') {
+      const resolved = memory.visibleScopes(agentLike)
+      if (Array.isArray(resolved)) {
+        effective = resolved
+        inherited = own === null
+      }
+    }
+    if (effective === null) {
+      const resolved = memory.resolveReadScopes?.(session !== undefined ? { session } : undefined)
+      if (Array.isArray(resolved)) effective = resolved
+    }
+  } catch { /* 可见范围是增强;拿不到就只返回自己的覆盖 */ }
+
+  let refs
+  try { if (session !== undefined) refs = resolveCurrentScopes({ session }) } catch { refs = undefined }
+  const stats = typeof memory.scopeStats === 'function' ? memory.scopeStats() : []
+  const byScope = new Map()
+  for (const item of Array.isArray(stats) ? stats : []) {
+    if (item && typeof item.scope === 'string') byScope.set(item.scope, item)
+  }
+  // 即使还没有任何记录,也要能把"当前会话 / 当前项目 / global"勾进可见范围。
+  const ensure = (scope) => {
+    if (typeof scope === 'string' && scope !== '' && !byScope.has(scope)) {
+      byScope.set(scope, { scope, records: 0, pendingEmbeds: 0 })
+    }
+  }
+  ensure(refs?.session)
+  ensure(refs?.project)
+  ensure('global')
+  const rank = (scope) => scope === refs?.session ? 0 : scope === refs?.project ? 1 : scope === 'global' ? 2 : 3
+  const scopes = [...byScope.values()]
+    .sort((a, b) => rank(a.scope) - rank(b.scope) || String(a.scope).localeCompare(String(b.scope)))
+    .map((item) => ({ ...item, label: item.name ?? scopeLabel(ctx, item.scope) }))
+  return {
+    sessionId,
+    override: own,
+    effective: Array.isArray(effective) ? effective : null,
+    inherited,
+    scopes,
+  }
+}
+
 async function handle(ctx, routePath, req, res) {
   const url = new URL(req.url ?? '/', 'http://dsh.local')
   const path = url.pathname.slice(routePath.length) || '/'
@@ -538,6 +594,43 @@ async function handle(ctx, routePath, req, res) {
     // touched. A management view must see everything written on disk (project
     // memories from earlier sessions included) — best-effort discovery, cached.
     discoverScopes(memory, store)
+
+    // 会话级「记忆可见范围」:输入框旁的按钮读写这一对接口。
+    if (method === 'GET' && path === '/visibility') {
+      if (typeof memory.sessionVisibility !== 'function') {
+        throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供会话可见范围接口（请升级 @restregular/dsh-memory）')
+      }
+      const sessionId = (url.searchParams.get('session') ?? '').trim()
+      if (sessionId === '') throw new ApiError(400, 'SESSION_REQUIRED', 'session 参数不能为空')
+      writeJson(res, { ok: true, value: visibilityPayload(ctx, memory, sessionId) })
+      return
+    }
+    if (method === 'POST' && path === '/visibility') {
+      if (typeof memory.setSessionVisibility !== 'function') {
+        throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供会话可见范围接口（请升级 @restregular/dsh-memory）')
+      }
+      const body = await readJsonBody(req)
+      const sessionId = typeof body?.session === 'string' ? body.session.trim() : ''
+      if (sessionId === '') throw new ApiError(400, 'SESSION_REQUIRED', 'session 不能为空')
+      let next = null
+      if (body?.scopes !== null && body?.scopes !== undefined) {
+        if (!Array.isArray(body.scopes)) throw new ApiError(400, 'SCOPE_INVALID', 'scopes 必须是数组或 null')
+        if (body.scopes.length === 0) throw new ApiError(400, 'SCOPE_EMPTY', '至少选择一个可见范围')
+        next = []
+        for (const raw of body.scopes) {
+          if (typeof raw !== 'string') throw new ApiError(400, 'SCOPE_INVALID', 'scope 必须是字符串')
+          const normalized = normalizeScopeInput(raw)
+          if (!normalized.ok) throw new ApiError(400, normalized.code, normalized.message)
+          if (normalized.kind === 'all' || normalized.kind === 'current-project' || normalized.kind === 'current-session') {
+            throw new ApiError(400, 'SCOPE_INVALID', `可见范围必须是具体作用域键: ${JSON.stringify(raw)}`)
+          }
+          if (normalized.scope !== undefined && !next.includes(normalized.scope)) next.push(normalized.scope)
+        }
+      }
+      memory.setSessionVisibility(sessionId, next)
+      writeJson(res, { ok: true, value: visibilityPayload(ctx, memory, sessionId) })
+      return
+    }
 
     if (method === 'GET' && path === '/status') {
       const stats = typeof memory.scopeStats === 'function'

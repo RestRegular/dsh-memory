@@ -27,6 +27,7 @@ import {
   type ScopeKey,
 } from './scope.ts'
 import { ScopeNames } from './scope-names.ts'
+import { SessionVisibilityStore } from './session-visibility.ts'
 import { mergeInjectSettings, normalizeInjectSettings, type InjectSettings } from './inject-settings.ts'
 import { buildStats, lexicalScore, recordScore, tokenize, cosine, normalizeInPlace, hasStrongHit } from './scoring.ts'
 import { EmbedClient } from './embed.ts'
@@ -515,6 +516,13 @@ export class LocalMemoryService implements MemoryServiceApi {
   private names: ScopeNames
   /** 注入设置(面板「设置」标签页可改;落盘在 <storeDir>/settings.json)。 */
   private inject: InjectSettings
+  /** 会话级「记忆可见范围」覆盖;没有覆盖时沿用默认三路集合。 */
+  private readonly visibility: SessionVisibilityStore
+  /**
+   * 会话 id → live session 的只读查询(用于沿 parentSession 链继承可见范围)。
+   * 宿主侧 apply.ts 注入;旧宿主 / 测试里没有时退化为只看当前会话。
+   */
+  private sessionLookup: ((id: string) => unknown) | undefined
   /** 注入半边的审计收集器(可选;没有注入半边时保持 null)。 */
   private injectAuditSink: {
     list?(sessionId?: string): unknown
@@ -528,6 +536,7 @@ export class LocalMemoryService implements MemoryServiceApi {
     this.cfg = resolveConfig(config)
     this.inject = this.loadInjectSettings((config as { inject?: unknown }).inject)
     this.names = new ScopeNames(join(this.cfg.storeDir, 'scopes.json'))
+    this.visibility = new SessionVisibilityStore({ root: this.cfg.storeDir })
     this.rerankBudget = new DailyBudget(this.cfg.llm.dailyBudgetTokens)
     this.store = new MemoryStore(this.cfg.storeDir, { onWarn: (m) => console.warn(`[dsh-memory-local] ${m}`) })
     // Identity BEFORE the eager load (issue #1): ScopeStore skips its sidecar
@@ -1298,11 +1307,112 @@ export class LocalMemoryService implements MemoryServiceApi {
     return this.scopeRefs(agent).project
   }
 
+  /** 宿主注入 live session 查询(用于沿 parentSession 链继承可见范围)。 */
+  setSessionLookup(lookup: ((id: string) => unknown) | undefined): void {
+    this.sessionLookup = lookup
+  }
+
+  /** 只保留当前配置允许的 scope(覆盖集合里若含被禁用的 scope,静默剔除)。 */
+  private filterEnabledScopes(scopes: readonly string[]): MemoryScope[] {
+    const out: MemoryScope[] = []
+    for (const raw of scopes) {
+      const scope = this.canonicalScope(raw)
+      if (out.includes(scope)) continue
+      switch (scopeKind(scope)) {
+        case 'global': if (!this.cfg.globalEnabled) continue; break
+        case 'project': if (!this.cfg.projectEnabled) continue; break
+        case 'session': if (!this.cfg.sessionEnabled) continue; break
+        default: if (!this.cfg.customEnabled) continue; break
+      }
+      out.push(scope)
+    }
+    return out
+  }
+
+  /**
+   * 从会话 id 沿 parentSession 链找最近的显式可见范围。
+   *
+   * 起点用**当前会话自己的 id**(不是 resolveCurrentScopes 映射后的父会话):
+   * 子 Agent 自己也可以有一份覆盖;没有时才沿链继承父会话 / 根会话。
+   */
+  private visibilityForSession(sessionId: string | undefined): string[] | undefined {
+    let id = sessionId ?? ''
+    const seen = new Set<string>()
+    while (id !== '' && !seen.has(id)) {
+      seen.add(id)
+      const found = this.visibility.get(id)
+      if (found !== undefined) return found
+      let parent: string | undefined
+      try {
+        const session = this.sessionLookup?.(id) as { header?: { parentSession?: unknown } } | undefined
+        parent = typeof session?.header?.parentSession === 'string' && session.header.parentSession !== ''
+          ? session.header.parentSession
+          : undefined
+      } catch { parent = undefined }
+      id = parent ?? ''
+    }
+    return undefined
+  }
+
+  /** agent 上真实的会话 id(不映射到父会话);用于可见范围自己的文件。 */
+  private rawSessionIdOf(agent: unknown): string | undefined {
+    try {
+      const session = (agent as { session?: { id?: unknown; header?: { id?: unknown } } } | undefined)?.session
+      const id = session?.header?.id ?? session?.id
+      return typeof id === 'string' && id !== '' ? id : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * 显式「记忆可见范围」:解析当前 agent(含子 Agent 的 parentSession 链)的覆盖。
+   * undefined = 没有覆盖(调用方沿用默认三路集合 / 不限制 memory_get);
+   * [] = 显式设置了范围但全部被 scope 开关禁用,调用方必须按空处理。
+   */
+  visibleScopes(agent: unknown): MemoryScope[] | undefined {
+    const explicit = this.visibilityForSession(this.rawSessionIdOf(agent))
+    return explicit === undefined ? undefined : this.filterEnabledScopes(explicit)
+  }
+
+  /** 面板:读取某会话自己的覆盖(null = 没有覆盖,继续用默认集合)。 */
+  sessionVisibility(sessionId: string): string[] | null {
+    if (typeof sessionId !== 'string' || sessionId.trim() === '') return null
+    const scopes = this.visibility.get(sessionId.trim())
+    return scopes === undefined ? null : [...scopes]
+  }
+
+  /** 面板:写入/清除某会话的覆盖。null = 恢复默认。 */
+  setSessionVisibility(sessionId: string, scopes: readonly string[] | null): string[] | null {
+    if (typeof sessionId !== 'string' || sessionId.trim() === '') return null
+    const cleaned = scopes === null ? null : this.normalizeVisibilityScopes(scopes)
+    if (cleaned !== null && cleaned.length === 0) {
+      throw memoryError('SCOPE_EMPTY', '至少选择一个可见的记忆范围')
+    }
+    return this.visibility.set(sessionId.trim(), cleaned)
+  }
+
+  /** 校验并规范化面板提交的 scope 键(必须是具体键;不接受 all/current-*)。 */
+  private normalizeVisibilityScopes(scopes: readonly string[]): string[] {
+    const out: string[] = []
+    for (const raw of scopes) {
+      const normalized = normalizeScopeInput(raw)
+      if (!normalized.ok) throw memoryError(normalized.code, normalized.message)
+      if (normalized.kind === 'all' || normalized.kind === 'current-session' || normalized.kind === 'current-project') {
+        throw memoryError('SCOPE_INVALID', `可见范围必须是具体作用域键: ${JSON.stringify(raw)}`)
+      }
+      if (normalized.scope !== undefined && !out.includes(normalized.scope)) out.push(normalized.scope)
+    }
+    return out
+  }
+
   /**
    * 无显式 scope 时的**读取**合并集合:当前会话 + 当前项目 + global(各自开关生效、按 key 去重)。
-   * 工具 / 注入都用它,保证"写进会话的东西,默认读得回来"。
+   * 工具 / 注入都用它。会话设置了「可见范围」时以覆盖为准(不再并入默认集合)。
    */
   resolveReadScopes(agent: unknown): MemoryScope[] {
+    const explicit = this.visibleScopes(agent)
+    if (explicit !== undefined) return explicit
     const refs = this.scopeRefs(agent)
     const out: MemoryScope[] = []
     const push = (scope: MemoryScope | undefined, enabled: boolean): void => {
@@ -1485,6 +1595,9 @@ export class LocalMemoryService implements MemoryServiceApi {
     // 多 scope 合并由调用方显式给出(工具层传"会话 + 项目 + global");宿主类型里的
     // MemoryQuery 只有单值 scope,所以这里按结构化读一次可选数组,保持原语义不变。
     const queryScopes = (query as MemoryQuery & { scopes?: MemoryScope[] }).scopes
+    // 显式空集合 = 什么都不允许读(会话可见范围把所有勾选项都禁用了)。不能退回
+    // 默认项目 + global,否则"看不见任何范围"反而会搜出默认范围的记录。
+    if (query.scope === undefined && queryScopes !== undefined && queryScopes.length === 0) return []
     const topK = query.topK ?? this.cfg.topK
     const recallN = query.recallN ?? this.cfg.recallN
     const now = Date.now()
@@ -1748,6 +1861,8 @@ export class LocalMemoryService implements MemoryServiceApi {
    */
   async list(input: MemoryListInput = {}): Promise<MemoryRecord[]> {
     const internal = input as MemoryListInput & { includeExpired?: boolean; includeSuperseded?: boolean }
+    // 显式空集合 = 无可见范围(见 search 的同口径说明)。
+    if (input.scope === undefined && input.scopes !== undefined && input.scopes.length === 0) return []
     const wanted = (input.scope !== undefined
       ? [input.scope]
       : (input.scopes ?? []).length > 0

@@ -35,6 +35,11 @@ export const defaultInjectConfig               = {
                                       
                                               
                                               
+     
+                                               
+                                          
+     
+                                          
                                                            
                                              
                                                              
@@ -88,6 +93,15 @@ export function resolveInjectScopes(
   extraScopes                   ,
   sessions                             ,
 )                       {
+  // 会话设置了显式可见范围时,它就是白名单:extraScopes / 父会话都不能把它撑大。
+  // 空数组也要原样返回(表示什么都不允许读),不能当成"没设置"。
+  let explicit                      
+  try {
+    const visible = memory.visibleScopes?.(agent)
+    if (Array.isArray(visible)) explicit = [...visible]
+  } catch { /* 拿不到覆盖就按默认集合 */ }
+  if (explicit !== undefined) return explicit
+
   const scopes           = []
   try {
     for (const scope of memory.resolveReadScopes?.(agent) ?? []) {

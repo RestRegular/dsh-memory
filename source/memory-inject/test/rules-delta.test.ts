@@ -90,7 +90,11 @@ test('常驻段与增量块用同一种行格式,截断也一致', () => {
   const delta = renderRulesDeltaBlock([long], rulesCfg)!
   assert.equal(block.split('\n')[1], delta.split('\n')[1])
   assert.equal(block.split('\n')[1], ruleLine(long))
-  assert.ok(ruleLine(long).length <= 242)
+  assert.ok(ruleLine(long).includes(`\`${long.id.slice(0, 8)}\``), '规则行必须带 8 位短 ID')
+  assert.ok(ruleLine(long).length <= 254)
+  assert.ok(block.includes('只注入摘要'), '段头要说明注入的是摘要')
+  assert.ok(block.includes('memory_get'), '段头要告诉模型用 memory_get 取全文')
+  assert.ok(delta.includes('memory_get'), '增量段头同样要说明取全文的方式')
 })
 
 test('renderRulesDeltaBlock 遵守条数上限,空列表返回 null', () => {

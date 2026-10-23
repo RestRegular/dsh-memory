@@ -2,6 +2,20 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.18.0 — 会话级「记忆可见范围」+ 规则注入带 ID / 摘要说明
+
+- **输入框新增「记忆范围」按钮**：挂在宿主 `conversation.input.right` 槽（会话输入框工具行右侧），点开按当前会话列出可选作用域（当前会话 / 当前项目 / global / 自定义），勾选后立即生效。有覆盖时按钮显示「记忆 N」并高亮。
+- **可见范围是会话级白名单**：本会话的 Agent 及其子 Agent 只检索、只注入、只 `memory_get` 勾选范围内的记忆。
+  - `memory_search` / `memory_list` 的默认集合与 `scope:'all'` 都收窄到白名单；显式询问范围外的 scope 返回 `SCOPE_NOT_VISIBLE`。
+  - `memory_get` 按 id 取正文时也会过滤：范围外记录的正文不会被取出（`missing` 里照常报告）。
+  - 召回 / 摘要 / 规则 / 流程索引 / 行为召回都走同一份 `resolveReadScopes`，不需要分别改。
+  - 显式可见范围设置后，`inject.extraScopes` 与 fork 父会话都不再撑大读取集合；空数组保持为空。
+- **子 Agent 继承**：子 Agent 的 session scope 继续映射到父会话；可见范围沿真实会话 id + `parentSession` 链向上查找，根会话设置一次即可覆盖整棵子 Agent 树。子 Agent 自己再设置只影响它自己。
+- **持久化**：覆盖按会话写到 `<storeDir>/visibility/<session>.json`（临时文件 + rename），与记忆数据同目录；没有文件 = 使用默认三路集合。「恢复默认」删除文件。
+- **面板 API**：新增 `GET /memory/api/visibility?session=<id>` 与 `POST /memory/api/visibility { session, scopes: string[] | null }`，返回自己的覆盖 / 实际生效集合 / 是否继承 / 可勾选目录；`scopes` 必须是具体作用域键，空数组与 `all` / 裸 `project` / 裸 `session` 会被拒绝。
+- **硬性规则带 ID 并标注摘要**：系统提示「硬性规则」段与新规则增量块每行改为 ``- `<8位id>` <正文摘要>``；段头明确说明注入的是摘要，需要完整规则时用 `memory_get` 按 ID 取全文。规则去重仍按整行比对，格式变更会在旧会话触发一次全量提醒（带上了 ID，属于预期的一次性迁移）。
+- 测试：provider 覆盖解析 / 子 Agent 链式继承 / scope 开关过滤 / 落盘重读、工具层白名单（search / list / get / all / 显式 scope）、面板 GET/POST /visibility、输入框按钮渲染与保存请求、规则行格式与段头文案、注入范围不被 extraScopes 撑大。
+
 ## 0.17.1 — memory_save 成功即把这条记忆记为「正文已注入」
 
 - **现象**：在同一个会话里 `memory_save` 成功后，下一轮（或同一轮后续步骤）的召回会把刚保存的那条记忆再注入一遍，然后再被会话级去重标记。实况样本：某会话 turn 1 末尾保存一条发布记录，turn 2 第一步的召回又把它作为「相关记忆」塞回上下文，之后同一条再也不出现。

@@ -44,7 +44,8 @@ JSONL 落盘 · 本机向量检索 · 五个模型工具 · 自动召回 · 硬�
 | **双通道检索** | 词法（IDF + 中文 bigram）**+** 向量（本机 llama-server 的 OpenAI 兼容 `/v1/embeddings`）。向量缺席自动降级，不报错、不阻塞 |
 | **自动召回** | 每轮按用户问题召回；新会话第一步注入项目 / global 摘要；发布、部署、工具失败等行为按标签触发定向召回 |
 | **印象形态** | 每轮只给每条记忆的短摘要；模型判断相关但需要细节时再 `memory_get` 取全文，省 token 也不丢信息 |
-| **硬性规则** | `kind: rule` 进系统提示常驻段；旧会话会收到新增 / 编辑提醒；超预算有明确警告，不静默丢弃 |
+| **硬性规则** | `kind: rule` 进系统提示常驻段；行首带 8 位 id，注入的是摘要，需要全文时用 `memory_get`；旧会话会收到新增 / 编辑提醒；超预算有明确警告，不静默丢弃 |
+| **会话可见范围** | 输入框旁的「记忆范围」按钮设置本会话可读的作用域；Agent 及其子 Agent 都按这个白名单检索、注入与 `memory_get` |
 | **状态记忆** | `kind: state` 默认 7 天 TTL；注入带「状态，使用前验证」；过期后默认不进检索 / 摘要 / 召回，但 `memory_get` 与面板仍可取 |
 | **流程索引** | `kind: procedure` 的目录进系统提示：按当前工作区 + 触发词（工具名 / 关键词）列 `id · 触发词 → 标题`，需要时再用 `memory_get` 取全文 |
 | **可视化管理** | 记录浏览 / 搜索 / 新建 / 编辑 / 删除；**记录页可主动做语义检索**（与 `memory_search` 同一套排序）；记忆树展示作用域、类型与修正链；设置改完即存；导入导出 |
@@ -79,6 +80,16 @@ JSONL 落盘 · 本机向量检索 · 五个模型工具 · 自动召回 · 硬�
 修改立即写入 `settings.json`，不需要点保存。
 
 ![记忆设置](https://raw.githubusercontent.com/RestRegular/dsh-memory/main/preview/memory-settings.png)
+
+### 输入框的记忆可见范围
+
+输入框工具行右侧有「记忆范围」按钮（有覆盖时显示「记忆 N」并高亮）。点开后按当前会话列出可选作用域：当前会话 / 当前项目 / global / 已有自定义作用域，勾选后保存。
+
+- 这是**会话级**白名单：本会话的 Agent 及其子 Agent 只检索、只注入、只 `memory_get` 勾选范围内的记忆；未勾选的范围不会被 `memory_search` / `memory_list` 看到，`memory_get` 也取不到正文。
+- 子 Agent 自动继承父会话 / 根会话的设置；在子 Agent 自己的会话里再设置，只影响那一个会话。
+- 「恢复默认」清除覆盖，回到「会话 + 项目 + global」的默认读取集合。
+- 覆盖按会话落盘在 `<storeDir>/visibility/<session>.json`，浏览器刷新 / 插件重载后仍在。
+- 只影响**读取**：`memory_save` 的落点仍由 `scope` 参数与默认写口径决定；面板管理页不受可见范围限制。
 
 ### 向量服务
 
@@ -212,7 +223,7 @@ memory_forget({ "id": "3f2a9c1d" })          // 按内容删：memory_forget({ q
 | `recall` | 每轮 `agent/pre-step` | 按本轮用户问题检索，按 topK / token 预算注入；默认只给每条 120 字摘要 + `memory_get` 指引 |
 | `digest` | 会话第一步 | 注入项目 + global 概览：按重要度 × 新鲜度挑选；`kind=rule` 不进摘要（已常驻系统提示）；正文超预算时附可检索的标签索引 |
 | `policy` | 系统提示常驻 | 什么时候查记忆、查到怎么复用、查不到时低风险推断 / 高风险先问用户 |
-| `rules` | 系统提示常驻 | `kind: rule` 的硬性规则，限量与预算；`mandatory` / `pinned` 排在最前 |
+| `rules` | 系统提示常驻 | `kind: rule` 的硬性规则摘要；每行 `id · 正文`，需要全文时 `memory_get`；限量与预算；`mandatory` / `pinned` 排在最前 |
 | `procedures` | 系统提示常驻 | `kind: procedure` 的目录：当前工作区 + 触发词命中的流程，每行 `id · 触发词 → 标题`；正文按需 `memory_get` |
 | `turnEnd` | 每轮结束（默认关） | 下一轮开头提醒「有可复用结论先落盘」 |
 | 行为召回 | 可见文本 / 任务 / 命令 / 工具失败 | 命中标签后，在**下一个** `agent/pre-step` 定向检索；工具失败优先用该工具自己的 description |
@@ -226,6 +237,8 @@ memory_forget({ "id": "3f2a9c1d" })          // 按内容删：memory_forget({ q
 新规则可能被更重要的旧规则挤掉。`rules.delta`（默认开）会在每轮第一步比较「该会话上一轮开始时
 的规则快照」与当前规则：新增、以及编辑过（同一 id 的行变了）的规则都补一条提醒，没变化不重复；
 宿主重启用历史里的规则行做种子，不会整批重提醒。关掉它只停提醒，常驻段与检索照旧。
+
+规则段注入的是**摘要**：每行是 ``- `<8位id>` <正文前240字>``。段头会明确说明这一点，模型需要完整规则或细节时用 `memory_get` 按 ID 取；因此规则再长也不会把整段正文常驻在系统提示里。
 
 ### 流程索引（procedure）
 
@@ -349,6 +362,7 @@ retrieval:
 | `<storeDir>/projects/<sha1(scope)>.vec` | 向量边车；首行 `#<model>\t<dims>\t<pooling>`，后面每行 `id\t<base64 向量>` |
 | `<storeDir>/settings.json` | 面板设置（覆盖配置文件里的默认值） |
 | `<storeDir>/scopes.json` | 项目作用域别名（显示名 → `project:<路径>`） |
+| `<storeDir>/visibility/<session>.json` | 会话「记忆可见范围」覆盖；没有文件 = 使用默认三路集合 |
 | `<storeDir>/*.lock` | 跨进程写锁；陈旧锁（持有者已死或 10s 未动）会被接管 |
 | `<installRoot>/llamacpp/` | llama-server 运行时、依赖 dll、`llama-server.log` |
 | `<installRoot>/models/` | 下载的 GGUF 模型 |
@@ -404,9 +418,14 @@ GET /memory/api/audit/stats
 GET /memory/api/audit/export?format=json|jsonl&<same filters>
 
 GET /memory/api/anchor?session=<id>&turn=<n>&step=<n>&callId=<optional>
+
+GET  /memory/api/visibility?session=<id>
+POST /memory/api/visibility   { session: "<id>", scopes: ["session:<id>", "project:<cwd>", "global"] | null }
 ```
 
 响应为 `{ ok: true, value: { entries, total, nextCursor?, stats, query } }`。旧调用 `GET /audit?session=<id>` 仍兼容；不带 `session` 时查询全部会话，`query.scope` 会标记为 `all`。
+
+`/visibility` 返回 `{ sessionId, override, effective, inherited, scopes }`：`override` 是该会话自己的覆盖（`null` = 使用默认集合），`effective` 是当前实际生效的读取范围，`inherited` 表示是否继承自父会话，`scopes` 是可勾选的作用域目录（含 `label` 与记录数）。保存 `scopes: null` 即恢复默认；空数组会被拒绝（至少保留一个范围）。
 
 ### 和会话轨迹互相跳转
 

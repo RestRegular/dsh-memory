@@ -49,6 +49,11 @@ import { canonicalWorkspacePath, normalizeScopeInput, resolveScopeRef } from '..
                                                                                  
                                               
                                                    
+     
+                                                
+                                         
+     
+                                               
                                          
                                              
                                     
@@ -113,8 +118,34 @@ function projectKey(opts                    , service                    , agent
   return (opts.projectScope ?? `project:${process.cwd()}`)               
 }
 
+/**
+ * 显式「可见范围」白名单;undefined = 没有覆盖(保持旧行为,不限制显式 scope)。
+ * provider 方法抛错时按"没有覆盖"处理:可见范围是防越界,不应该让一个 provider
+ * 内部错误把所有读取都锁死。
+ */
+function visibleScopeList(service                   , agent         )                            {
+  try {
+    const explicit = service.visibleScopes?.(agent)
+    if (Array.isArray(explicit)) return [...new Set(explicit)]
+  } catch { /* 降级为不限制 */ }
+  return undefined
+}
+
+/** 显式询问一个不在可见范围内的 scope 时给出明确错误,而不是返回空结果。 */
+function assertScopeVisible(service                   , agent         , scope             )       {
+  const visible = visibleScopeList(service, agent)
+  if (visible === undefined || visible.includes(scope)) return
+  throw new MemoryToolError(
+    'SCOPE_NOT_VISIBLE',
+    `当前会话的「记忆可见范围」不包含 ${scope};只能读取: ${visible.length > 0 ? visible.join(', ') : '(无)'}`,
+  )
+}
+
 /** 该服务/配置下"当前会话 + 当前项目 + global"的合并读取集合(去重)。 */
 function readScopes(opts                    , service                   , agent         )                {
+  // 显式可见范围优先,空数组也要原样返回(表示什么都不允许读)。
+  const explicit = visibleScopeList(service, agent)
+  if (explicit !== undefined) return explicit
   const provided = service.resolveReadScopes?.(agent)
   if (Array.isArray(provided) && provided.length > 0) return [...new Set(provided)]
   // 服务没提供(测试 mock / 旧 provider):退回 defaultScope 口径
@@ -328,14 +359,23 @@ export function memorySearchTool(opts                    )                      
         throw new MemoryToolError('QUERY_EMPTY', 'query must be a non-empty string')
       }
       const resolved = resolveScope(opts, service, exec, args.scope, 'read')
+      const agent = agentOf(exec)
       let scopes                           
       if (resolved.all) {
-        // 'all' = 所有已发现作用域;scopeStats() 自身会先做 discovery(带限流)。
-        scopes = (service.scopeStats?.() ?? []).map((s) => s.scope)
-        service.discoverScopes?.()
+        const visible = visibleScopeList(service, agent)
+        if (visible !== undefined) {
+          // 'all' 在有可见范围限制时只等于"所有可见范围",不是磁盘上的全部 scope。
+          scopes = visible
+        } else {
+          // 'all' = 所有已发现作用域;scopeStats() 自身会先做 discovery(带限流)。
+          scopes = (service.scopeStats?.() ?? []).map((s) => s.scope)
+          service.discoverScopes?.()
+        }
       } else if (resolved.scope === undefined) {
-        // 省略 scope:三路合并(会话 + 项目 + global)
-        scopes = readScopes(opts, service, agentOf(exec))
+        // 省略 scope:三路合并(会话 + 项目 + global),或显式可见范围。
+        scopes = readScopes(opts, service, agent)
+      } else {
+        assertScopeVisible(service, agent, resolved.scope)
       }
       const chars = resolveSummaryChars(args.summaryChars)
       try {
@@ -434,13 +474,20 @@ export function memoryListTool(opts                    )                        
     async execute(args          , exec          )                      {
       const service = svc(opts)
       const resolved = resolveScope(opts, service, exec, args.scope, 'read')
+      const agent = agentOf(exec)
       let scopes                           
       if (resolved.all) {
-        scopes = (service.scopeStats?.() ?? []).map((s) => s.scope)
-        service.discoverScopes?.()
+        const visible = visibleScopeList(service, agent)
+        if (visible !== undefined) scopes = visible
+        else {
+          scopes = (service.scopeStats?.() ?? []).map((s) => s.scope)
+          service.discoverScopes?.()
+        }
       } else if (resolved.scope === undefined) {
         // 省略 scope:默认**只列当前会话**(按需求;读全部请显式 'all')
-        scopes = readScopes(opts, service, agentOf(exec)).slice(0, 1)
+        scopes = readScopes(opts, service, agent).slice(0, 1)
+      } else {
+        assertScopeVisible(service, agent, resolved.scope)
       }
       let records                       
       try {
@@ -460,7 +507,11 @@ export function memoryListTool(opts                    )                        
       } catch (error) {
         throw toolError(error)
       }
-      const stats = service.scopeStats?.()
+      const statsAll = service.scopeStats?.()
+      const visible = visibleScopeList(service, agent)
+      const stats = statsAll !== undefined && visible !== undefined
+        ? statsAll.filter((s) => visible.includes(s.scope))
+        : statsAll
       return stats !== undefined ? { records, scopeStats: stats } : { records }
     },
   }
@@ -570,7 +621,7 @@ export function memoryGetTool(opts                    )                         
       },
       summaryChars: { type: 'number', description: `summary 字段的字数上限（默认 ${DEFAULT_SUMMARY_CHARS}，20~2000）` },
     },
-    async execute(args         )                     {
+    async execute(args         , exec          )                     {
       const service = svc(opts)
       const ids = Array.isArray(args.ids)
         ? [...new Set(args.ids.map(String).filter((id) => id.trim() !== ''))].slice(0, 50)
@@ -582,7 +633,11 @@ export function memoryGetTool(opts                    )                         
       const fields = resolveGetFields(args.fields)
       const chars = resolveSummaryChars(args.summaryChars)
       try {
-        const found = service.getByIds(ids)
+        const all = service.getByIds(ids)
+        // 显式可见范围是白名单:即使知道 id,也不能读别的范围的正文。未设置时保持
+        // 旧行为(记忆 id 本身是随机不可猜的,跨 scope 取全文是既有能力)。
+        const visible = visibleScopeList(service, agentOf(exec))
+        const found = visible === undefined ? all : all.filter((r) => visible.includes(r.scope))
         return {
           records: found.map((r) => pickGetFields(r, fields, chars)),
           fields,

@@ -22,10 +22,12 @@ import type { RulesSettings } from '../../memory-local/src/inject-settings.ts'
 import { supersededIds } from './digest.ts'
 
 export const RULES_HEADER =
-  '以下是必须遵守的硬性规则（来自 kind=rule 的记忆；除非用户明确要求破例，否则按它做）：'
+  '以下是必须遵守的硬性规则（来自 kind=rule 的记忆，只注入摘要；每条开头的短 ID 可用于取全文，' +
+  '需要原文或细节时用 memory_get 按 ID 获取。除非用户明确要求破例，否则按它做）：'
 
 export const RULES_DELTA_HEADER =
-  '以下是新增或变更的硬性规则（来自 kind=rule 的记忆；从现在起按它做）：'
+  '以下是新增或变更的硬性规则（来自 kind=rule 的记忆，只注入摘要；' +
+  '需要原文或细节时用 memory_get 按 ID 获取；从现在起按它做）：'
 
 /** mandatory/pinned 是显式的标签约定,不把全部 kind=rule 自动升级。 */
 const MANDATORY_TAGS = new Set(['mandatory', 'pinned', '必含', '强制'])
@@ -40,9 +42,12 @@ export function isMandatoryRule(record: MemoryRecord): boolean {
 /**
  * 一条规则的渲染行。常驻段与增量块共用同一个格式 —— 增量靠"逐行比对"判断
  * 会话是否已经见过某条规则,两边只要有一个字符不同就会重复提醒。
+ *
+ * 0.18.0 起行首带 8 位短 ID(与摘要/召回索引同一口径):注入的是摘要,正文可能被
+ * 截断,模型需要完整规则时用 memory_get(前缀) 取。
  */
 export function ruleLine(record: MemoryRecord): string {
-  return `- ${record.content.replace(/\s+/g, ' ').slice(0, 240)}`
+  return `- \`${record.id.slice(0, 8)}\` ${record.content.replace(/\s+/g, ' ').slice(0, 240)}`
 }
 
 /** 规则排序:mandatory 优先,其次重要度、新的在前,最后按内容稳定排序。 */

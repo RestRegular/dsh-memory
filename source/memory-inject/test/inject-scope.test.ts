@@ -84,3 +84,29 @@ test('inject: provider 没有 resolveReadScopes / 没有任何 scope 时返回 u
   const throwing = { search: async () => [], resolveReadScopes: () => { throw new Error('boom') } }
   assert.deepEqual(resolveInjectScopes(throwing, agent({ id: 's1' }), ['handbook'], undefined), ['handbook'])
 })
+
+test('inject: 显式可见范围是白名单,extraScopes 与父会话都不能把它撑大', () => {
+  const visible = ['session:s1', 'project:/w']
+  const memory = {
+    search: async () => [],
+    resolveReadScopes: () => ['session:s1', 'project:/w', 'global'],
+    visibleScopes: () => visible,
+  }
+  assert.deepEqual(
+    resolveInjectScopes(memory, agent({ id: 's1' }), ['handbook'], undefined),
+    ['session:s1', 'project:/w'],
+    '显式范围之外不加 extraScopes',
+  )
+  const sessions = { get: (id) => (id === 'parent-1' ? { id: 'parent-1' } : undefined) }
+  assert.deepEqual(
+    resolveInjectScopes(memory, agent({ id: 'fork-1', parentSession: 'parent-1' }), [], sessions),
+    ['session:s1', 'project:/w'],
+    '显式范围之外不加 fork 父会话',
+  )
+  // 空数组 = 什么都不允许读,也不能被 extraScopes 重新撑开。
+  assert.deepEqual(
+    resolveInjectScopes({ search: async () => [], visibleScopes: () => [] }, agent({ id: 's1' }), ['handbook'], undefined),
+    [],
+    '显式空范围保持为空',
+  )
+})

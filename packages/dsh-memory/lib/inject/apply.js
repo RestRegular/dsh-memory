@@ -239,6 +239,11 @@ export function apply(ctx         , config                     = {}) {
   /** 系统提示 rules 段实际使用的 scope（与 section 回调保持同一口径）。 */
   const promptScopesFor = (memory                  , agent         )           => {
     try {
+      // 显式可见范围是白名单,空数组也照用(表示本会话看不到任何规则)。
+      const explicit = memory.visibleScopes?.(agent)                        
+      if (Array.isArray(explicit)) return explicit
+    } catch { /* fallthrough */ }
+    try {
       const resolved = memory.resolveReadScopes?.(agent)                        
       if (Array.isArray(resolved) && resolved.length > 0) return resolved
     } catch { /* fallthrough */ }

@@ -35,6 +35,11 @@ export const defaultInjectConfig: InjectConfig = {
 export interface InjectMemoryService {
   search(input: unknown): Promise<MemoryHit[]>
   resolveReadScopes?(agent: unknown): string[]
+  /**
+   * 显式「记忆可见范围」覆盖(undefined = 未设置)。设置后它就是完整白名单:
+   * 不并入 inject.extraScopes,也不追加 fork 父会话。
+   */
+  visibleScopes?(agent: unknown): string[]
   /** 当前已退役的记录 id;可选,老 provider 没有时注入层自己按 supersedes 扫描。 */
   supersededIds?(scopes?: string[]): string[]
   /** 按 id / 前缀取记录(memory_get 正文去重用);老 provider 没有时跳过去重标记。 */
@@ -88,6 +93,15 @@ export function resolveInjectScopes(
   extraScopes: readonly string[],
   sessions: SessionRegistry | undefined,
 ): string[] | undefined {
+  // 会话设置了显式可见范围时,它就是白名单:extraScopes / 父会话都不能把它撑大。
+  // 空数组也要原样返回(表示什么都不允许读),不能当成"没设置"。
+  let explicit: string[] | undefined
+  try {
+    const visible = memory.visibleScopes?.(agent)
+    if (Array.isArray(visible)) explicit = [...visible]
+  } catch { /* 拿不到覆盖就按默认集合 */ }
+  if (explicit !== undefined) return explicit
+
   const scopes: string[] = []
   try {
     for (const scope of memory.resolveReadScopes?.(agent) ?? []) {

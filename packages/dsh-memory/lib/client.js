@@ -485,6 +485,24 @@ window.__ModuleLoader__.load({
       '.mem-traj-mark:focus-visible{outline:1px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
       '@media (max-width:900px){.memp .audit-split.has-detail{grid-template-columns:minmax(0,1fr)}.memp .audit-row{grid-template-columns:54px 120px 120px minmax(100px,1fr) 96px 100px 80px}.memp .audit-table-head{grid-template-columns:54px 120px 120px minmax(100px,1fr) 96px 100px 80px}}',
       '@media (max-width:620px){.memp .audit-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.memp .audit-table-head{display:none}.memp .audit-row{display:flex;flex-wrap:wrap;gap:4px 8px}.memp .audit-row .col-trigger,.memp .audit-row .col-budget{display:none}.memp .audit-row .col-nums{margin-left:auto}.memp .audit-row .col-time{order:1}.memp .audit-row .col-channel{order:2}.memp .audit-row .col-delivery{order:3}.memp .audit-row .col-outcome{order:4;margin-left:auto}.memp .audit-filter-row input[type=text],.memp .audit-filter-row input[type=search]{max-width:none;flex:1}.memp .audit{height:calc(100vh - 150px);max-height:calc(100vh - 150px)}.memp .audit-detail{max-height:calc(100vh - 280px)}}',
+      '.mem-scope-btn{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1;cursor:pointer;flex:none}',
+      '.mem-scope-btn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
+      '.mem-scope-btn.on{color:var(--dsw-alias-brand-primary);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,var(--dsw-alias-border-l1))}',
+      '.mem-scope-btn svg{flex:none}',
+      '.mem-scope-pop{position:fixed;z-index:80;width:300px;max-height:min(460px,62vh);display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-1));box-shadow:var(--dsw-elevation-panel,0 10px 30px rgba(0,0,0,.22));color:var(--dsw-alias-label-primary);font-size:13px}',
+      '.mem-scope-pop h4{margin:0;font-size:13px;font-weight:600;line-height:1.4}',
+      '.mem-scope-pop .hint{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.55}',
+      '.mem-scope-list{display:flex;flex-direction:column;gap:2px;overflow:auto;min-height:0;padding:2px 0}',
+      '.mem-scope-item{display:flex;align-items:center;gap:8px;padding:6px;border-radius:7px;cursor:pointer}',
+      '.mem-scope-item:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+      '.mem-scope-item input{margin:0;flex:none}',
+      '.mem-scope-item .lab{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.mem-scope-item .cnt{flex:none;color:var(--dsw-alias-label-secondary);font-size:11px}',
+      '.mem-scope-foot{display:flex;align-items:center;gap:8px;justify-content:flex-end}',
+      '.mem-scope-foot .spacer{flex:1}',
+      '.mem-scope-foot button{padding:5px 12px;font-size:12px}',
+      '.mem-scope-foot button.primary{background:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-on-brand,#fff)}',
+      '.mem-scope-err{color:var(--dsw-alias-state-error-primary,#d33);font-size:12px;line-height:1.5}',
     ].join('')
 
     async function api(method, body) {
@@ -4311,6 +4329,169 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * 输入框里的「记忆可见范围」按钮。
+     *
+     * 宿主 `conversation.input.right` 是 session 作用域的 list 槽,owner 会把
+     * `sessionId` 作为标准 prop 传进来,所以这里不需要 register 的 inject。
+     *
+     * 读写走 /memory/api/visibility:
+     *   GET  ?session=<id> → { override, effective, inherited, scopes }
+     *   POST { session, scopes: string[] | null } → 同上
+     * `override === null` = 使用默认三路集合;子 Agent 会话会继承父会话的 override。
+     *
+     * 弹层用 fixed 定位(按按钮 rect 往上开),避免被 composer 的 overflow 裁掉。
+     */
+    function MemoryVisibilityButton({ sessionId } = {}) {
+      const [open, setOpen] = React.useState(false)
+      const [loading, setLoading] = React.useState(false)
+      const [busy, setBusy] = React.useState(false)
+      const [error, setError] = React.useState('')
+      const [data, setData] = React.useState(null)
+      const [selected, setSelected] = React.useState([])
+      const [anchor, setAnchor] = React.useState(null)
+      const wrapRef = React.useRef(null)
+
+      React.useEffect(() => {
+        if (!open) return undefined
+        if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return undefined
+        const onDown = (event) => {
+          try {
+            const node = wrapRef.current
+            if (node && typeof node.contains === 'function' && !node.contains(event.target)) setOpen(false)
+          } catch { /* 关闭失败不影响页面 */ }
+        }
+        const onKey = (event) => { if (event && event.key === 'Escape') setOpen(false) }
+        document.addEventListener('mousedown', onDown)
+        document.addEventListener('keydown', onKey)
+        return () => {
+          try {
+            document.removeEventListener('mousedown', onDown)
+            document.removeEventListener('keydown', onKey)
+          } catch { /* 宿主卸载时 document 可能已不可用 */ }
+        }
+      }, [open])
+
+      if (typeof sessionId !== 'string' || sessionId === '') return null
+
+      const applyPayload = (value) => {
+        if (!value || typeof value !== 'object') return
+        setData(value)
+        const next = Array.isArray(value.override)
+          ? value.override
+          : Array.isArray(value.effective) ? value.effective : []
+        setSelected([...next])
+      }
+
+      const load = () => {
+        setLoading(true)
+        setError('')
+        api(`visibility?session=${encodeURIComponent(sessionId)}`)
+          .then(applyPayload)
+          .catch((e) => setError(String((e && e.message) || e)))
+          .finally(() => setLoading(false))
+      }
+
+      const toggle = (event) => {
+        if (open) { setOpen(false); return }
+        let nextAnchor = null
+        try {
+          const rect = event && event.currentTarget && event.currentTarget.getBoundingClientRect
+            ? event.currentTarget.getBoundingClientRect()
+            : null
+          if (rect) nextAnchor = { left: rect.left, top: rect.top }
+        } catch { nextAnchor = null }
+        setAnchor(nextAnchor)
+        setOpen(true)
+        load()
+      }
+
+      const toggleScope = (scope) => {
+        setSelected((prev) => prev.includes(scope) ? prev.filter((item) => item !== scope) : [...prev, scope])
+      }
+
+      const save = (scopes) => {
+        setBusy(true)
+        setError('')
+        api('visibility', { session: sessionId, scopes })
+          .then((value) => {
+            applyPayload(value)
+            setOpen(false)
+          })
+          .catch((e) => setError(String((e && e.message) || e)))
+          .finally(() => setBusy(false))
+      }
+
+      const scopes = data && Array.isArray(data.scopes) ? data.scopes : []
+      const hasOverride = Boolean(data && Array.isArray(data.override))
+      const count = selected.length
+      let popStyle = {}
+      if (anchor) {
+        const width = 300
+        const margin = 8
+        const viewportW = (typeof window !== 'undefined' && Number(window.innerWidth)) || 1024
+        const viewportH = (typeof window !== 'undefined' && Number(window.innerHeight)) || 768
+        popStyle = {
+          left: Math.min(Math.max(margin, anchor.left), Math.max(margin, viewportW - width - margin)),
+          bottom: Math.max(margin, viewportH - anchor.top + 8),
+        }
+      }
+
+      return h('span', { className: 'mem-scope-wrap', ref: wrapRef },
+        h('button', {
+          type: 'button',
+          className: `mem-scope-btn${hasOverride ? ' on' : ''}`,
+          title: '记忆可见范围（本会话及子 Agent）',
+          'aria-label': '记忆可见范围',
+          'aria-expanded': open,
+          onMouseDown: (event) => { try { event.preventDefault() } catch { /* keepFocus */ } },
+          onClick: toggle,
+        },
+          h(NavLineIcon, { size: 14 }),
+          h('span', null, count > 0 ? `记忆 ${count}` : '记忆范围'),
+        ),
+        open ? h('div', { className: 'mem-scope-pop', style: popStyle, role: 'dialog', 'aria-label': '记忆可见范围' },
+          h('h4', null, '记忆可见范围'),
+          h('div', { className: 'hint' },
+            '本会话的 Agent 及其子 Agent 只能检索和读取勾选的范围；未勾选的范围不会被注入。'),
+          data && data.inherited
+            ? h('div', { className: 'hint' }, '当前继承自父会话；保存后在本会话独立生效。')
+            : null,
+          loading
+            ? h('div', { className: 'hint' }, '读取中…')
+            : h('div', { className: 'mem-scope-list' },
+                scopes.length === 0
+                  ? h('div', { className: 'hint' }, '还没有可选的范围。')
+                  : scopes.map((item) => h('label', { className: 'mem-scope-item', key: item.scope },
+                      h('input', {
+                        type: 'checkbox',
+                        checked: selected.includes(item.scope),
+                        onChange: () => toggleScope(item.scope),
+                      }),
+                      h('span', { className: 'lab', title: item.scope }, item.label || item.scope),
+                      h('span', { className: 'cnt' }, `${item.records ?? 0}`),
+                    )),
+              ),
+          error ? h('div', { className: 'mem-scope-err' }, error) : null,
+          h('div', { className: 'mem-scope-foot' },
+            h('button', {
+              type: 'button',
+              className: 'linkbtn',
+              disabled: busy || !data || data.override === null,
+              onClick: () => save(null),
+            }, '恢复默认'),
+            h('span', { className: 'spacer' }),
+            h('button', {
+              type: 'button',
+              className: 'primary',
+              disabled: busy || selected.length === 0,
+              onClick: () => save(selected),
+            }, busy ? '保存中…' : '保存'),
+          ),
+        ) : null,
+      )
+    }
+
     function apply(ctx) {
       try {
         const styleEl = document.createElement('style')
@@ -4413,6 +4594,18 @@ window.__ModuleLoader__.load({
           }, MemoryAuditView))
         } catch (error) {
           console.warn('[dsh-memory] 记忆审计视图注册失败:', error?.message)
+        }
+        // 输入框工具行右侧:本会话「记忆可见范围」按钮。session 作用域的 list 槽,
+        // owner 会把 sessionId 作为标准 prop 传进来;旧宿主没有这个槽时只少一个入口。
+        try {
+          slots.inject('conversation.input.right', () => slots.register({
+            name: 'conversation.input.right',
+            id: 'memory-visibility',
+            order: 30,
+            label: () => '记忆范围',
+          }, MemoryVisibilityButton))
+        } catch (error) {
+          console.warn('[dsh-memory] 记忆可见范围按钮注册失败:', error?.message)
         }
         try {
           slots.inject('shell.overlay', () => slots.register({
@@ -4558,6 +4751,7 @@ window.__ModuleLoader__.load({
       MemoryTreeTab: MemoryTreeTab,
       SettingsTab: SettingsTab,
       AuditTab: AuditTab,
+      MemoryVisibilityButton: MemoryVisibilityButton,
       buildMemoryTree: buildMemoryTree,
       KIND_META: KIND_META,
       CSS: CSS,
