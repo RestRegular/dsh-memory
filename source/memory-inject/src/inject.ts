@@ -389,6 +389,8 @@ export class MemoryInjector {
     const block = renderRecallBlock(freshHits, cfg, optionsForRender)
     const base: RecallResult = {
       ids: [], candidates: candidates.length, dedupSkipped: deduplicated.length, updated, omitted: [], query,
+      // 全部候选都被去重时 block 为 null；把 id 留在结果里，审计才能解释"跳过了哪条"。
+      dedupIds: deduplicated,
       tokens: 0, rawHits: hits.length, tagFiltered, supersededExcluded, expiredExcluded,
       retrieval: { ok: true, count: hits.length },
     }

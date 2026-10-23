@@ -2,6 +2,16 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.16.2 — memory_get 去重的审计与端到端覆盖
+
+- **补审计缺口**：所有候选都被会话级去重时，`renderRecallBlock` 返回 `null`，`dedupIds` 没有写进结果，审计只能看到 `dedupSkipped` 数量、看不到具体跳过了哪些 id。现在 `dedupIds` 在“全部去重”和“预算省略”路径上也会返回。
+- **端到端测试**：新增真实 `session/event` 链路测试（`tool/call` → `tool/result` → `injectionState` → 下一次 pre-step）：
+  - `memory_get` 取正文后，下一次普通召回不再追加同一条消息，审计能列出被去重的 id；
+  - 记录 `updatedAt` 变化后，下一次召回重新注入新版本；
+  - 只取 `summary` 时不算正文，仍可通过召回补全文；
+  - 自动召回关闭时去重标记仍然生效。
+- 语义保持不变：`memory_get` 默认和显式 `fields: ["content"]` 都显示完整正文；只有正文进入上下文才记为 `content_injected`。
+
 ## 0.16.1 — memory_get 取正文也参与会话级去重
 
 - **补上去重缺口**：0.16.0 把正文入口从 `memory_search` 移到 `memory_get` 后，工具读到的正文没有记进会话注入状态，后续普通召回 / 摘要 / 自动召回仍可能把同一条记忆再塞一遍。

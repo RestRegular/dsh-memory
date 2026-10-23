@@ -46,6 +46,7 @@ function setup(options: {
   list?: () => Promise<unknown[]>
   search?: (input: unknown) => Promise<unknown[]>
   listSync?: (input: unknown) => unknown[]
+  getByIds?: (ids: string[]) => unknown[]
 } = {}) {
   const handlers = new Map<string, (...args: any[]) => unknown>()
   const settings = options.settings ?? defaultInjectSettings
@@ -54,6 +55,7 @@ function setup(options: {
     resolveReadScopes: () => ['session:s1', 'project:D:/repo', 'global'],
     supersededIds: () => [],
     search: options.search ?? (async () => []),
+    getByIds: options.getByIds,
     list: options.list ?? (async () => []),
     listSync: options.listSync ?? (() => []),
     attachInjectAudit: (_value: unknown) => {},
@@ -328,5 +330,91 @@ test('系统提示流程索引:当前工作区 + 本轮查询命中的 procedure
   assert.ok(text.includes('global-proc'.slice(0, 8)), '查询命中 publish 别名“发布”')
   assert.ok(!text.includes('other-proc'.slice(0, 8)))
 })
+
+// memory_get 的正文去重必须走真实事件链路：tool/call → tool/result → injectionState → 下一次 recall。
+const MEM_GET_ID = 'abcdef12-3456-7890-abcd-ef1234567890'
+
+function contentOnlySettings() {
+  return {
+    ...defaultInjectSettings,
+    // 故意关闭自动召回：正文去重不应依赖 autoRecall 开关
+    autoRecall: { ...defaultInjectSettings.autoRecall, enabled: false },
+    recall: { ...defaultInjectSettings.recall, enabled: true },
+    digest: { ...defaultInjectSettings.digest, enabled: false },
+    rules: { ...defaultInjectSettings.rules, enabled: false, delta: false },
+    policy: { ...defaultInjectSettings.policy, enabled: false },
+    turnEnd: { ...defaultInjectSettings.turnEnd, enabled: false },
+  }
+}
+
+function fireMemoryGet(
+  handlers: Map<string, (...args: any[]) => unknown>,
+  options: { fields?: unknown; text?: string; callId?: string } = {},
+): void {
+  const onEvent = handlers.get('session/event')
+  assert.ok(onEvent)
+  const callId = options.callId ?? 'call-get'
+  onEvent!({ id: 's1' }, {
+    type: 'tool/call',
+    data: {
+      name: 'memory_get',
+      callId,
+      arguments: JSON.stringify({ ids: [MEM_GET_ID], ...(options.fields !== undefined ? { fields: options.fields } : {}) }),
+    },
+  })
+  onEvent!({ id: 's1' }, {
+    type: 'tool/result',
+    data: {
+      message: {
+        role: 'tool',
+        isError: false,
+        source: { callId },
+        content: [{ type: 'text', text: options.text ?? `[${MEM_GET_ID}] (全局/fact)\n完整正文` }],
+      },
+    },
+  })
+}
+
+test('memory_get 取正文后：下一次召回不再重复注入同一条', async () => {
+  const hit = { record: { ...record(MEM_GET_ID, '发布前检查 devcred 凭据', ['release']), updatedAt: 100 }, score: 0.9 }
+  const { handlers, attached } = setup({
+    settings: contentOnlySettings(),
+    search: async () => [hit],
+    getByIds: () => [{ id: MEM_GET_ID, updatedAt: 100 }],
+  })
+  fireMemoryGet(handlers)
+  const decision = await runPreStep(handlers, undefined, { turn: 2, step: 2 }) as { messages: unknown[] }
+  assert.equal(decision.messages.length, 0, '正文已由 memory_get 放进上下文，不应再追加召回消息')
+  const recall = attached.current!.list().find((entry) => entry.channel === 'recall' && entry.kind === 'evaluation')
+  assert.ok(recall)
+  assert.ok((recall!.dedup?.skipped ?? 0) >= 1, '审计要能看到被去重的那条')
+  assert.deepEqual(recall!.dedup?.ids ?? [], [MEM_GET_ID])
+})
+
+test('memory_get 后记录有更新：下一次召回重新注入新版本', async () => {
+  const updated = { ...record(MEM_GET_ID, '发布前检查 devcred 凭据（已更新）', ['release']), updatedAt: 200 }
+  const { handlers } = setup({
+    settings: contentOnlySettings(),
+    search: async () => [{ record: updated, score: 0.9 }],
+    // 取正文时记录还是版本 100；下一次召回看到 200，必须视为有更新
+    getByIds: () => [{ id: MEM_GET_ID, updatedAt: 100 }],
+  })
+  fireMemoryGet(handlers)
+  const decision = await runPreStep(handlers, undefined, { turn: 2, step: 2 }) as { messages: unknown[] }
+  assert.equal(decision.messages.length, 1, '版本变化后应重新注入')
+})
+
+test('memory_get 只取 summary / tags 不算正文：仍可被召回注入全文', async () => {
+  const hit = { record: { ...record(MEM_GET_ID, '发布前检查 devcred 凭据', ['release']), updatedAt: 100 }, score: 0.9 }
+  const { handlers } = setup({
+    settings: contentOnlySettings(),
+    search: async () => [hit],
+    getByIds: () => [{ id: MEM_GET_ID, updatedAt: 100 }],
+  })
+  fireMemoryGet(handlers, { fields: ['summary'] })
+  const decision = await runPreStep(handlers, undefined, { turn: 2, step: 2 }) as { messages: unknown[] }
+  assert.equal(decision.messages.length, 1, '只看了摘要，正文仍应通过召回补上')
+})
+
 
 
