@@ -7,6 +7,9 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { registerHooks } from 'node:module'
 import { InjectAuditStore } from '../src/audit.ts'
 import { defaultInjectSettings } from '../../memory-local/src/inject-settings.ts'
@@ -47,6 +50,7 @@ function setup(options: {
   search?: (input: unknown) => Promise<unknown[]>
   listSync?: (input: unknown) => unknown[]
   getByIds?: (ids: string[]) => unknown[]
+  sessionState?: Record<string, unknown>
 } = {}) {
   const handlers = new Map<string, (...args: any[]) => unknown>()
   const settings = options.settings ?? defaultInjectSettings
@@ -70,7 +74,8 @@ function setup(options: {
     on: (name: string, fn: (...args: any[]) => unknown) => { handlers.set(name, fn) },
     inject: (_names: string[], callback: (scoped: any) => void) => callback({ systemPrompt }),
   }
-  apply(ctx as never, {})
+  // 默认关闭持久化：测试不往 D:/repo 写运行时状态；持久化用例显式传 sessionState。
+  apply(ctx as never, { sessionState: options.sessionState ?? { enabled: false } })
   return { handlers, attached, sections, memory, settings }
 }
 
@@ -349,12 +354,13 @@ function contentOnlySettings() {
 
 function fireMemoryGet(
   handlers: Map<string, (...args: any[]) => unknown>,
-  options: { fields?: unknown; text?: string; callId?: string } = {},
+  options: { fields?: unknown; text?: string; callId?: string; session?: unknown } = {},
 ): void {
   const onEvent = handlers.get('session/event')
   assert.ok(onEvent)
   const callId = options.callId ?? 'call-get'
-  onEvent!({ id: 's1' }, {
+  const session = options.session ?? { id: 's1' }
+  onEvent!(session, {
     type: 'tool/call',
     data: {
       name: 'memory_get',
@@ -362,7 +368,7 @@ function fireMemoryGet(
       arguments: JSON.stringify({ ids: [MEM_GET_ID], ...(options.fields !== undefined ? { fields: options.fields } : {}) }),
     },
   })
-  onEvent!({ id: 's1' }, {
+  onEvent!(session, {
     type: 'tool/result',
     data: {
       message: {
@@ -415,6 +421,101 @@ test('memory_get 只取 summary / tags 不算正文：仍可被召回注入全�
   const decision = await runPreStep(handlers, undefined, { turn: 2, step: 2 }) as { messages: unknown[] }
   assert.equal(decision.messages.length, 1, '只看了摘要，正文仍应通过召回补上')
 })
+
+test('去重状态持久化：摘要每会话一次，插件重载后不重复注入', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'dsh-memory-digest-state-'))
+  const dir = join(workspace, '.dsh', 'dsh-memory')
+  const settings = {
+    ...defaultInjectSettings,
+    autoRecall: { ...defaultInjectSettings.autoRecall, enabled: false },
+    recall: { ...defaultInjectSettings.recall, enabled: false },
+    digest: { ...defaultInjectSettings.digest, enabled: true },
+    rules: { ...defaultInjectSettings.rules, enabled: false, delta: false },
+    policy: { ...defaultInjectSettings.policy, enabled: false },
+    turnEnd: { ...defaultInjectSettings.turnEnd, enabled: false },
+  }
+  const memo = record('digest-1', '这是一个已有记忆', [])
+  try {
+    const first = setup({
+      settings,
+      list: async () => [memo],
+      sessionState: { enabled: true, dir, debounceMs: 1000 },
+    })
+    const injected = await runPreStep(first.handlers, undefined, {
+      turn: 1,
+      step: 1,
+      agent: { session: { id: 's1', header: { cwd: workspace } } },
+    }) as { messages: unknown[] }
+    assert.ok(injected.messages.length > 0, '第一次注入摘要')
+    first.handlers.get('agent/turn-stopping')!({})
+    assert.equal(existsSync(join(dir, 'sessions', 's1.jsonl')), true)
+
+    const reopened = setup({
+      settings,
+      list: async () => [memo],
+      sessionState: { enabled: true, dir, debounceMs: 1000 },
+    })
+    const skipped = await runPreStep(reopened.handlers, undefined, {
+      turn: 1,
+      step: 1,
+      agent: { session: { id: 's1', header: { cwd: workspace } } },
+    }) as { messages: unknown[] }
+    assert.equal(skipped.messages.length, 0, '重载后摘要不再重复注入')
+  } finally {
+    rmSync(workspace, { recursive: true, force: true })
+  }
+})
+
+test('去重状态持久化：插件重载后从工作区 .dsh/dsh-memory 恢复；记录更新后仍会重注入', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'dsh-memory-inject-state-'))
+  const dir = join(workspace, '.dsh', 'dsh-memory')
+  const settings = contentOnlySettings()
+  const stale = { ...record(MEM_GET_ID, '发布前检查 devcred 凭据', ['release']), updatedAt: 100 }
+  const updated = { ...record(MEM_GET_ID, '发布前检查 devcred 凭据（已更新）', ['release']), updatedAt: 200 }
+  try {
+    const first = setup({
+      settings,
+      search: async () => [{ record: stale, score: 0.9 }],
+      getByIds: () => [{ id: MEM_GET_ID, updatedAt: 100 }],
+      sessionState: { enabled: true, dir, debounceMs: 1000 },
+    })
+    fireMemoryGet(first.handlers, { session: { id: 's1', header: { cwd: workspace } } })
+    // 轮末强制 flush，不依赖 debounce 计时器
+    first.handlers.get('agent/turn-stopping')!({})
+    assert.equal(existsSync(join(dir, 'sessions', 's1.jsonl')), true, '状态写到工作区插件目录')
+
+    // 模拟插件重载：新的 apply 实例读同一个文件
+    const reopened = setup({
+      settings,
+      search: async () => [{ record: stale, score: 0.9 }],
+      getByIds: () => [{ id: MEM_GET_ID, updatedAt: 100 }],
+      sessionState: { enabled: true, dir, debounceMs: 1000 },
+    })
+    const deduped = await runPreStep(reopened.handlers, undefined, {
+      turn: 2,
+      step: 2,
+      agent: { session: { id: 's1', header: { cwd: workspace } } },
+    }) as { messages: unknown[] }
+    assert.equal(deduped.messages.length, 0, '重载后同一版本仍应被去重')
+
+    // 记录在持久化之后被更新：版本不同，必须重新注入
+    const afterUpdate = setup({
+      settings,
+      search: async () => [{ record: updated, score: 0.9 }],
+      getByIds: () => [{ id: MEM_GET_ID, updatedAt: 100 }],
+      sessionState: { enabled: true, dir, debounceMs: 1000 },
+    })
+    const reinjected = await runPreStep(afterUpdate.handlers, undefined, {
+      turn: 3,
+      step: 2,
+      agent: { session: { id: 's1', header: { cwd: workspace } } },
+    }) as { messages: unknown[] }
+    assert.equal(reinjected.messages.length, 1, '记录更新后应重新注入新版本')
+  } finally {
+    rmSync(workspace, { recursive: true, force: true })
+  }
+})
+
 
 
 

@@ -25,6 +25,7 @@
                                                   
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
                                               
+import { join } from 'node:path'
 import {
   MemoryDigester,
   MemoryInjector,
@@ -45,6 +46,7 @@ import { renderRules,                  } from './rules.js'
 import { RulesDeltaInjector } from './rules-delta.js'
 import { POLICY_TEXT } from './policy.js'
 import { InjectionState } from './state.js'
+import { createSessionStateStore } from './session-state-store.js'
 import {
   InjectAuditStore,
   auditBudget,
@@ -72,6 +74,7 @@ import {
                       
 } from './signals.js'
 import { normalizeInjectSettings,                     } from '../provider/inject-settings.js'
+import { canonicalWorkspacePath } from '../provider/scope.js'
 
                                      
                    
@@ -80,6 +83,21 @@ import { normalizeInjectSettings,                     } from '../provider/inject
                         
                                                                     
                        
+     
+                 
+                                                              
+     
+                  
+                     
+                                                            
+                
+                            
+                       
+                            
+                       
+                                    
+                     
+   
  
 
 /** provider 在注入侧能提供的那部分能力(多余的方法都用可选判断)。 */
@@ -145,6 +163,47 @@ export function apply(ctx         , config                     = {}) {
   let systemPromptReady = false
   let attachedMemory          = null
 
+  // ---- 去重状态持久化:<workspace>/.dsh/dsh-memory/sessions/<session>.jsonl ----
+  const stateConfig = config.sessionState ?? {}
+  const stateEnabled = stateConfig.enabled !== false
+  let stateWarned = false
+  /** attach 之后同步给摘要器补「已做过」标记（digester 在更后面创建）。 */
+  let onStateAttached                                           
+
+  /** pre-step 的 agent / session/event 的 session 都能取到 header.cwd。 */
+  const workspaceOf = (value         )                     => {
+    const nested = (value                                                            )?.session?.header?.cwd
+    if (typeof nested === 'string' && nested.trim() !== '') return nested
+    const direct = (value                                              )?.header?.cwd
+    return typeof direct === 'string' && direct.trim() !== '' ? direct : undefined
+  }
+
+  /** 第一次接触某个会话时挂上它的持久化 store;拿不到 cwd 就只走内存。 */
+  const attachSessionState = (sessionId                    , workspace                    )       => {
+    if (sessionId === undefined || !stateEnabled || injectionState.hasStore(sessionId)) return
+    let root = ''
+    try {
+      root = stateConfig.dir !== undefined && stateConfig.dir !== ''
+        ? stateConfig.dir
+        : workspace !== undefined ? join(canonicalWorkspacePath(workspace), '.dsh', 'dsh-memory') : ''
+    } catch { root = '' }
+    if (root === '') return
+    try {
+      injectionState.attach(sessionId, createSessionStateStore({
+        root,
+        sessionId,
+        ...(stateConfig.debounceMs !== undefined ? { debounceMs: stateConfig.debounceMs } : {}),
+        ...(stateConfig.maxAgeDays !== undefined ? { maxAgeDays: stateConfig.maxAgeDays } : {}),
+        ...(stateConfig.maxFiles !== undefined ? { maxFiles: stateConfig.maxFiles } : {}),
+      }))
+      onStateAttached?.(sessionId)
+    } catch (error) {
+      if (stateWarned) return
+      stateWarned = true
+      console.warn(`[dsh-memory] 初始化会话去重状态失败: ${error instanceof Error ? error.message : String(error)}；本次退化为内存去重`)
+    }
+  }
+
   const attachAudit = (memory         )       => {
     const target = memory                                
     if (!target || target === attachedMemory || typeof target.attachInjectAudit !== 'function') return
@@ -165,6 +224,8 @@ export function apply(ctx         , config                     = {}) {
       } catch { /* 解绑失败不影响卸载 */ }
       attachedMemory = null
       audit.dispose()
+      // 卸载前把会话去重状态的待写增量刷掉；失败只告警，不影响卸载。
+      injectionState.dispose()
     }, 'dsh-memory: audit sink')
   } catch { /* 老宿主没有 ctx.effect */ }
 
@@ -402,6 +463,10 @@ export function apply(ctx         , config                     = {}) {
       limit: 200,
     })
   })
+  // 持久化状态恢复后，把「摘要已做过」同步给摘要器，避免插件重载后重复注入。
+  onStateAttached = (sessionId) => {
+    if (injectionState.digestDoneOf(sessionId)) digester.seedDone(sessionId)
+  }
 
   // 规则增量:一个激活一个实例,跨轮记住每条规则上一轮的样子(编辑后才补提醒)。
   const rulesDelta = new RulesDeltaInjector()
@@ -419,6 +484,8 @@ export function apply(ctx         , config                     = {}) {
         const data = (event                                                  )?.data ?? {}
         const memory = ctx.get('memory')                                
         if (memory) attachAudit(memory)
+        // 先挂持久化 store：compaction 的 clear 要能删到对应文件。
+        attachSessionState(sessionId, workspaceOf(session))
 
         // 记忆工具调用先落一条锚点审计：即使自动召回关闭、或该工具没有命中
         // 任何触发标签，用户也能从审计面板/记忆视图精确跳回轨迹里的那一次调用。
@@ -605,6 +672,8 @@ export function apply(ctx         , config                     = {}) {
   let maxStep = 0
   let pendingNudge = false
   ctx.on('agent/turn-stopping', () => {
+    // 轮末把待写的去重增量刷掉：即使下一轮开始前进程退出，状态也只丢一个窗口。
+    injectionState.flushAll()
     if (!enabled || !settingsOf().turnEnd.enabled) return
     if (maxStep >= 2) pendingNudge = true
   })
@@ -628,6 +697,8 @@ export function apply(ctx         , config                     = {}) {
     maxStep = Math.max(maxStep, step)
 
     const sessionId = sessionIdOf(agent)
+    // 第一步接触会话时恢复持久化去重状态（读盘只发生一次）。
+    attachSessionState(sessionId, workspaceOf(agent))
     if (sessionId !== undefined) rulesStepStart.set(sessionId, stepStartedAt)
     const scopes = readScopesFor(memory, agent)
     if (sessionId !== undefined && scopes !== undefined) sessionScopes.set(sessionId, [...scopes])
@@ -771,6 +842,8 @@ export function apply(ctx         , config                     = {}) {
         digestStats = rendered?.stats
         return rendered
       })
+      // 失败也记 done（与内存行为一致：摘要不逐轮重试）；落盘后重载不再重复发。
+      if (sessionId !== undefined && outcome.status !== 'skipped') injectionState.markDigestDone(sessionId)
       if (outcome.status === 'failed') {
         stage(auditBase('digest', {
           kind: 'evaluation', stage: 'source_load', outcome: 'failed', reasonCode: outcome.errorCode,

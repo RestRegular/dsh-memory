@@ -527,6 +527,15 @@ export class MemoryDigester {
     }
   }
 
+  /** 从持久化状态恢复「这个会话已经做过摘要」,避免插件重载后重复注入。 */
+  seedDone(sessionId                    )       {
+    if (sessionId !== undefined) this.markDone(sessionId)
+  }
+
+  isDone(sessionId                    )          {
+    return sessionId !== undefined && this.done.has(sessionId)
+  }
+
   /** 上下文被压缩/重建后重新允许摘要评估(旧摘要可能已不在上下文里)。 */
   reset(sessionId                    )       {
     if (sessionId !== undefined) this.done.delete(sessionId)

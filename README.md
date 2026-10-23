@@ -239,6 +239,13 @@ memory_forget({ "id": "3f2a9c1d" })          // 按内容删：memory_forget({ q
 
 - 召回按 **sessionId + 记忆 id / 版本** 去重；只给过标签的记录，任务命中后可补正文；内容更新会重新评估。
 - `memory_get` 取到正文后，这条记忆会记成「正文已注入」；同一会话后续的普通召回 / 摘要 / 自动召回都不会再把同一段正文塞一遍。只取 `summary` / `tags` / 元数据不算正文，仍可被召回。
+- **去重状态持久化**：状态写到会话工作区的插件目录
+  `<cwd>/.dsh/dsh-memory/sessions/<session>.jsonl`，插件重载 / 宿主重启后自动恢复；只有首次接触该会话时读一次盘。
+  - 只存记录 id、状态、版本（`updatedAt`）和时间戳，**不存正文，也不存查询**。
+  - JSONL 增量日志：默认 250ms 合并写一行，写延迟不随状态大小增长；行数 / 字节超过阈值时 compact 成一行快照（临时文件 + rename 原子替换）。
+  - 每个工作区默认保留 30 天、最多 1000 个会话文件；目录不可写或文件损坏时自动退化为内存去重，不阻断注入。
+  - 插件配置 `inject.sessionState.{enabled,dir,debounceMs,maxAgeDays,maxFiles}` 可覆盖默认值；默认开启。
+  - 工作区里的 `.dsh/` 已加入本仓库 `.gitignore`；其他项目按需自行忽略。
 - 被 `supersedes` 指向的旧记录不再进入 `memory_search`、`memory_list`、摘要、规则段和自动召回；`memory_get(id)` 与面板仍可查历史。需要历史检索时 `memory_search({ includeSuperseded: true })`。
 - 摘要排除 `kind=rule`；规则段实际进入系统提示的 id 会写进会话注入状态，recall 不再重复注入同一条规则。
 - 同一轮最多发生一次 signal 驱动召回；同 tag / 同 query 的第二个信号只记一条 `signal_dropped` 审计。

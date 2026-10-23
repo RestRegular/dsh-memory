@@ -7,6 +7,7 @@ dist-npm/
 .verify/
 .dsh-ops/
 .dsh-probe/
+.dsh/
 .tmp/
 .idea/
 package-lock.json

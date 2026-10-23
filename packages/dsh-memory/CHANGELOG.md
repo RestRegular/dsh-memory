@@ -2,6 +2,16 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.17.0 — 会话去重状态持久化到工作区 `.dsh/dsh-memory`
+
+- **状态现在可以跨插件重载 / 宿主重启恢复**：`InjectionState` 可按会话挂一个持久化 store，首次接触会话时读一次盘，之后写入由 store 合并。
+- **位置**：`<会话工作区>/.dsh/dsh-memory/sessions/<session>.jsonl`。只存记录 id、状态、版本（`updatedAt`）和时间戳；**不存正文，也不存查询**（避免把凭据写进状态文件）。
+- **运行效率**：JSONL 增量日志 + 默认 250ms 合并窗口，一次召回/摘要的多次标记只 append 一行；写延迟与状态大小无关。轮末与插件卸载会强制 flush。
+- **存储效率**：行数 / 字节超过阈值时 compact 成一行快照，用临时文件 + rename 原子替换；每个工作区默认保留 30 天、最多 1000 个会话文件，首次接触该工作区时清理一次。
+- **容错**：目录不可写、文件损坏、写盘失败都只退化为内存去重并告警一次，绝不阻断注入链路；`compaction` 清空状态时同步删掉对应文件。
+- **接线**：`session/event` 与 `agent/pre-step` 都会在第一次拿到 `header.cwd` 时挂载 store；拿不到工作区时保持纯内存。配置项 `sessionState.{enabled,dir,debounceMs,maxAgeDays,maxFiles}` 可覆盖，默认开启并写到工作区。
+- 回归测试：JSONL 往返、合并写一行、阈值 compact、evict 同步、remove/坏行容错、30 天清理、异常 sessionId 安全文件名；以及 `apply` 层“重载后仍去重、记录更新后重新注入”的端到端用例。
+
 ## 0.16.2 — memory_get 去重的审计与端到端覆盖
 
 - **补审计缺口**：所有候选都被会话级去重时，`renderRecallBlock` 返回 `null`，`dedupIds` 没有写进结果，审计只能看到 `dedupSkipped` 数量、看不到具体跳过了哪些 id。现在 `dedupIds` 在“全部去重”和“预算省略”路径上也会返回。
