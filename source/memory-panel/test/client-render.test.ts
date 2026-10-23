@@ -1595,6 +1595,15 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
   hooks.resetAll()
 })
 
+test('记忆范围浮窗:深色模式用 business-primary + 前景色,列表高度收紧', async () => {
+  const { exports } = await loadBundle()
+  const css = (exports.__test as { CSS: string }).CSS
+  assert.match(css, /\.mem-scope-check\.on \.box\{[^}]*state-business-primary[^}]*label-primary-foreground/, '选中勾选框用主题业务色 + 可翻转前景色')
+  assert.match(css, /\.mem-scope-save\{[^}]*state-business-primary[^}]*label-primary-foreground/, '保存按钮不再用近白色的 brand-primary 填充')
+  assert.match(css, /\.mem-scope-list\{[^}]*max-height:min\(220px,32vh\)/, '滚动列表高度收紧')
+  assert.match(css, /\.mem-scope-pop\{[^}]*max-height:min\(520px,72vh\)/, '浮窗整体高度收紧')
+})
+
 test('审批浮层:展示范围外摘要与拒绝/允许一次,回答一次后消失', async () => {
   const { exports, hooks } = await loadBundle()
   hooks.resetAll()
