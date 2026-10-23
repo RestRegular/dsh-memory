@@ -37,6 +37,8 @@ export interface InjectMemoryService {
   resolveReadScopes?(agent: unknown): string[]
   /** 当前已退役的记录 id;可选,老 provider 没有时注入层自己按 supersedes 扫描。 */
   supersededIds?(scopes?: string[]): string[]
+  /** 按 id / 前缀取记录(memory_get 正文去重用);老 provider 没有时跳过去重标记。 */
+  getByIds?(ids: string[]): Array<{ id: string; updatedAt: number }>
 }
 
 /** 宿主里"按会话 id 找 live session"的那一小部分能力(拿不到就不做父会话召回)。 */

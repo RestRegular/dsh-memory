@@ -238,6 +238,7 @@ memory_forget({ "id": "3f2a9c1d" })          // 按内容删：memory_forget({ q
 ### 去重与修正
 
 - 召回按 **sessionId + 记忆 id / 版本** 去重；只给过标签的记录，任务命中后可补正文；内容更新会重新评估。
+- `memory_get` 取到正文后，这条记忆会记成「正文已注入」；同一会话后续的普通召回 / 摘要 / 自动召回都不会再把同一段正文塞一遍。只取 `summary` / `tags` / 元数据不算正文，仍可被召回。
 - 被 `supersedes` 指向的旧记录不再进入 `memory_search`、`memory_list`、摘要、规则段和自动召回；`memory_get(id)` 与面板仍可查历史。需要历史检索时 `memory_search({ includeSuperseded: true })`。
 - 摘要排除 `kind=rule`；规则段实际进入系统提示的 id 会写进会话注入状态，recall 不再重复注入同一条规则。
 - 同一轮最多发生一次 signal 驱动召回；同 tag / 同 query 的第二个信号只记一条 `signal_dropped` 审计。

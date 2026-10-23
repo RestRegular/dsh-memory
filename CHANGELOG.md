@@ -2,6 +2,14 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.16.1 — memory_get 取正文也参与会话级去重
+
+- **补上去重缺口**：0.16.0 把正文入口从 `memory_search` 移到 `memory_get` 后，工具读到的正文没有记进会话注入状态，后续普通召回 / 摘要 / 自动召回仍可能把同一条记忆再塞一遍。
+- 现在 `memory_get` 的 `tool/result` 会被解析：`fields` 省略或包含 `content` 时，把结果里的记录 id 记为 `content_injected`（按 `updatedAt` 版本去重）。只取 `summary` / `tags` / 元数据时不标记，正文仍可被召回。
+- 去重标记独立于「自动召回」开关：即使行为信号召回关闭，普通每轮召回也会跳过已取过正文的记录。
+- 解析同时兼容渲染文本（`[id]` 行首）和结构化 JSON（`records[].id`）；正文里普通的方括号文本不会被误认成 id，最终还会用 `getByIds` 校验一次。
+- 回归测试：`fields` 是否含 content 的判定、文本/JSON 两种结果解析、写入 `content_injected` 后同会话召回被去重、版本变化允许重注入、另一会话不受影响。
+
 ## 0.16.0 — memory_search 只回印象，memory_get 按字段取
 
 - **`memory_search` 不再返回正文**：每条结果只给 8 位 id、作用域、类型、标签和一段短摘要（默认 160 字），避免一次检索把整篇记忆塞进上下文。摘要长度可用 `summaryChars` 调整（20~2000）。返回结构从 `content` 改为 `summary`，正文统一走 `memory_get`。

@@ -364,6 +364,63 @@ export function toolResultFailure(event         )                               
 }
 
 /**
+ * `memory_get` 的这次调用是否会把正文放进上下文。
+ *
+ * 与工具默认值同一口径：`fields` 省略 = 默认含 `content`；显式给了 fields 时，
+ * 只有包含 `content` 才算。只取 summary / tags / 元数据不是正文，不参与正文去重。
+ */
+export function memoryGetRequestsContent(args         )          {
+  let parsed          = args
+  if (typeof args === 'string') {
+    try { parsed = JSON.parse(args) } catch { return false }
+  }
+  if (parsed === null || typeof parsed !== 'object') return false
+  const fields = (parsed                        ).fields
+  if (fields === undefined || fields === null) return true
+  const items = Array.isArray(fields)
+    ? fields
+    : typeof fields === 'string' ? fields.split(/[,\s]+/) : []
+  return items.some((item) => String(item).trim().toLowerCase() === 'content')
+}
+
+/**
+ * 从 `memory_get` 的 tool/result 里取记录 id。
+ *
+ * 正常路径是渲染后的文本，每条以 `[<id>]` 开头；这里只认十六进制/横线组成的
+ * id，避免把正文里普通的方括号文本（如 `[提示]`）误当成记录。若宿主把结构化
+ * 结果直接放进文本块（JSON），也兼容 `records[].id`。真正的存在性还会由调用方
+ * 用 `getByIds` 再校验一次，前缀也能解析。
+ */
+export function memoryGetResultIds(event         )           {
+  const data = (event                                                  )?.data
+  const message = data?.message                                                                     
+  const text = Array.isArray(message?.content)
+    ? message.content.filter((block) => block?.type === 'text' && typeof block.text === 'string').map((block) => block.text          ).join('\n')
+    : ''
+  if (text === '') return []
+  const seen = new Set        ()
+  const ids           = []
+  const push = (value         )       => {
+    if (typeof value !== 'string' || value === '' || seen.has(value)) return
+    seen.add(value)
+    ids.push(value)
+  }
+  // 兼容结构化输出：{"records":[{"id":"..."}], ...}
+  try {
+    const parsed = JSON.parse(text)                         
+    if (Array.isArray(parsed?.records)) {
+      for (const record of parsed.records) push((record                                )?.id)
+      if (ids.length > 0) return ids.slice(0, 50)
+    }
+  } catch { /* 不是 JSON，按渲染文本解析 */ }
+  for (const line of text.split(/\r?\n/)) {
+    const match = /^\[([0-9a-f][0-9a-f-]{7,})\]/i.exec(line)
+    if (match !== null) push(match[1] )
+  }
+  return ids.slice(0, 50)
+}
+
+/**
  * 每个会话只保留**最新一条未消费**的信号;相同 key 不重复排队。
  * `take()` 消费后保留 lastKey,同一失败不会因为重复事件反复搜索。
  */

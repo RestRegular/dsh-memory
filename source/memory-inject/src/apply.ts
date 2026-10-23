@@ -63,6 +63,8 @@ import {
   failureSignal,
   goalText,
   highRiskSignal,
+  memoryGetRequestsContent,
+  memoryGetResultIds,
   textTagSignal,
   todoText,
   toolCallDescription,
@@ -127,6 +129,8 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
   const audit = new InjectAuditStore()
   const signals = new BehaviorSignalStore()
   const callMeta = new Map<string, { name: string; description?: string }>()
+  /** memory_get 调用 → 这次是否取正文；tool/result 到达后用来写 content_injected。 */
+  const memoryGetCalls = new Map<string, boolean>()
   const sessionScopes = new Map<string, string[]>()
   const sessionAutoScopes = new Map<string, string[]>()
   /** 本轮已经发生过的 signal 驱动召回:每轮最多一次,同 tag/query 也跳过。 */
@@ -199,6 +203,30 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
       const oldest = callMeta.keys().next()
       if (!oldest.done) callMeta.delete(oldest.value)
     }
+  }
+
+  /** 记住这次 memory_get 是否取正文；结果到达后无论 autoRecall 开关都会用到。 */
+  const rememberMemoryGetCall = (callId: unknown, content: boolean): void => {
+    if (typeof callId !== 'string' || callId === '') return
+    memoryGetCalls.set(callId, content)
+    if (memoryGetCalls.size > 500) {
+      const oldest = memoryGetCalls.keys().next()
+      if (!oldest.done) memoryGetCalls.delete(oldest.value)
+    }
+  }
+
+  /**
+   * memory_get 已把正文放进当前上下文 → 记为 content_injected，后续 recall/digest
+   * 的同一条记忆会被会话级去重跳过。只取 summary / tags / 元数据时不标记。
+   */
+  const markMemoryGetContent = (sessionId: string, memory: MemoryWithInject, event: unknown): void => {
+    try {
+      const ids = memoryGetResultIds(event)
+      if (ids.length === 0 || typeof memory.getByIds !== 'function') return
+      const found = memory.getByIds(ids)
+      if (found.length === 0) return
+      injectionState.markContent(sessionId, found.map((record) => ({ id: record.id, updatedAt: record.updatedAt })))
+    } catch { /* 去重状态是尽力而为，不能影响工具结果 */ }
   }
 
   /** 记录本会话最近用过的工具名,给流程索引做触发词匹配。 */
@@ -415,7 +443,23 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
           procedureTools.delete(sessionId)
           for (const key of tagCache.keys()) if (key.startsWith(`${sessionId}|`)) tagCache.delete(key)
           callMeta.clear()
+          memoryGetCalls.clear()
           return
+        }
+
+        // memory_get 的正文去重必须独立于 autoRecall 开关：哪怕行为信号召回关着，
+        // 普通每轮召回 / 摘要仍会注入同一段正文。这里在 autoRecall 闸门前记录。
+        if (type === 'tool/call' && data.name === 'memory_get') {
+          rememberMemoryGetCall(data.callId, memoryGetRequestsContent(data.arguments))
+        } else if (type === 'tool/result') {
+          const callId = (data.message as { source?: { callId?: unknown } } | undefined)?.source?.callId
+          if (typeof callId === 'string') {
+            const takesContent = memoryGetCalls.get(callId)
+            memoryGetCalls.delete(callId)
+            if (takesContent === true && memory !== undefined && !toolResultFailure(event).isError) {
+              markMemoryGetContent(sessionId, memory, event)
+            }
+          }
         }
         const settings = enabled ? settingsOf() : undefined
         const auto = settings?.autoRecall
