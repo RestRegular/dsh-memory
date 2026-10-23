@@ -243,9 +243,14 @@ export class CordisMemoryService extends Service {
     return this.impl.visibleScopes(agent)
   }
 
-  /** 完整可见域(等级 + 每个 scope 的类型白名单)。 */
+  /** 完整可见域(等级 + 每个 scope 的类型白名单 + 来源)。0.20 起永远有值。 */
   visibilityPolicy(agent         )                                                     {
     return this.impl.visibilityPolicy(agent)
+  }
+
+  /** 可见范围 = 可操作范围:写入/删除前用它判断一个 scope 是否可操作。 */
+  isScopeOperable(agent         , scope        )          {
+    return this.impl.isScopeOperable(agent, scope)
   }
 
   /** 某个 scope 下允许的记忆类型(undefined = 不限制)。 */

@@ -1564,6 +1564,9 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
     const button = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))
     assert.ok(button, '输入框里渲染了记忆范围按钮')
     assert.equal(textOf(button), '2', '按钮只显示数字,不再显示文字')
+    assert.match(String(button!.props!.className), /is-normal/, '没有生效策略时按默认的普通限制画边框')
+    assert.match(String(button!.props!.title), /2 个作用域/)
+    assert.match(String(button!.props!.title), /普通限制/)
     ;(button!.props!.onClick as (event: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 40, top: 500 }) } })
     await new Promise((resolve) => setTimeout(resolve, 0))
 
@@ -1602,6 +1605,49 @@ test('记忆范围浮窗:深色模式用 business-primary + 前景色,列表高�
   assert.match(css, /\.mem-scope-save\{[^}]*state-business-primary[^}]*label-primary-foreground/, '保存按钮不再用近白色的 brand-primary 填充')
   assert.match(css, /\.mem-scope-list\{[^}]*max-height:min\(220px,32vh\)/, '滚动列表高度收紧')
   assert.match(css, /\.mem-scope-pop\{[^}]*max-height:min\(520px,72vh\)/, '浮窗整体高度收紧')
+})
+
+test('记忆范围按钮:数字展示范围,边框样式展示限制等级(橙黄实线/蓝色实线/灰色虚线)', async () => {
+  const { exports } = await loadBundle()
+  const css = (exports.__test as { CSS: string }).CSS
+  assert.match(css, /\.mem-scope-btn\.is-absolute\{[^}]*border-color:var\(--dsw-alias-state-warn-primary/, '绝对限制 = 橙黄实线边框')
+  assert.match(css, /\.mem-scope-btn\.is-normal\{[^}]*border-color:var\(--dsw-alias-state-business-primary/, '普通限制 = 蓝色实线边框')
+  assert.match(css, /\.mem-scope-btn\.is-none\{[^}]*border:1px dashed/, '无限制 = 灰色虚线边框')
+
+  // 三种等级各自渲染对应的 class,按钮文字仍然只有数字。
+  const { exports: full, hooks } = await loadBundle()
+  const Button = (full.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  for (const [level, expected] of [['absolute', 'is-absolute'], ['normal', 'is-normal'], ['none', 'is-none']] as const) {
+    hooks.resetAll()
+    ;(globalThis as Record<string, unknown>).fetch = async () => ({
+      status: 200,
+      json: async () => ({
+        ok: true,
+        value: {
+          sessionId: 's1',
+          override: null,
+          effective: { level, scopes: [{ scope: 'session:s1' }, { scope: 'global' }] },
+          source: 'default',
+          inherited: false,
+          defaults: ['session:s1', 'global'],
+          scopes: [{ scope: 'session:s1', label: '当前会话', records: 1 }, { scope: 'global', label: '全局', records: 2 }],
+        },
+      }),
+    })
+    let current: RenderNode | null = null
+    const element = () => hooks.React.createElement(Button, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const button = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))
+    assert.ok(button, `${level}:按钮存在`)
+    assert.match(String(button!.props!.className), new RegExp(expected), `${level}:边框样式`)
+    assert.equal(textOf(button), '2', `${level}:按钮只显示作用域数量`)
+  }
+  hooks.resetAll()
+  ;(globalThis as Record<string, unknown>).fetch = savedFetch
 })
 
 test('审批浮层:展示范围外摘要与拒绝/允许一次,回答一次后消失', async () => {
@@ -1644,7 +1690,7 @@ test('审批浮层:展示范围外摘要与拒绝/允许一次,回答一次后�
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     const text = textOf(current)
-    assert.ok(text.includes('记忆访问审批'), '审批标题')
+    assert.ok(text.includes('记忆读取审批'), '审批标题按动作变化(读)')
     assert.ok(text.includes('发布流程'), '展示 Agent 的查询关键词')
     assert.ok(text.includes('范围外规则：发布前必须跑完整测试。'), '展示范围外记忆摘要')
     assert.ok(text.includes('拒绝') && text.includes('允许一次'), '两个审批选项')

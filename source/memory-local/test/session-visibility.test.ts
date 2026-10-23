@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LocalMemoryService } from '../src/index.ts'
-import { memoryGetTool, memoryListTool, memorySearchTool } from '../../tool-memory/src/index.ts'
+import { memoryForgetTool, memoryGetTool, memoryListTool, memorySaveTool, memorySearchTool } from '../../tool-memory/src/index.ts'
 
 const DIR = mkdtempSync(join(tmpdir(), 'dsh-memory-visibility-'))
 const PROJECT = 'project:test-workspace'
@@ -168,7 +168,7 @@ test('可见域变更通知:下一次 take 拿到配置,再取为空', () => {
   assert.equal(svc.takeVisibilityNotice(agentCtx), undefined)
 })
 
-test('工具层把可见范围当白名单:显式 scope 被拒、memory_get 过滤、all 收窄', async () => {
+test('工具层把可见范围当白名单:显式 scope 视为不存在、memory_get 过滤、all 收窄', async () => {
   await svc.save({ scope: 'global', kind: 'fact', content: '全局秘密' })
   await svc.save({ scope: PROJECT, kind: 'fact', content: '项目结论' })
   svc.setSessionVisibility('s1', [PROJECT])
@@ -178,11 +178,10 @@ test('工具层把可见范围当白名单:显式 scope 被拒、memory_get 过�
   const result = await search.execute({ query: '秘密 结论' }, agentCtx)
   assert.deepEqual(result.records.map((r) => r.scope), [PROJECT], '只搜可见范围')
 
-  await assert.rejects(
-    () => search.execute({ query: '秘密', scope: 'global' }, agentCtx),
-    (error: Error & { code?: string }) => error.code === 'SCOPE_NOT_VISIBLE',
-    '显式 global 不在可见范围内',
-  )
+  // 0.20.0:绝对限制下显式问范围外的 scope 不再报错暴露可见域,而是当作那里没有记忆。
+  const outsideScope = await search.execute({ query: '秘密', scope: 'global' }, agentCtx)
+  assert.deepEqual(outsideScope.records, [])
+  assert.equal(outsideScope.withheld, undefined, '绝对限制不告诉模型"被挡住"')
 
   const all = await search.execute({ query: '秘密 结论', scope: 'all' }, agentCtx)
   assert.deepEqual(all.records.map((r) => r.scope), [PROJECT], "'all' 只等于所有可见范围")
@@ -196,9 +195,176 @@ test('工具层把可见范围当白名单:显式 scope 被拒、memory_get 过�
   const got = await get.execute({ ids: [globalRecord.id] }, agentCtx)
   assert.equal(got.records.length, 0, 'memory_get 不能读可见范围之外的正文')
   assert.deepEqual(got.missing, [globalRecord.id])
+  assert.equal(got.withheld, undefined, '绝对限制:被挡住也按不存在处理')
 
-  // 不设置覆盖时保持原行为(显式 global + 按 id 取全文都可用)。
+  // 不设置覆盖时回到默认策略(会话 + 项目 + global,普通限制),global 仍在范围内。
   svc.setSessionVisibility('s1', null)
   const legacyGet = await get.execute({ ids: [globalRecord.id] }, agentCtx)
   assert.equal(legacyGet.records.length, 1)
+})
+
+test('新会话默认可见域:会话 + 项目 + global,普通限制;范围外命中真实原因', async () => {
+  await svc.save({ scope: 'global', kind: 'fact', content: '默认策略全局 alpha' })
+  await svc.save({ scope: 'other-project', kind: 'fact', content: '默认策略别处 alpha' })
+  const agentCtx = { agent: agent({ id: 's1', cwd: 'D:/w' }) }
+
+  // 0.20.0:没有显式覆盖时不再是"无限制",而是默认策略。
+  const policy = svc.visibilityPolicy(agent({ id: 's1', cwd: 'D:/w' }))
+  assert.equal(policy.source, 'default')
+  assert.equal(policy.level, 'normal')
+  assert.deepEqual(policy.scopes.map((rule) => rule.scope), ['session:s1', CWD_PROJECT, 'global'])
+  assert.deepEqual(
+    svc.visibleScopes(agent({ id: 's1', cwd: 'D:/w' })),
+    undefined,
+    'visibleScopes 仍只代表"显式覆盖",默认策略不算',
+  )
+
+  const search = memorySearchTool({ getService: () => svc })
+  let asked = 0
+  svc.requestOutOfScope = async () => { asked += 1; return 'rejected' }
+  // 默认策略下的普通检索只搜默认三路:不会每次都弹审批。
+  const plain = await search.execute({ query: '默认策略' }, agentCtx)
+  assert.deepEqual(plain.records.map((r) => r.scope), ['global'])
+  assert.equal(asked, 0, '默认检索不主动搜范围外')
+
+  // 显式 all 才会碰到范围外;拒绝时把真实原因告诉模型。
+  const denied = await search.execute({ query: '默认策略', scope: 'all' }, agentCtx)
+  assert.deepEqual(denied.records.map((r) => r.scope), ['global'])
+  assert.equal(asked, 1)
+  assert.equal(denied.withheld?.reason, 'rejected')
+  assert.ok((denied.withheld?.count ?? 0) >= 1)
+
+  // 允许一次 → 范围外记录也返回。
+  svc.requestOutOfScope = async () => 'allowed-once'
+  const allowed = await search.execute({ query: '默认策略', scope: 'all' }, agentCtx)
+  assert.deepEqual(
+    [...new Set(allowed.records.map((r) => r.scope))].sort(),
+    ['global', 'other-project'].sort(),
+  )
+
+  // memory_get 默认走审批;超时按"超时未答复"而不是"用户拒绝"。
+  svc.requestOutOfScope = async () => 'timeout'
+  const elsewhere = (await svc.list({ scope: 'other-project', kind: 'fact' })).find((r) => r.content === '默认策略别处 alpha')!
+  const get = memoryGetTool({ getService: () => svc })
+  const got = await get.execute({ ids: [elsewhere.id] }, agentCtx)
+  assert.equal(got.records.length, 0)
+  assert.deepEqual(got.missing, [elsewhere.id])
+  assert.equal(got.withheld?.reason, 'timeout')
+})
+
+test('写入护栏:绝对限制下范围外写入/删除按不存在处理', async () => {
+  svc.setSessionVisibility('s1', { scopes: [{ scope: PROJECT }], level: 'absolute' })
+  const agentCtx = { agent: agent({ id: 's1', cwd: 'D:/w' }) }
+  const save = memorySaveTool({ getService: () => svc })
+
+  await assert.rejects(
+    () => save.execute({ scope: 'global', content: '绝对限制不该写进去' }, agentCtx),
+    (error: Error & { code?: string }) => error.code === 'SCOPE_NOT_WRITABLE' && !/可见/.test(error.message),
+    '范围外写入报"不存在或不可写",不暴露可见域',
+  )
+  assert.equal(
+    (await svc.list({ scope: 'global', kind: 'fact' })).some((r) => r.content === '绝对限制不该写进去'),
+    false,
+  )
+  const ok = await save.execute({ scope: PROJECT, kind: 'fact', content: '绝对限制写进项目' }, agentCtx)
+  assert.equal(ok.scope, PROJECT)
+
+  const forget = memoryForgetTool({ getService: () => svc })
+  const record = (await svc.list({ scope: 'global', kind: 'fact' })).find((r) => r.content === '绝对限制不该写进去')
+  await svc.save({ scope: 'global', kind: 'fact', content: '绝对限制全局秘密' })
+  const secret = (await svc.list({ scope: 'global', kind: 'fact' })).find((r) => r.content === '绝对限制全局秘密')!
+  assert.equal(record, undefined)
+  await assert.rejects(
+    () => forget.execute({ id: secret.id }, agentCtx),
+    (error: Error & { code?: string }) => error.code === 'RECORD_NOT_FOUND',
+    '范围外的 id 当作不存在',
+  )
+  assert.ok(
+    (await svc.list({ scope: 'global', kind: 'fact' })).some((r) => r.id === secret.id),
+    '范围外记录不能被删掉',
+  )
+  const byQuery = await forget.execute({ query: '绝对限制全局秘密', scope: 'global' }, agentCtx)
+  assert.deepEqual(byQuery, { removed: 0, ids: [] }, '范围外按 query 删除静默无匹配')
+  assert.ok(
+    (await svc.list({ scope: 'global', kind: 'fact' })).some((r) => r.id === secret.id),
+    '记录仍然在',
+  )
+})
+
+test('写入护栏:普通限制下范围外写入/删除先审批,拒绝与超时都讲真实原因', async () => {
+  svc.setSessionVisibility('s1', { scopes: [{ scope: PROJECT }], level: 'normal' })
+  const agentCtx = { agent: agent({ id: 's1', cwd: 'D:/w' }) }
+  const save = memorySaveTool({ getService: () => svc })
+  const calls: Array<{ tool: string; action?: string; query: string }> = []
+  svc.requestOutOfScope = async (_agent, input) => {
+    calls.push({ tool: input.tool, action: input.action, query: input.query })
+    return 'rejected'
+  }
+  await assert.rejects(
+    () => save.execute({ scope: 'global', kind: 'fact', content: '普通限制被拒写入' }, agentCtx),
+    (error: Error & { code?: string }) => error.code === 'VISIBILITY_REJECTED' && /用户拒绝/.test(error.message),
+  )
+  assert.equal(calls[0]?.tool, 'memory_save')
+  assert.equal(calls[0]?.action, 'write')
+  assert.equal(
+    (await svc.list({ scope: 'global', kind: 'fact' })).some((r) => r.content === '普通限制被拒写入'),
+    false,
+  )
+
+  svc.requestOutOfScope = async () => 'timeout'
+  await assert.rejects(
+    () => save.execute({ scope: 'global', kind: 'fact', content: '普通限制超时写入' }, agentCtx),
+    (error: Error & { code?: string }) => error.code === 'VISIBILITY_TIMEOUT' && /超时/.test(error.message),
+  )
+
+  svc.requestOutOfScope = async () => 'allowed-once'
+  const saved = await save.execute({ scope: 'global', kind: 'fact', content: '普通限制批准写入' }, agentCtx)
+  assert.equal(saved.scope, 'global')
+  const record = (await svc.list({ scope: 'global', kind: 'fact' })).find((r) => r.content === '普通限制批准写入')!
+  assert.ok(record)
+
+  const forget = memoryForgetTool({ getService: () => svc })
+  svc.requestOutOfScope = async (_agent, input) => {
+    calls.push({ tool: input.tool, action: input.action, query: input.query })
+    return 'rejected'
+  }
+  await assert.rejects(
+    () => forget.execute({ id: record.id }, agentCtx),
+    (error: Error & { code?: string }) => error.code === 'VISIBILITY_REJECTED' && /用户拒绝/.test(error.message),
+  )
+  assert.equal(calls[calls.length - 1]?.action, 'delete')
+  assert.ok(
+    (await svc.list({ scope: 'global', kind: 'fact' })).some((r) => r.id === record.id),
+    '拒绝后记录还在',
+  )
+
+  svc.requestOutOfScope = async () => 'allowed-once'
+  const removed = await forget.execute({ id: record.id }, agentCtx)
+  assert.equal(removed.removed, 1)
+})
+
+test('provider 层也守写入:有 agent 时范围外 save 拒绝;面板写入(无 agent)不受影响', async () => {
+  const agentCtx = agent({ id: 's1', cwd: 'D:/w' })
+  svc.setSessionVisibility('s1', { scopes: [{ scope: PROJECT }], level: 'absolute' })
+  await assert.rejects(
+    () => svc.save({ scope: 'global', kind: 'fact', content: 'provider 绝对拒绝', agent: agentCtx } as never),
+    (error: Error & { code?: string }) => error.code === 'SCOPE_NOT_WRITABLE',
+  )
+  // 面板是用户本人操作:不带 agent,照常可写。
+  const panel = await svc.save({ scope: 'global', kind: 'fact', content: 'provider 面板写入' })
+  assert.equal(panel.scope, 'global')
+
+  svc.setSessionVisibility('s1', { scopes: [{ scope: PROJECT }], level: 'normal' })
+  await assert.rejects(
+    () => svc.save({ scope: 'global', kind: 'fact', content: 'provider 未审批', agent: agentCtx } as never),
+    (error: Error & { code?: string }) => error.code === 'VISIBILITY_APPROVAL_REQUIRED',
+  )
+  const approved = await svc.save({
+    scope: 'global',
+    kind: 'fact',
+    content: 'provider 审批后写入',
+    agent: agentCtx,
+    visibilityApproved: true,
+  } as never)
+  assert.equal(approved.scope, 'global')
 })

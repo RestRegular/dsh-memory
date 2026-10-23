@@ -487,12 +487,18 @@ function visibilityPayload(ctx, memory, sessionId) {
   const own = typeof memory.sessionVisibility === 'function' ? memory.sessionVisibility(sessionId) : null
   let effective = null
   let inherited = false
+  // 0.20.0 起 provider 永远给一份生效策略(没有显式覆盖时是默认策略)。
+  // source 告诉面板这份策略是"自己的 / 继承的 / 默认的"。
+  let source = own === null ? 'default' : 'explicit'
   try {
     if (typeof memory.visibilityPolicy === 'function') {
       const policy = memory.visibilityPolicy(agentLike)
       if (policy !== undefined && policy !== null) {
         effective = policy
-        inherited = own === null
+        source = policy.source === 'explicit' || policy.source === 'inherited' || policy.source === 'default'
+          ? policy.source
+          : (own === null ? 'default' : 'explicit')
+        inherited = source === 'inherited'
       }
     }
   } catch { /* 可见域是增强;拿不到就只返回自己的覆盖 */ }
@@ -533,6 +539,7 @@ function visibilityPayload(ctx, memory, sessionId) {
     override: own,
     effective,
     inherited,
+    source,
     defaults,
     scopes,
   }

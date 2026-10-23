@@ -123,9 +123,9 @@ const NUDGE_TEXT =
  
 
 const VISIBILITY_LEVEL_TEXT                                                  = {
-  absolute: '绝对限制：可见域外的记忆一律查不到，即使工具内部命中也不会返回。',
-  normal: '普通限制：可见域外的记忆命中时会向用户发起一次审批；用户拒绝或超时则不返回。',
-  none: '无限制：可以读取所有作用域与类型（当前选择仅作为下次切换的偏好保留）。',
+  absolute: '绝对限制：可见域外的记忆一律查不到，即使工具内部命中也不会返回；范围外也写不进去。',
+  normal: '普通限制：可见域外的记忆命中时会向用户发起一次审批；用户拒绝或超时则不返回。写入 / 删除范围外同样需要审批。',
+  none: '无限制：可以读写所有作用域（当前选择仅作为下次切换的偏好保留）。',
 }
 
 /**
@@ -134,7 +134,9 @@ const VISIBILITY_LEVEL_TEXT                                                  = {
  */
 export function renderVisibilityNotice(config                               )         {
   if (config === null) {
-    return '【记忆可见范围已恢复默认】本会话不再有显式可见域；memory_search / memory_get / memory_list 回到"会话 + 项目 + global"的默认读取集合。'
+    return '【记忆可见范围已恢复默认】'
+      + '本会话不再有显式可见域，改回默认设置：当前会话 + 当前项目 + global 三个作用域，限制等级 = 普通限制'
+      + '（范围外命中会先向用户审批；写入 / 删除范围外同样需要审批）。'
   }
   const scopes = config.scopes.length > 0
     ? config.scopes.map((rule) => (rule.kinds !== undefined && rule.kinds.length > 0

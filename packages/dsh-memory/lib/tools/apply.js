@@ -19,7 +19,7 @@ import {
                           
                 
 } from './index.js'
-import { renderGetResult, renderSearchResult } from './render.js'
+import { renderGetResult, renderSearchResult, renderWithheldNote } from './render.js'
 import { resolveCurrentScopes, scopeKind,               } from '../provider/scope.js'
 
 export const name = 'dsh-tool-memory'
@@ -116,7 +116,8 @@ export function apply(ctx     , config                   = {}) {
       ? '该作用域还没有记忆。'
       : value.records.map((r) => `(${renderScope(r.scope, agent)}/${r.kind}) ${r.content}`).join('\n')
     const summary = scopeSummary(value, agent)
-    return summary ? `${body}\n${summary}` : body
+    const note = renderWithheldNote(value.withheld)
+    return [body, summary, note].filter((part) => part !== '').join('\n')
   })
 
   register(tools.memory_get, (value, _args, exec) => {

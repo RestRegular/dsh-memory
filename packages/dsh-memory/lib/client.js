@@ -488,7 +488,12 @@ window.__ModuleLoader__.load({
       '.mem-scope-wrap{display:inline-flex;min-width:0}',
       '.mem-scope-btn{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 55%,transparent);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1;cursor:pointer;flex:none;transition:border-color .12s ease,color .12s ease,background .12s ease}',
       '.mem-scope-btn:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}',
-      '.mem-scope-btn.on{color:var(--dsw-alias-brand-primary);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-brand-primary) 9%,transparent)}',
+      // 0.20.0:数字 = 当前生效的作用域数量;边框样式 = 限制等级
+      //   绝对限制 = 橙黄实线 · 普通限制 = 蓝色实线 · 无限制 = 灰色虚线
+      '.mem-scope-btn.is-absolute{border-color:var(--dsw-alias-state-warn-primary,#d9a23b);color:var(--dsw-alias-state-warn-primary,#d9a23b);background:color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d9a23b) 10%,transparent)}',
+      '.mem-scope-btn.is-normal{border-color:var(--dsw-alias-state-business-primary,#4176e6);color:var(--dsw-alias-state-business-primary,#4176e6);background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#4176e6) 10%,transparent)}',
+      '.mem-scope-btn.is-none{border:1px dashed color-mix(in srgb,var(--dsw-alias-label-secondary) 55%,var(--dsw-alias-border-l1));color:var(--dsw-alias-label-secondary);background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 55%,transparent)}',
+      '.mem-scope-btn.is-absolute:hover,.mem-scope-btn.is-normal:hover,.mem-scope-btn.is-none:hover{background:var(--dsw-alias-interactive-bg-hover)}',
       '.mem-scope-btn svg{flex:none}',
       // 毛玻璃浮窗:半透明 + backdrop blur;不支持 backdrop-filter 时退回实心底。
       '.mem-scope-pop{position:fixed;z-index:80;width:340px;max-height:min(520px,72vh);display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l2,var(--dsw-alias-border-l1)) 60%,transparent);border-radius:14px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 78%,transparent);-webkit-backdrop-filter:blur(20px) saturate(1.35);backdrop-filter:blur(20px) saturate(1.35);box-shadow:0 10px 28px rgba(0,0,0,.18);color:var(--dsw-alias-label-primary);font-size:13px;overflow:hidden}',
@@ -4655,17 +4660,24 @@ window.__ModuleLoader__.load({
       const levelMeta = [
         { value: 'absolute', label: '绝对限制', hint: '范围外查不到' },
         { value: 'normal', label: '普通限制', hint: '范围外需审批' },
-        { value: 'none', label: '无限制', hint: '不限制读取' },
+        { value: 'none', label: '无限制', hint: '不限制读写' },
       ]
+      // 按钮上的边框样式来自**生效中**的限制等级:没有显式覆盖时是默认的普通限制。
+      const buttonLevel = effectiveConfig && (effectiveConfig.level === 'absolute' || effectiveConfig.level === 'none')
+        ? effectiveConfig.level
+        : 'normal'
+      const buttonLevelLabel = (levelMeta.find((item) => item.value === buttonLevel) ?? levelMeta[1]).label
+      const sourceText = data && data.source === 'inherited'
+        ? '继承自父会话'
+        : hasOverride ? '本会话已设置' : '本会话使用默认'
+      const scopeCountText = `${effectiveCount} 个作用域`
 
       return h('span', { className: 'mem-scope-wrap', ref: wrapRef },
         h('button', {
           type: 'button',
-          className: `mem-scope-btn${hasOverride ? ' on' : ''}`,
-          title: hasOverride
-            ? `本会话已设置记忆范围：${effectiveCount} 个作用域`
-            : `本会话使用默认记忆范围：${effectiveCount} 个作用域`,
-          'aria-label': `记忆范围 ${effectiveCount}`,
+          className: `mem-scope-btn is-${buttonLevel}`,
+          title: `${sourceText}记忆范围：${scopeCountText} · ${buttonLevelLabel}`,
+          'aria-label': `${sourceText}记忆范围，${scopeCountText}，${buttonLevelLabel}`,
           'aria-expanded': open,
           onMouseDown: (event) => { try { event.preventDefault() } catch { /* keepFocus */ } },
           onClick: toggle,
@@ -4680,7 +4692,7 @@ window.__ModuleLoader__.load({
             h('span', { className: 'mem-scope-count' }, `已选 ${selectedCount}`),
           ),
           h('div', { className: 'hint' },
-            'Agent 默认只能检索和读取勾选的作用域；限制等级决定范围外怎么处理。'),
+            'Agent 只能检索、读取、写入和删除勾选的作用域；限制等级决定范围外怎么处理。'),
           data && data.inherited
             ? h('div', { className: 'hint' }, '当前继承自父会话；保存后在本会话独立生效。')
             : null,
@@ -4877,17 +4889,26 @@ window.__ModuleLoader__.load({
 
       if (pending === null) return null
 
+      // 0.20.0:写/删也会触发审批,文案按 action 走。
+      const action = pending.action === 'write' || pending.action === 'delete' ? pending.action : 'read'
+      const actionLabel = action === 'write' ? '写入' : action === 'delete' ? '删除' : '读取'
+      const actionHint = action === 'write'
+        ? 'Agent 想把一条记忆写入可见域外的作用域。允许一次只对本次调用生效；拒绝则不写入。'
+        : action === 'delete'
+          ? 'Agent 想删除可见域外的记忆。允许一次只对本次调用生效；拒绝则不删除。'
+          : '以下记忆不在本会话的可见域内。允许一次只对本次调用生效；拒绝则工具拿不到这些内容。'
+
       return h('div', { className: 'memp mem-approval' },
         h('div', { className: 'mem-approval-card', role: 'dialog', 'aria-label': '记忆访问审批' },
           h('div', { className: 'mem-approval-head' },
             h('span', { className: 'mem-approval-dot' }),
-            h('b', null, '记忆访问审批'),
+            h('b', null, `记忆${actionLabel}审批`),
             h('span', { className: 'muted' }, pending.tool || 'memory'),
             h('span', { className: 'spacer' }),
             approvals.length > 1 ? h('span', { className: 'muted' }, `还有 ${approvals.length - 1} 个待审批`) : null,
           ),
           h('div', { className: 'mem-approval-query' }, `Agent 查询：${pending.query || '（未提供）'}`),
-          h('div', { className: 'hint' }, '以下记忆不在本会话的可见域内。允许一次只对本次调用生效，拒绝则工具拿不到这些内容。'),
+          h('div', { className: 'hint' }, actionHint),
           h('div', { className: 'mem-approval-list' },
             pending.items.map((item) => h('div', { className: 'mem-approval-item', key: item.id },
               h('div', { className: 'mem-approval-row' },

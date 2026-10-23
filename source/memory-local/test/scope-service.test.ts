@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 会话作用域 / 自定义作用域 / 多 scope 合并 的服务层与工具层测试(0.5.0)。
  *
  * 覆盖的是 0.5.0 的核心承诺:
@@ -30,6 +30,9 @@ function newService(dir, extra = {}) {
   const svc = new LocalMemoryService({ storeDir: dir, scopes: { global: true, project: true }, ...extra })
   svc.setDefaultScope('session')
   svc.setProjectScope(PROJECT)
+  // 0.20.0 起默认可见域是「会话 + 项目 + global」+ 普通限制:跨到自定义作用域的读写
+  // 会等用户审批。这组测试只考察作用域解析,统一让审批「允许一次」,避免每个用例挂 5 分钟。
+  svc.requestOutOfScope = async () => 'allowed-once'
   return svc
 }
 

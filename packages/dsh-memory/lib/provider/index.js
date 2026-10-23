@@ -502,11 +502,25 @@ export function resolveConfig(config                    = {})                 {
                
  
 
-/** 生效中的可见域(已剔除被 scope 开关禁用的项)。 */
+/**
+ * 生效中的可见域(已剔除被 scope 开关禁用的项)。
+ *
+ * 0.20.0 起**永远有值**:没有显式覆盖时返回默认策略 ——
+ * 「当前会话 + 当前项目 + global」+ 普通限制。`source` 说明这份策略从哪来:
+ *   - `explicit`  = 本会话自己保存过可见范围;
+ *   - `inherited` = 沿 parentSession 链继承来的显式范围;
+ *   - `default`   = 没有显式覆盖,用的默认策略。
+ * 工具层用 `source === 'default'` 区分"默认普通限制"(普通检索不主动把范围外
+ * 也搜一遍)与"用户显式设的普通限制"。
+ */
                                        
                         
                           
+                                              
  
+
+/** 范围外访问的动作(读取 / 写入 / 删除);审批浮层按它换文案。 */
+                                                          
 
 /** 一条"范围外"命中:给审批浮层展示的完整快照(不落盘,进程内存)。 */
                                          
@@ -525,6 +539,8 @@ export function resolveConfig(config                    = {})                 {
             
                    
               
+                                 
+                          
                                        
                
                                  
@@ -533,7 +549,7 @@ export function resolveConfig(config                    = {})                 {
  
 
                                                                     
-                                                     
+                                                                 
                                                   
  
 
@@ -541,6 +557,12 @@ export function resolveConfig(config                    = {})                 {
 const VISIBILITY_APPROVAL_TTL_MS = 5 * 60_000
 /** 审批浮层一次最多展示多少条范围外命中(工具侧仍会返回全部允许的命中)。 */
 const VISIBILITY_APPROVAL_MAX_ITEMS = 20
+
+/**
+ * 没有显式覆盖时的默认限制等级(0.20.0 起)。
+ * 默认范围 = 当前会话 + 当前项目 + global;范围外命中走一次审批。
+ */
+export const DEFAULT_VISIBILITY_LEVEL                  = 'normal'
 
 export class LocalMemoryService                             {
            cfg                
@@ -1389,14 +1411,18 @@ export class LocalMemoryService                             {
    *
    * 起点用**当前会话自己的 id**(不是 resolveCurrentScopes 映射后的父会话):
    * 子 Agent 自己也可以有一份覆盖;没有时才沿链继承父会话 / 根会话。
+   * `inherited` = 找到的那份覆盖不属于当前会话自己。
    */
-          visibilityForSession(sessionId                    )                                      {
-    let id = sessionId ?? ''
+          resolveVisibility(
+    sessionId                    ,
+  )                                                                      {
+    const own = sessionId ?? ''
+    let id = own
     const seen = new Set        ()
     while (id !== '' && !seen.has(id)) {
       seen.add(id)
       const found = this.visibility.get(id)
-      if (found !== undefined) return found
+      if (found !== undefined) return { config: found, inherited: id !== own }
       let parent                    
       try {
         const session = this.sessionLookup?.(id)                                                        
@@ -1420,42 +1446,66 @@ export class LocalMemoryService                             {
     }
   }
 
-  /**
-   * 显式「记忆可见域」的完整策略(含等级与每个 scope 的类型白名单)。
-   * undefined = 没有覆盖;level='none' 时 scopes 仍保留(供面板/下次切换),
-   * 但**不参与**读取限制。
-   */
-  visibilityPolicy(agent         )                                   {
-    const explicit = this.visibilityForSession(this.rawSessionIdOf(agent))
-    if (explicit === undefined) return undefined
-    return { level: explicit.level, scopes: this.filterEnabledRules(explicit.scopes) }
+  /** 没有显式覆盖时的默认可见域范围(当前会话 + 当前项目 + global,各自开关生效)。 */
+          defaultReadScopes(agent         )                {
+    const refs = this.scopeRefs(agent)
+    const out                = []
+    const push = (scope                         , enabled         )       => {
+      if (scope === undefined || !enabled || out.includes(scope)) return
+      out.push(scope)
+    }
+    push(refs.session, this.cfg.sessionEnabled)
+    push(refs.project, this.cfg.projectEnabled)
+    push('global', this.cfg.globalEnabled)
+    return out
   }
 
   /**
-   * 显式「记忆可见范围」的 scope 键列表。
-   * undefined = 不限制(没有覆盖,或等级为 none);
+   * 生效的「记忆可见域」。**永远有值**(0.20.0 起):没有显式覆盖时返回默认策略。
+   * level='none' 时 scopes 仍保留(供面板/下次切换),但**不参与**读写限制。
+   */
+  visibilityPolicy(agent         )                       {
+    const resolved = this.resolveVisibility(this.rawSessionIdOf(agent))
+    if (resolved === undefined) {
+      return {
+        level: DEFAULT_VISIBILITY_LEVEL,
+        scopes: this.defaultReadScopes(agent).map((scope) => ({ scope })),
+        source: 'default',
+      }
+    }
+    return {
+      level: resolved.config.level,
+      scopes: this.filterEnabledRules(resolved.config.scopes),
+      source: resolved.inherited ? 'inherited' : 'explicit',
+    }
+  }
+
+  /**
+   * **显式**「可见范围」的 scope 键列表(不含默认策略,注入半边用它判断是否被
+   * 显式白名单收窄,并决定要不要把 inject.extraScopes 关掉)。
+   * undefined = 本会话没有显式覆盖(或等级为 none);
    * [] = 显式设置了范围但全部被 scope 开关禁用,调用方必须按空处理。
    */
   visibleScopes(agent         )                            {
-    const policy = this.visibilityPolicy(agent)
-    if (policy === undefined || policy.level === 'none') return undefined
-    return policy.scopes.map((rule) => this.canonicalScope(rule.scope))
+    const resolved = this.resolveVisibility(this.rawSessionIdOf(agent))
+    if (resolved === undefined || resolved.config.level === 'none') return undefined
+    return this.filterEnabledRules(resolved.config.scopes).map((rule) => this.canonicalScope(rule.scope))
   }
 
   /** 某个 scope 下允许的记忆类型;undefined = 不限制(可见且没有类型白名单)。 */
   visibleKinds(agent         , scope        )                       {
     const policy = this.visibilityPolicy(agent)
-    if (policy === undefined || policy.level === 'none') return undefined
+    if (policy.level === 'none') return undefined
     const key = this.canonicalScope(scope)
     const rule = policy.scopes.find((item) => this.canonicalScope(item.scope) === key)
     if (rule === undefined) return []
     return rule.kinds !== undefined && rule.kinds.length > 0 ? [...rule.kinds] : undefined
   }
 
-  /** 一条记录(scope + kind)是否落在当前可见域内;等级 none / 无覆盖时恒为 true。 */
+  /** 一条记录(scope + kind)是否落在当前可见域内;等级 none 时恒为 true。 */
   isRecordVisible(agent         , scope        , kind        )          {
     const policy = this.visibilityPolicy(agent)
-    if (policy === undefined || policy.level === 'none') return true
+    if (policy.level === 'none') return true
     const key = this.canonicalScope(scope)
     const rule = policy.scopes.find((item) => this.canonicalScope(item.scope) === key)
     if (rule === undefined) return false
@@ -1464,12 +1514,23 @@ export class LocalMemoryService                             {
   }
 
   /**
+   * 一个作用域是否可读**且可写**(0.20.0 起「可见范围 = 可操作范围」,
+   * save / forget 与读取共用这一份口径)。等级 none 时恒为 true。
+   */
+  isScopeOperable(agent         , scope        )          {
+    const policy = this.visibilityPolicy(agent)
+    if (policy.level === 'none') return true
+    const key = this.canonicalScope(scope)
+    return policy.scopes.some((item) => this.canonicalScope(item.scope) === key)
+  }
+
+  /**
    * 批量过滤用的可见域判定(策略只解析一次,避免每条记录都走一遍 parentSession 链)。
    * undefined = 不限制。
    */
           visibilityFilterFor(agent         )                                                         {
     const policy = this.visibilityPolicy(agent)
-    if (policy === undefined || policy.level === 'none') return undefined
+    if (policy.level === 'none') return undefined
     const byScope = new Map                              ()
     for (const rule of policy.scopes) {
       byScope.set(this.canonicalScope(rule.scope), rule.kinds !== undefined && rule.kinds.length > 0 ? rule.kinds : undefined)
@@ -1570,11 +1631,22 @@ export class LocalMemoryService                             {
     return out
   }
 
-  /** 普通限制:范围外命中时创建一条待审批,等待面板回答(超时按拒绝)。 */
+  /**
+   * 普通限制:范围外命中时创建一条待审批,等待面板回答。
+   * 超时返回 `'timeout'`(和用户主动拒绝区分开,工具层要把真实原因告诉模型);
+   * 调用被中止按拒绝处理。
+   */
   requestOutOfScope(
     agent         ,
-    input                                                                                                 ,
-  )                                       {
+    input   
+                  
+                                         
+                               
+                   
+                                              
+                          
+     ,
+  )                                                   {
     if (input.items.length === 0) return Promise.resolve('allowed-once')
     if (input.signal?.aborted) return Promise.resolve('rejected')
     const sessionId = this.rawSessionIdOf(agent) ?? ''
@@ -1584,7 +1656,7 @@ export class LocalMemoryService                             {
     return new Promise((resolve) => {
       let timer                                           
       const onAbort = () => finish('rejected')
-      const finish = (outcome                             )       => {
+      const finish = (outcome                                         )       => {
         const pending = this.pendingApprovals.get(id)
         if (pending === undefined) return
         this.pendingApprovals.delete(id)
@@ -1592,12 +1664,13 @@ export class LocalMemoryService                             {
         try { input.signal?.removeEventListener('abort', onAbort) } catch { /* 已卸载 */ }
         pending.resolve(outcome)
       }
-      timer = setTimeout(() => finish('rejected'), VISIBILITY_APPROVAL_TTL_MS)
+      timer = setTimeout(() => finish('timeout'), VISIBILITY_APPROVAL_TTL_MS)
       timer.unref?.()
       this.pendingApprovals.set(id, {
         id,
         sessionId,
         tool: input.tool,
+        action: input.action ?? 'read',
         query: input.query,
         items: input.items.slice(0, VISIBILITY_APPROVAL_MAX_ITEMS).map((item) => ({
           ...item,
@@ -1621,6 +1694,7 @@ export class LocalMemoryService                             {
         id: pending.id,
         sessionId: pending.sessionId,
         tool: pending.tool,
+        action: pending.action,
         query: pending.query,
         // 轮询载荷保持轻量:正文截到 1200 字,悬浮需要全文时面板再按 id 取一次。
         items: pending.items.map((item) => ({
@@ -1648,29 +1722,45 @@ export class LocalMemoryService                             {
   /**
    * 无显式 scope 时的**读取**合并集合:当前会话 + 当前项目 + global(各自开关生效、按 key 去重)。
    * 工具 / 注入都用它。会话设置了「可见范围」时以覆盖为准(不再并入默认集合)。
+   * 没有显式覆盖时返回默认三路集合 —— 与默认可见域(`visibilityPolicy().source==='default'`)
+   * 完全相同,所以"默认并没有限制"这句话在 0.20 之后不再成立。
    */
   resolveReadScopes(agent         )                {
     const explicit = this.visibleScopes(agent)
     // level='none' 时 visibleScopes 返回 undefined:不限制读取,继续用默认三路集合。
     if (explicit !== undefined) return explicit
-    const refs = this.scopeRefs(agent)
-    const out                = []
-    const push = (scope                         , enabled         )       => {
-      if (scope === undefined || !enabled || out.includes(scope)) return
-      out.push(scope)
+    return this.defaultReadScopes(agent)
+  }
+
+  /**
+   * 写入/删除护栏(0.20.0):可见范围 = 可操作范围。
+   *
+   * - absolute:范围外一律拒绝,而且**不暴露**这是可见域限制(视为不存在);
+   * - normal:没经过审批就拒绝(工具层会用 `requestOutOfScope` 先问一次,
+   *   批准后带 `visibilityApproved` 再调进来);
+   * - none:不限制。
+   */
+          assertOperable(agent         , scope             )       {
+    if (this.isScopeOperable(agent, scope)) return
+    const level = this.visibilityPolicy(agent).level
+    if (level === 'absolute') {
+      throw memoryError('SCOPE_NOT_WRITABLE', `作用域 ${scope} 不存在或不可写`)
     }
-    push(refs.session, this.cfg.sessionEnabled)
-    push(refs.project, this.cfg.projectEnabled)
-    push('global', this.cfg.globalEnabled)
-    return out
+    throw memoryError('VISIBILITY_APPROVAL_REQUIRED', `作用域 ${scope} 不在本会话的可操作范围内,需要用户审批`)
   }
 
   async save(input                 )                        {
     // 省略 scope 时按当前会话落点 —— 会话上下文必须**从调用方带进来**
     // (工具 handler 拿得到 exec.agent,provider 自己看不到)。
-    const requestedScope = input.scope ?? this.resolveWriteScope((input                                         ).agent)
+    const saveAgent = (input                                         ).agent
+    const requestedScope = input.scope ?? this.resolveWriteScope(saveAgent)
     const scope = this.canonicalScope(requestedScope)
     this.assertScopeAllowed(scope)
+    // 写入护栏:可见范围 = 可操作范围。工具层在普通限制下会先审批,批准后带
+    // `visibilityApproved` 再来;面板写入不带 agent,不受会话可见域约束(用户本人操作)。
+    if (saveAgent !== undefined && (input                                    ).visibilityApproved !== true) {
+      this.assertOperable(saveAgent, scope)
+    }
     // 0.7.0:项目作用域可以带一个显示名(别名)。同一路径同名幂等,不同路径同名拒绝。
     const requestedName = (input                                        ).name
     if (requestedName !== undefined && requestedName !== null && String(requestedName).trim() !== '') {
@@ -2072,11 +2162,28 @@ export class LocalMemoryService                             {
     return undefined
   }
 
-  async forget(input                                                                              )                                              {
+  /**
+   * 删除记录。`agent` + 未审批时按可见域护栏处理(0.20.0):
+   * 范围外一律**当作不存在** —— id 找不到、query 没有匹配,不泄露"被限制";
+   * 普通限制下工具层会先审批,批准后带 `visibilityApproved` 再调进来。
+   */
+  async forget(input   
+               
+                  
+                       
+                          
+                   
+                                
+   )                                              {
+    const guardAgent = input.agent
+    const approved = input.visibilityApproved === true
+    const operable = (scope             )          =>
+      guardAgent === undefined || approved || this.isScopeOperable(guardAgent, scope)
     const ids           = []
     if (input.id) {
       // 按 id 删除天然跨 scope:调用方给的是精确 id,不存在误删别的 scope 的风险。
       for (const s of this.store.allScopes()) {
+        if (!operable(s.scope)) continue
         if (s.remove(input.id)) ids.push(input.id)
       }
       if (ids.length === 0) throw memoryError('RECORD_NOT_FOUND', `id ${input.id} not found`)
@@ -2092,6 +2199,7 @@ export class LocalMemoryService                             {
       for (const scope of targets) {
         if (seen.has(scope)) continue
         seen.add(scope)
+        if (!operable(scope)) continue
         const store = this.store.peek(scope) // 读/删路径不创建
         if (!store) continue
         const hit = this.store.findIdsByQuery(scope, input.query)

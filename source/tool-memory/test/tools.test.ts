@@ -174,3 +174,38 @@ test('renderGetResult：默认正文 + 基本元数据；只取字段时不输�
   assert.equal(missing, '未找到：deadbeef')
   assert.equal(renderGetResult({ records: [], fields: ['content'], missing: [] }, label), '没有找到记忆。')
 })
+
+test('被可见域挡住时渲染真实原因:拒绝/超时/无法审批;绝对限制不出现 withheld', () => {
+  const rejected = renderSearchResult({ records: [], withheld: { count: 3, reason: 'rejected' } }, label)
+  assert.match(rejected, /没有找到可见范围内的相关记忆/)
+  assert.match(rejected, /另有 3 条记忆/)
+  assert.match(rejected, /用户拒绝了本次访问/)
+  assert.match(rejected, /调整「记忆范围」/)
+
+  const timeout = renderGetResult(
+    { records: [], fields: ['content'], missing: ['deadbeef'], withheld: { count: 1, reason: 'timeout' } },
+    label,
+  )
+  assert.match(timeout, /未找到：deadbeef/)
+  assert.match(timeout, /5 分钟内没有得到答复/)
+  assert.match(timeout, /按拒绝处理/)
+
+  const unavailable = renderSearchResult({ records: [], withheld: { count: 2, reason: 'unavailable' } }, label)
+  assert.match(unavailable, /无法发起审批/)
+
+  // 有命中也有 withheld:正文照常渲染,原因跟在后面。
+  const mixed = renderSearchResult({
+    records: [{
+      id: record.id,
+      score: 0.5,
+      scope: 'global',
+      kind: 'fact',
+      tags: [],
+      updatedAt: record.updatedAt,
+      summary: '短摘要',
+    }],
+    withheld: { count: 1, reason: 'rejected' },
+  }, label)
+  assert.match(mixed, /\[0\.500\] abcdef12 \(全局\/fact\) 短摘要/)
+  assert.match(mixed, /用户拒绝了本次访问/)
+})

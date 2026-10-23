@@ -51,7 +51,13 @@ test('面板 /visibility:GET 返回自己的覆盖、生效策略与默认范围
     assert.equal(value.sessionId, 's1')
     assert.equal(value.override, null)
     assert.equal(value.inherited, false)
-    assert.equal(value.effective, null, '没有覆盖时不伪造生效策略')
+    assert.equal(value.source, 'default', '没有显式覆盖时来源是默认策略')
+    assert.equal(value.effective?.level, 'normal', '默认限制等级是普通限制')
+    assert.deepEqual(
+      value.effective?.scopes.map((s) => s.scope),
+      ['session:s1', 'project:D:\\w', 'global'],
+      '默认可见域 = 会话 + 项目 + global',
+    )
     const scopes = value.scopes.map((s) => s.scope)
     assert.deepEqual(scopes.slice(0, 3), ['session:s1', 'project:D:\\w', 'global'], '当前会话/项目/global 在最前')
     assert.deepEqual(value.defaults, ['session:s1', 'project:D:\\w', 'global'], '首次打开按默认集合预选')
@@ -78,7 +84,8 @@ test('面板 /visibility:POST 写入范围 + 等级;0.19.1 忽略 kinds;空选�
     const override = set.out.body.value.override
     assert.equal(override.level, 'normal')
     assert.deepEqual(override.scopes, [{ scope: 'session:s1' }, { scope: 'global' }], 'kinds 不再落盘')
-    assert.deepEqual(set.out.body.value.effective, override, '自己的覆盖就是生效策略')
+    assert.equal(set.out.body.value.source, 'explicit')
+    assert.deepEqual(set.out.body.value.effective?.scopes, override.scopes, '自己的覆盖就是生效策略')
 
     const empty = fakeRes()
     await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/visibility`, { session: 's1', visibility: { scopes: [], level: 'normal' } }), empty)
