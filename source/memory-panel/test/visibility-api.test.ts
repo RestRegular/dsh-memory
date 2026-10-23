@@ -38,11 +38,12 @@ function makeService(dir) {
   return new LocalMemoryService({ storeDir: dir, scopes: { global: true, project: true } })
 }
 
-test('面板 /visibility:GET 返回自己的覆盖、生效范围与可选目录', async () => {
+test('面板 /visibility:GET 返回自己的覆盖、生效策略与带类型的范围目录', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-visibility-'))
   const svc = makeService(dir)
   const session = { id: 's1', header: { id: 's1', cwd: 'D:/w' } }
   try {
+    await svc.save({ scope: 'global', kind: 'rule', content: '全局规则' })
     const res = fakeRes()
     await handleRequest(ctxWith(svc, session), ROUTE, get(`${ROUTE}/visibility?session=s1`), res)
     assert.equal(res.out.status, 200)
@@ -50,16 +51,19 @@ test('面板 /visibility:GET 返回自己的覆盖、生效范围与可选目录
     assert.equal(value.sessionId, 's1')
     assert.equal(value.override, null)
     assert.equal(value.inherited, false)
-    assert.deepEqual(value.effective, ['session:s1', 'project:D:\\w', 'global'])
+    assert.equal(value.effective, null, '没有覆盖时不伪造生效策略')
     const scopes = value.scopes.map((s) => s.scope)
     assert.deepEqual(scopes.slice(0, 3), ['session:s1', 'project:D:\\w', 'global'], '当前会话/项目/global 在最前')
+    assert.ok(Array.isArray(value.kinds) && value.kinds.includes('rule'), '返回已知类型目录')
+    const global = value.scopes.find((s) => s.scope === 'global')
+    assert.deepEqual(global.kinds, [{ kind: 'rule', records: 1 }], '每个 scope 带类型统计')
   } finally {
     svc.flushSync()
     rmSync(dir, { recursive: true, force: true })
   }
 })
 
-test('面板 /visibility:POST 设置与恢复默认;空选择返回 400', async () => {
+test('面板 /visibility:POST 写入范围 + 类型 + 等级;空选择 400;恢复默认', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-visibility-'))
   const svc = makeService(dir)
   const session = { id: 's1', header: { id: 's1', cwd: 'D:/w' } }
@@ -67,23 +71,85 @@ test('面板 /visibility:POST 设置与恢复默认;空选择返回 400', async 
     const set = fakeRes()
     await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/visibility`, {
       session: 's1',
-      scopes: ['project:D:/w', 'global'],
+      visibility: {
+        scopes: [{ scope: 'session:s1' }, { scope: 'global', kinds: ['rule'] }],
+        level: 'normal',
+      },
     }), set)
     assert.equal(set.out.status, 200)
-    assert.deepEqual(set.out.body.value.override, ['project:D:/w', 'global'])
-    assert.deepEqual(set.out.body.value.effective, ['project:D:\\w', 'global'])
-    assert.deepEqual(svc.sessionVisibility('s1'), ['project:D:/w', 'global'])
+    const override = set.out.body.value.override
+    assert.equal(override.level, 'normal')
+    assert.deepEqual(override.scopes, [{ scope: 'session:s1' }, { scope: 'global', kinds: ['rule'] }])
+    assert.deepEqual(set.out.body.value.effective, override, '自己的覆盖就是生效策略')
 
     const empty = fakeRes()
-    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/visibility`, { session: 's1', scopes: [] }), empty)
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/visibility`, { session: 's1', visibility: { scopes: [], level: 'normal' } }), empty)
     assert.equal(empty.out.status, 400)
     assert.equal(empty.out.body.error.code, 'SCOPE_EMPTY')
 
     const reset = fakeRes()
-    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/visibility`, { session: 's1', scopes: null }), reset)
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/visibility`, { session: 's1', visibility: null }), reset)
     assert.equal(reset.out.status, 200)
     assert.equal(reset.out.body.value.override, null)
-    assert.deepEqual(reset.out.body.value.effective, ['session:s1', 'project:D:\\w', 'global'])
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('面板 /visibility:兼容 0.18 的 { scopes: string[] } 写法', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-visibility-'))
+  const svc = makeService(dir)
+  const session = { id: 's1', header: { id: 's1', cwd: 'D:/w' } }
+  try {
+    const res = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/visibility`, { session: 's1', scopes: ['global'] }), res)
+    assert.equal(res.out.status, 200)
+    assert.deepEqual(res.out.body.value.override, { scopes: [{ scope: 'global' }], level: 'absolute' })
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('面板 /approvals:列待审批并回答一次', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-visibility-'))
+  const svc = makeService(dir)
+  const session = { id: 's1', header: { id: 's1', cwd: 'D:/w' } }
+  try {
+    const agent = { session }
+    const verdict = svc.requestOutOfScope(agent, {
+      tool: 'memory_search',
+      query: '发布流程',
+      items: [{
+        id: 'abc12345deadbeef',
+        scope: 'global',
+        kind: 'rule',
+        content: '范围外规则正文',
+        tags: ['release'],
+        importance: 0.9,
+        updatedAt: Date.now(),
+        reason: 'scope',
+      }],
+    })
+
+    const list = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, get(`${ROUTE}/approvals?session=s1`), list)
+    assert.equal(list.out.status, 200)
+    assert.equal(list.out.body.value.approvals.length, 1)
+    assert.equal(list.out.body.value.approvals[0].query, '发布流程')
+    assert.equal(list.out.body.value.approvals[0].items[0].content, '范围外规则正文')
+    const id = list.out.body.value.approvals[0].id
+
+    const answer = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/approvals`, { id, outcome: 'allowed-once' }), answer)
+    assert.equal(answer.out.status, 200)
+    assert.equal(answer.out.body.value.answered, true)
+    assert.equal(await verdict, 'allowed-once')
+
+    const again = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/approvals`, { id, outcome: 'rejected' }), again)
+    assert.equal(again.out.body.value.answered, false, '已经回答过的审批不能重复消费')
   } finally {
     svc.flushSync()
     rmSync(dir, { recursive: true, force: true })

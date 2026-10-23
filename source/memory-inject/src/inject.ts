@@ -40,6 +40,8 @@ export interface InjectMemoryService {
    * 不并入 inject.extraScopes,也不追加 fork 父会话。
    */
   visibleScopes?(agent: unknown): string[]
+  /** 完整可见域(等级 + 每个 scope 的类型白名单);用于按类型收窄召回。 */
+  visibilityPolicy?(agent: unknown): { level: 'absolute' | 'normal' | 'none'; scopes: Array<{ scope: string; kinds?: string[] }> } | undefined
   /** 当前已退役的记录 id;可选,老 provider 没有时注入层自己按 supersedes 扫描。 */
   supersededIds?(scopes?: string[]): string[]
   /** 按 id / 前缀取记录(memory_get 正文去重用);老 provider 没有时跳过去重标记。 */
@@ -140,6 +142,8 @@ export interface PreStepView {
    * 这里是纯函数层,拿不到也不该去猜。缺省(undefined)时由 provider 用它自己的默认集合。
    */
   scopes?: readonly string[]
+  /** 可见域按 scope 的类型白名单(scope → 允许的 kind);缺省 = 不按类型过滤。 */
+  kinds?: Record<string, readonly string[]>
   /** 当前会话 id;按会话管理去重状态,缺省时退化为单进程兜底桶。 */
   sessionId?: string
 }
@@ -323,13 +327,13 @@ export interface RecallResult {
  *   - 同一段文本 = 最后一道幂等。
  */
 export class MemoryInjector {
-  private readonly search: (query: string, signal?: AbortSignal, scopes?: readonly string[]) => Promise<MemoryHit[]>
+  private readonly search: (query: string, signal?: AbortSignal, scopes?: readonly string[], kinds?: Record<string, readonly string[]>) => Promise<MemoryHit[]>
   private readonly cfg: ConfigSource<InjectConfig>
   private readonly renderOptions: ConfigSource<RecallRenderOptions>
   private readonly state: InjectionState
 
   constructor(
-    search: (query: string, signal?: AbortSignal, scopes?: readonly string[]) => Promise<MemoryHit[]>,
+    search: (query: string, signal?: AbortSignal, scopes?: readonly string[], kinds?: Record<string, readonly string[]>) => Promise<MemoryHit[]>,
     cfg: ConfigSource<InjectConfig>,
     renderOptions: ConfigSource<RecallRenderOptions> = {},
     state: InjectionState = new InjectionState(),
@@ -362,7 +366,7 @@ export class MemoryInjector {
 
     let hits: MemoryHit[]
     try {
-      hits = await this.search(query, input.signal, input.scopes)
+      hits = await this.search(query, input.signal, input.scopes, input.kinds)
     } catch {
       // 检索失败不能打断 agent 循环;审计会区分"失败"与"成功但无结果"。
       return {
@@ -460,10 +464,10 @@ const MAX_DIGESTED_SESSIONS = 500
  */
 export class MemoryDigester {
   private readonly done = new Set<string>()
-  private readonly list: (scopes: readonly string[] | undefined) => Promise<MemoryRecord[]>
+  private readonly list: (scopes: readonly string[] | undefined, agent?: unknown) => Promise<MemoryRecord[]>
 
   constructor(
-    list: (scopes: readonly string[] | undefined) => Promise<MemoryRecord[]>,
+    list: (scopes: readonly string[] | undefined, agent?: unknown) => Promise<MemoryRecord[]>,
   ) {
     this.list = list
   }
@@ -505,6 +509,7 @@ export class MemoryDigester {
     sessionId: string | undefined,
     scopes: readonly string[] | undefined,
     render: (records: MemoryRecord[]) => T | null,
+    agent?: unknown,
   ): Promise<
     | { status: 'ok'; value?: T; empty: boolean; candidates: number }
     | { status: 'failed'; errorCode: string }
@@ -515,7 +520,7 @@ export class MemoryDigester {
     this.markDone(sessionId)
     let records: MemoryRecord[]
     try {
-      records = await this.list(scopes)
+      records = await this.list(scopes, agent)
     } catch {
       return { status: 'failed', errorCode: 'source_load_failed' }
     }

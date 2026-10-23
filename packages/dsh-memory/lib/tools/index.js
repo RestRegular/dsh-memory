@@ -37,12 +37,39 @@ import { canonicalWorkspacePath, normalizeScopeInput, resolveScopeRef } from '..
                      
  
 
+/** 范围外访问的处理方式(与 provider 的会话可见域一致)。 */
+                                                            
+
+                                     
+               
+                           
+                  
+ 
+
+/** provider 解析出的生效可见域;undefined = 没有覆盖(不限制)。 */
+                                       
+                        
+                              
+ 
+
+/** 一条范围外命中,交给审批浮层展示。 */
+                                         
+            
+               
+              
+                 
+                
+                    
+                   
+                          
+ 
+
 /** 只有这一层需要的能力子集(provider 在宿主里提供,测试里可以 mock)。 */
                                     
                                                               
-                                                                                                                                                                     
+                                                                                                                                                                                          
                                                                      
-                                                                                                                        
+                                                                                                                                                              
                                      
                                   
                                                       
@@ -54,6 +81,10 @@ import { canonicalWorkspacePath, normalizeScopeInput, resolveScopeRef } from '..
                                          
      
                                                
+                                                   
+                                                                     
+                                     
+                                                                                                                                                                         
                                          
                                              
                                     
@@ -131,14 +162,100 @@ function visibleScopeList(service                   , agent         )           
   return undefined
 }
 
+/** 完整可见域;老 provider / 解析失败时退化为 undefined(不限制)。 */
+function visibilityPolicy(service                   , agent         )                                   {
+  try {
+    const policy = service.visibilityPolicy?.(agent)
+    if (policy !== undefined && policy !== null) {
+      const level                  = policy.level === 'absolute' || policy.level === 'none' ? policy.level : 'normal'
+      return { level, scopes: Array.isArray(policy.scopes) ? policy.scopes : [] }
+    }
+  } catch { /* 降级为不限制 */ }
+  return undefined
+}
+
+function scopeInPolicy(policy                                  , scope        )          {
+  if (policy === undefined || policy.level === 'none') return true
+  return policy.scopes.some((rule) => rule.scope === scope)
+}
+
+/** 这条记录是否在可见域内(scope 与类型都要满足)。 */
+function recordAllowed(policy                                  , scope        , kind        )          {
+  if (policy === undefined || policy.level === 'none') return true
+  const rule = policy.scopes.find((item) => item.scope === scope)
+  if (rule === undefined) return false
+  return rule.kinds === undefined || rule.kinds.length === 0 || rule.kinds.includes(kind)
+}
+
+/** 记录在可见域外时,是"整个 scope 不可见"还是"只是类型不允许"。 */
+function outsideReason(policy                                  , scope        )                   {
+  return scopeInPolicy(policy, scope) ? 'kind' : 'scope'
+}
+
+function recordsToApprovalItems(
+  policy                                  ,
+  records                                                                                                                                  ,
+)                           {
+  return records.map((record) => ({
+    id: record.id,
+    scope: record.scope,
+    kind: record.kind,
+    content: record.content,
+    tags: Array.isArray(record.tags) ? record.tags : [],
+    importance: typeof record.importance === 'number' ? record.importance : 0,
+    updatedAt: record.updatedAt,
+    reason: outsideReason(policy, record.scope),
+  }))
+}
+
+/**
+ * 普通限制:把范围外命中交给用户审批一次。
+ * provider 不支持审批(旧版本)时按拒绝处理 —— 不能静默把范围外记忆放出去。
+ */
+async function askOutOfScope(
+  service                   ,
+  agent         ,
+  policy                                  ,
+  tool        ,
+  query        ,
+  records                                                                                                                                  ,
+  signal              ,
+)                   {
+  if (records.length === 0) return true
+  if (typeof service.requestOutOfScope !== 'function') return false
+  if (signal?.aborted) return false
+  try {
+    const outcome = await service.requestOutOfScope(agent, {
+      tool,
+      query,
+      items: recordsToApprovalItems(policy, records),
+      ...(signal !== undefined ? { signal } : {}),
+    })
+    return outcome === 'allowed-once'
+  } catch {
+    return false
+  }
+}
+
 /** 显式询问一个不在可见范围内的 scope 时给出明确错误,而不是返回空结果。 */
 function assertScopeVisible(service                   , agent         , scope             )       {
-  const visible = visibleScopeList(service, agent)
-  if (visible === undefined || visible.includes(scope)) return
+  const policy = visibilityPolicy(service, agent)
+  if (policy === undefined || policy.level === 'none' || scopeInPolicy(policy, scope)) return
+  const visible = policy.scopes.map((rule) => rule.scope)
   throw new MemoryToolError(
     'SCOPE_NOT_VISIBLE',
-    `当前会话的「记忆可见范围」不包含 ${scope};只能读取: ${visible.length > 0 ? visible.join(', ') : '(无)'}`,
+    `当前会话的「记忆可见域」不包含 ${scope};只能读取: ${visible.length > 0 ? visible.join(', ') : '(无)'}`,
   )
+}
+
+/** 规范里所有已知 scope(用来在普通限制下把范围外也搜一遍,看看有没有可审批的命中)。 */
+function allKnownScopes(service                   )                {
+  try {
+    service.discoverScopes?.()
+    return [...new Set((service.scopeStats?.() ?? []).map((item) => item.scope))]
+  } catch {
+    return []
+  }
 }
 
 /** 该服务/配置下"当前会话 + 当前项目 + global"的合并读取集合(去重)。 */
@@ -340,6 +457,8 @@ export function summarize(content        , chars         = DEFAULT_SUMMARY_CHARS
 
                                
                       
+                                    
+                                                               
  
 
 export function memorySearchTool(opts                    )                                     {
@@ -360,34 +479,55 @@ export function memorySearchTool(opts                    )                      
       }
       const resolved = resolveScope(opts, service, exec, args.scope, 'read')
       const agent = agentOf(exec)
+      const policy = visibilityPolicy(service, agent)
+      const level = policy?.level
+      const visible = policy !== undefined && level !== 'none'
+        ? policy.scopes.map((rule) => rule.scope)
+        : visibleScopeList(service, agent)
       let scopes                           
       if (resolved.all) {
-        const visible = visibleScopeList(service, agent)
         if (visible !== undefined) {
           // 'all' 在有可见范围限制时只等于"所有可见范围",不是磁盘上的全部 scope。
-          scopes = visible
+          // 普通限制额外把磁盘上其它 scope 也搜一遍,才有"范围外命中"可审批。
+          scopes = level === 'normal' ? [...new Set([...visible, ...allKnownScopes(service)])] : visible
         } else {
-          // 'all' = 所有已发现作用域;scopeStats() 自身会先做 discovery(带限流)。
-          scopes = (service.scopeStats?.() ?? []).map((s) => s.scope)
-          service.discoverScopes?.()
+          scopes = allKnownScopes(service)
         }
       } else if (resolved.scope === undefined) {
         // 省略 scope:三路合并(会话 + 项目 + global),或显式可见范围。
-        scopes = readScopes(opts, service, agent)
-      } else {
+        const merged = readScopes(opts, service, agent)
+        scopes = level === 'normal' ? [...new Set([...merged, ...allKnownScopes(service)])] : merged
+      } else if (level === 'absolute') {
         assertScopeVisible(service, agent, resolved.scope)
       }
       const chars = resolveSummaryChars(args.summaryChars)
       try {
+        const wantedTopK = args.topK !== undefined ? Math.min(20, Math.max(1, args.topK)) : undefined
         const hits = await service.search({
           text: args.query,
           ...(resolved.scope !== undefined ? { scope: resolved.scope } : {}),
           ...(scopes !== undefined ? { scopes } : {}),
-          ...(args.topK !== undefined ? { topK: args.topK } : {}),
+          // 多取一些候选,避免范围外命中挤掉范围内的结果。
+          topK: Math.min(60, Math.max(10, (wantedTopK ?? 10) * 3)),
           ...(args.includeSuperseded === true ? { includeSuperseded: true } : {}),
         })
-        return {
-          records: hits.map((h) => ({
+        const inside = hits.filter((hit) => recordAllowed(policy, hit.record.scope, hit.record.kind))
+        const outside = hits.filter((hit) => !recordAllowed(policy, hit.record.scope, hit.record.kind))
+        let granted = false
+        if (outside.length > 0 && level === 'normal') {
+          granted = await askOutOfScope(
+            service,
+            agent,
+            policy,
+            'memory_search',
+            args.query,
+            outside.map((hit) => hit.record),
+            (exec                                        )?.signal,
+          )
+        }
+        const selected = granted ? hits : inside
+        const result               = {
+          records: selected.map((h) => ({
             id: h.record.id,
             score: h.score,
             scope: h.record.scope,
@@ -397,6 +537,11 @@ export function memorySearchTool(opts                    )                      
             summary: summarize(h.record.content, chars),
           })),
         }
+        if (!granted && outside.length > 0) {
+          result.withheld = { count: outside.length, reason: level === 'normal' ? 'rejected' : 'absolute' }
+        }
+        if (wantedTopK !== undefined) result.records = result.records.slice(0, wantedTopK)
+        return result
       } catch (error) {
         throw toolError(error)
       }
@@ -460,6 +605,8 @@ export function memoryForgetTool(opts                    )                      
                                                                                                  
                                                     
                                                                                
+                                    
+                                                               
  
 
 export function memoryListTool(opts                    )                                 {
@@ -475,44 +622,73 @@ export function memoryListTool(opts                    )                        
       const service = svc(opts)
       const resolved = resolveScope(opts, service, exec, args.scope, 'read')
       const agent = agentOf(exec)
+      const policy = visibilityPolicy(service, agent)
+      const level = policy?.level
+      const visible = policy !== undefined && level !== 'none'
+        ? policy.scopes.map((rule) => rule.scope)
+        : visibleScopeList(service, agent)
       let scopes                           
       if (resolved.all) {
-        const visible = visibleScopeList(service, agent)
-        if (visible !== undefined) scopes = visible
-        else {
-          scopes = (service.scopeStats?.() ?? []).map((s) => s.scope)
-          service.discoverScopes?.()
+        if (visible !== undefined) {
+          scopes = level === 'normal' ? [...new Set([...visible, ...allKnownScopes(service)])] : visible
+        } else {
+          scopes = allKnownScopes(service)
         }
       } else if (resolved.scope === undefined) {
-        // 省略 scope:默认**只列当前会话**(按需求;读全部请显式 'all')
+        // 省略 scope:默认**只列当前会话**(按需求;读全部请显式 'all')。
+        // 这是有意为之的窄口径,不因为"普通限制"就去列范围外的东西。
         scopes = readScopes(opts, service, agent).slice(0, 1)
-      } else {
+      } else if (level === 'absolute') {
         assertScopeVisible(service, agent, resolved.scope)
       }
       let records                       
+      let withheld                        
       try {
+        const limit = args.limit !== undefined ? Math.min(200, Math.max(1, args.limit)) : 50
         const raw = await service.list({
           ...(resolved.scope !== undefined ? { scope: resolved.scope } : {}),
           ...(scopes !== undefined ? { scopes } : {}),
           ...(args.kind ? { kind: args.kind } : {}),
-          ...(args.limit !== undefined ? { limit: args.limit } : {}),
+          // 多取一些候选,避免范围外记录挤掉范围内结果。
+          limit: Math.min(200, Math.max(limit, limit * 2)),
         })
-        records = raw.map((r) => ({
+        const inside = raw.filter((record) => recordAllowed(policy, record.scope, record.kind))
+        const outside = raw.filter((record) => !recordAllowed(policy, record.scope, record.kind))
+        let granted = false
+        if (outside.length > 0 && level === 'normal') {
+          granted = await askOutOfScope(
+            service,
+            agent,
+            policy,
+            'memory_list',
+            resolved.scope ?? args.scope ?? 'all',
+            outside,
+            (exec                                        )?.signal,
+          )
+        }
+        const selected = (granted ? raw : inside).slice(0, limit)
+        records = selected.map((r) => ({
           id: r.id,
           scope: r.scope,
           kind: r.kind,
           updatedAt: r.updatedAt,
           content: r.content,
         }))
+        if (!granted && outside.length > 0) {
+          withheld = { count: outside.length, reason: level === 'normal' ? 'rejected' : 'absolute' }
+        }
       } catch (error) {
         throw toolError(error)
       }
       const statsAll = service.scopeStats?.()
-      const visible = visibleScopeList(service, agent)
       const stats = statsAll !== undefined && visible !== undefined
         ? statsAll.filter((s) => visible.includes(s.scope))
         : statsAll
-      return stats !== undefined ? { records, scopeStats: stats } : { records }
+      return {
+        records,
+        ...(stats !== undefined ? { scopeStats: stats } : {}),
+        ...(withheld !== undefined ? { withheld } : {}),
+      }
     },
   }
 }
@@ -552,6 +728,8 @@ export const DEFAULT_GET_FIELDS             = ['content', 'scope', 'kind', 'tags
                                    
                     
                    
+                                         
+                                                               
  
 
 const FIELD_BY_LOWER = new Map                  (GET_FIELDS.map((field) => [field.toLowerCase(), field]))
@@ -634,14 +812,32 @@ export function memoryGetTool(opts                    )                         
       const chars = resolveSummaryChars(args.summaryChars)
       try {
         const all = service.getByIds(ids)
-        // 显式可见范围是白名单:即使知道 id,也不能读别的范围的正文。未设置时保持
-        // 旧行为(记忆 id 本身是随机不可猜的,跨 scope 取全文是既有能力)。
-        const visible = visibleScopeList(service, agentOf(exec))
-        const found = visible === undefined ? all : all.filter((r) => visible.includes(r.scope))
+        // 可见域是白名单:即使知道 id,也不能直接读别的范围/别的类型的正文。
+        const agent = agentOf(exec)
+        const policy = visibilityPolicy(service, agent)
+        const level = policy?.level
+        const inside = all.filter((record) => recordAllowed(policy, record.scope, record.kind))
+        const outside = all.filter((record) => !recordAllowed(policy, record.scope, record.kind))
+        let granted = false
+        if (outside.length > 0 && level === 'normal') {
+          granted = await askOutOfScope(
+            service,
+            agent,
+            policy,
+            'memory_get',
+            ids.join(' '),
+            outside,
+            (exec                                        )?.signal,
+          )
+        }
+        const found = granted ? all : inside
         return {
           records: found.map((r) => pickGetFields(r, fields, chars)),
           fields,
           missing: ids.filter((token) => !found.some((r) => r.id === token || r.id.startsWith(token))),
+          ...(!granted && outside.length > 0
+            ? { withheld: { count: outside.length, reason: level === 'normal' ? 'rejected' : 'absolute' } }
+            : {}),
         }
       } catch (error) {
         throw toolError(error)

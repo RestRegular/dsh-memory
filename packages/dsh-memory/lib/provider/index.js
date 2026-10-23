@@ -27,7 +27,13 @@ import {
                 
 } from './scope.js'
 import { ScopeNames } from './scope-names.js'
-import { SessionVisibilityStore } from './session-visibility.js'
+import {
+  SessionVisibilityStore,
+  cleanVisibilityRules,
+                               
+                       
+                      
+} from './session-visibility.js'
 import { mergeInjectSettings, normalizeInjectSettings,                     } from './inject-settings.js'
 import { buildStats, lexicalScore, recordScore, tokenize, cosine, normalizeInPlace, hasStrongHit } from './scoring.js'
 import { EmbedClient } from './embed.js'
@@ -496,6 +502,46 @@ export function resolveConfig(config                    = {})                 {
                
  
 
+/** 生效中的可见域(已剔除被 scope 开关禁用的项)。 */
+                                       
+                        
+                          
+ 
+
+/** 一条"范围外"命中:给审批浮层展示的完整快照(不落盘,进程内存)。 */
+                                         
+            
+               
+              
+                 
+                
+                    
+                   
+                                           
+                          
+ 
+
+                                         
+            
+                   
+              
+                                       
+               
+                                 
+                   
+                   
+ 
+
+                                                                    
+                                                     
+                                                  
+ 
+
+/** 普通限制下一次审批最多等多久;超时按拒绝处理(工具不会无限挂住)。 */
+const VISIBILITY_APPROVAL_TTL_MS = 5 * 60_000
+/** 审批浮层一次最多展示多少条范围外命中(工具侧仍会返回全部允许的命中)。 */
+const VISIBILITY_APPROVAL_MAX_ITEMS = 20
+
 export class LocalMemoryService                             {
            cfg                
            store             
@@ -518,6 +564,11 @@ export class LocalMemoryService                             {
           inject                
   /** 会话级「记忆可见范围」覆盖;没有覆盖时沿用默认三路集合。 */
                    visibility                        
+  /** 可见域变更通知:下一次 pre-step 注入给 Agent 后删除(按会话)。 */
+                   visibilityNotices = new Map                                                                ()
+  /** 普通限制下等待用户审批的范围外访问(按审批 id)。 */
+                   pendingApprovals = new Map                                   ()
+          approvalSeq = 0
   /**
    * 会话 id → live session 的只读查询(用于沿 parentSession 链继承可见范围)。
    * 宿主侧 apply.ts 注入;旧宿主 / 测试里没有时退化为只看当前会话。
@@ -695,8 +746,10 @@ export class LocalMemoryService                             {
    *
    * 默认排除已被 supersede 的旧记录;需要历史/审计时显式 includeSuperseded。
    */
-  listSync(input                                                                                                                   = {})                 {
+  listSync(input                                                                                                                                    = {})                 {
     const wanted = (input.scopes ?? []).map((scope) => this.canonicalScope(scope))
+    // 注入侧必须按可见域的类型白名单过滤;工具侧不传 agent(它需要范围外命中来发起审批)。
+    const visibleFilter = input.agent !== undefined ? this.visibilityFilterFor(input.agent) : undefined
     const seen = new Set             ()
     const stores               = []
     for (const scope of wanted) {
@@ -714,6 +767,7 @@ export class LocalMemoryService                             {
         // 过期 state 默认不参与任何自动注入/规则渲染;memory_get(id) 与面板仍可取。
         if (!input.includeExpired && rec.expiredAt !== undefined && rec.expiredAt < now) continue
         if (input.kind !== undefined && rec.kind !== input.kind) continue
+        if (visibleFilter !== undefined && !visibleFilter(rec.scope, rec.kind)) continue
         out.push(rec)
       }
     }
@@ -1313,29 +1367,30 @@ export class LocalMemoryService                             {
   }
 
   /** 只保留当前配置允许的 scope(覆盖集合里若含被禁用的 scope,静默剔除)。 */
-          filterEnabledScopes(scopes                   )                {
-    const out                = []
-    for (const raw of scopes) {
-      const scope = this.canonicalScope(raw)
-      if (out.includes(scope)) continue
+          filterEnabledRules(rules                           )                   {
+    const out                   = []
+    for (const raw of rules) {
+      const scope = this.canonicalScope(raw.scope)
+      if (out.some((rule) => rule.scope === scope)) continue
       switch (scopeKind(scope)) {
         case 'global': if (!this.cfg.globalEnabled) continue; break
         case 'project': if (!this.cfg.projectEnabled) continue; break
         case 'session': if (!this.cfg.sessionEnabled) continue; break
         default: if (!this.cfg.customEnabled) continue; break
       }
-      out.push(scope)
+      const kinds = Array.isArray(raw.kinds) ? raw.kinds.filter((kind) => typeof kind === 'string' && kind !== '') : []
+      out.push(kinds.length > 0 ? { scope, kinds } : { scope })
     }
     return out
   }
 
   /**
-   * 从会话 id 沿 parentSession 链找最近的显式可见范围。
+   * 从会话 id 沿 parentSession 链找最近的显式可见域。
    *
    * 起点用**当前会话自己的 id**(不是 resolveCurrentScopes 映射后的父会话):
    * 子 Agent 自己也可以有一份覆盖;没有时才沿链继承父会话 / 根会话。
    */
-          visibilityForSession(sessionId                    )                       {
+          visibilityForSession(sessionId                    )                                      {
     let id = sessionId ?? ''
     const seen = new Set        ()
     while (id !== '' && !seen.has(id)) {
@@ -1366,44 +1421,230 @@ export class LocalMemoryService                             {
   }
 
   /**
-   * 显式「记忆可见范围」:解析当前 agent(含子 Agent 的 parentSession 链)的覆盖。
-   * undefined = 没有覆盖(调用方沿用默认三路集合 / 不限制 memory_get);
+   * 显式「记忆可见域」的完整策略(含等级与每个 scope 的类型白名单)。
+   * undefined = 没有覆盖;level='none' 时 scopes 仍保留(供面板/下次切换),
+   * 但**不参与**读取限制。
+   */
+  visibilityPolicy(agent         )                                   {
+    const explicit = this.visibilityForSession(this.rawSessionIdOf(agent))
+    if (explicit === undefined) return undefined
+    return { level: explicit.level, scopes: this.filterEnabledRules(explicit.scopes) }
+  }
+
+  /**
+   * 显式「记忆可见范围」的 scope 键列表。
+   * undefined = 不限制(没有覆盖,或等级为 none);
    * [] = 显式设置了范围但全部被 scope 开关禁用,调用方必须按空处理。
    */
   visibleScopes(agent         )                            {
-    const explicit = this.visibilityForSession(this.rawSessionIdOf(agent))
-    return explicit === undefined ? undefined : this.filterEnabledScopes(explicit)
+    const policy = this.visibilityPolicy(agent)
+    if (policy === undefined || policy.level === 'none') return undefined
+    return policy.scopes.map((rule) => this.canonicalScope(rule.scope))
+  }
+
+  /** 某个 scope 下允许的记忆类型;undefined = 不限制(可见且没有类型白名单)。 */
+  visibleKinds(agent         , scope        )                       {
+    const policy = this.visibilityPolicy(agent)
+    if (policy === undefined || policy.level === 'none') return undefined
+    const key = this.canonicalScope(scope)
+    const rule = policy.scopes.find((item) => this.canonicalScope(item.scope) === key)
+    if (rule === undefined) return []
+    return rule.kinds !== undefined && rule.kinds.length > 0 ? [...rule.kinds] : undefined
+  }
+
+  /** 一条记录(scope + kind)是否落在当前可见域内;等级 none / 无覆盖时恒为 true。 */
+  isRecordVisible(agent         , scope        , kind        )          {
+    const policy = this.visibilityPolicy(agent)
+    if (policy === undefined || policy.level === 'none') return true
+    const key = this.canonicalScope(scope)
+    const rule = policy.scopes.find((item) => this.canonicalScope(item.scope) === key)
+    if (rule === undefined) return false
+    if (rule.kinds === undefined || rule.kinds.length === 0) return true
+    return rule.kinds.includes(kind)
+  }
+
+  /**
+   * 批量过滤用的可见域判定(策略只解析一次,避免每条记录都走一遍 parentSession 链)。
+   * undefined = 不限制。
+   */
+          visibilityFilterFor(agent         )                                                         {
+    const policy = this.visibilityPolicy(agent)
+    if (policy === undefined || policy.level === 'none') return undefined
+    const byScope = new Map                              ()
+    for (const rule of policy.scopes) {
+      byScope.set(this.canonicalScope(rule.scope), rule.kinds !== undefined && rule.kinds.length > 0 ? rule.kinds : undefined)
+    }
+    return (scope, kind) => {
+      const key = this.canonicalScope(scope)
+      if (!byScope.has(key)) return false
+      const kinds = byScope.get(key)
+      return kinds === undefined || kinds.includes(kind)
+    }
   }
 
   /** 面板:读取某会话自己的覆盖(null = 没有覆盖,继续用默认集合)。 */
-  sessionVisibility(sessionId        )                  {
+  sessionVisibility(sessionId        )                                 {
     if (typeof sessionId !== 'string' || sessionId.trim() === '') return null
-    const scopes = this.visibility.get(sessionId.trim())
-    return scopes === undefined ? null : [...scopes]
+    const config = this.visibility.get(sessionId.trim())
+    return config === undefined ? null : config
   }
 
-  /** 面板:写入/清除某会话的覆盖。null = 恢复默认。 */
-  setSessionVisibility(sessionId        , scopes                          )                  {
+  /**
+   * 面板:写入/清除某会话的覆盖。null = 恢复默认。
+   * 也接受 0.18 的 `string[]`(按绝对限制 + 全部类型),避免外部调用方升级即断。
+   */
+  setSessionVisibility(sessionId        , config                                                    )                                 {
     if (typeof sessionId !== 'string' || sessionId.trim() === '') return null
-    const cleaned = scopes === null ? null : this.normalizeVisibilityScopes(scopes)
-    if (cleaned !== null && cleaned.length === 0) {
+    const normalized                                 = config === null
+      ? null
+      : Array.isArray(config)
+        ? { scopes: (config                     ).map((scope) => ({ scope })), level: 'absolute'                    }
+        : config                           
+    const cleaned = normalized === null ? null : this.normalizeVisibilityConfig(normalized)
+    const written = this.visibility.set(sessionId.trim(), cleaned)
+    // 变更通知:下一次 pre-step 以 user 消息注入,让 Agent 知道新范围与新规则。
+    this.visibilityNotices.set(sessionId.trim(), { config: written, at: Date.now() })
+    return written
+  }
+
+  /** 校验并规范化面板提交的可见域(必须是具体作用域键;不接受 all/current-*)。 */
+          normalizeVisibilityConfig(config                         )                          {
+    const rules = cleanVisibilityRules(config.scopes)
+    if (rules === undefined || rules.length === 0) {
       throw memoryError('SCOPE_EMPTY', '至少选择一个可见的记忆范围')
     }
-    return this.visibility.set(sessionId.trim(), cleaned)
-  }
-
-  /** 校验并规范化面板提交的 scope 键(必须是具体键;不接受 all/current-*)。 */
-          normalizeVisibilityScopes(scopes                   )           {
-    const out           = []
-    for (const raw of scopes) {
-      const normalized = normalizeScopeInput(raw)
+    const out                   = []
+    for (const rule of rules) {
+      const normalized = normalizeScopeInput(rule.scope)
       if (!normalized.ok) throw memoryError(normalized.code, normalized.message)
       if (normalized.kind === 'all' || normalized.kind === 'current-session' || normalized.kind === 'current-project') {
-        throw memoryError('SCOPE_INVALID', `可见范围必须是具体作用域键: ${JSON.stringify(raw)}`)
+        throw memoryError('SCOPE_INVALID', `可见范围必须是具体作用域键: ${JSON.stringify(rule.scope)}`)
       }
-      if (normalized.scope !== undefined && !out.includes(normalized.scope)) out.push(normalized.scope)
+      if (normalized.scope === undefined) continue
+      const scope = this.canonicalScope(normalized.scope)
+      if (out.some((item) => item.scope === scope)) continue
+      const kinds = Array.isArray(rule.kinds)
+        ? [...new Set(rule.kinds.filter((kind) => typeof kind === 'string' && kind.trim() !== '').map((kind) => kind.trim()))]
+        : []
+      out.push(kinds.length > 0 ? { scope, kinds } : { scope })
+    }
+    if (out.length === 0) throw memoryError('SCOPE_EMPTY', '至少选择一个可见的记忆范围')
+    const level                  = config.level === 'normal' || config.level === 'none' ? config.level : 'absolute'
+    return { scopes: out, level }
+  }
+
+  /**
+   * 取出并删除某会话待注入的「可见域变更」通知。
+   * 沿 parentSession 链找:子 Agent 继承父会话的范围,也应该收到父会话的变更。
+   */
+  takeVisibilityNotice(agent         )                                                         {
+    let id = this.rawSessionIdOf(agent) ?? ''
+    const seen = new Set        ()
+    while (id !== '' && !seen.has(id)) {
+      seen.add(id)
+      const found = this.visibilityNotices.get(id)
+      if (found !== undefined) {
+        this.visibilityNotices.delete(id)
+        return { config: found.config }
+      }
+      let parent                    
+      try {
+        const session = this.sessionLookup?.(id)                                                        
+        parent = typeof session?.header?.parentSession === 'string' && session.header.parentSession !== ''
+          ? session.header.parentSession
+          : undefined
+      } catch { parent = undefined }
+      id = parent ?? ''
+    }
+    return undefined
+  }
+
+  /** 每个 scope 下按类型统计条数(面板「类型」选择器用)。 */
+  scopeKindStats()                                                               {
+    const out                                                               = []
+    for (const scope of this.store.allScopes()) {
+      const counts = new Map                ()
+      for (const record of scope.records.values()) counts.set(record.kind, (counts.get(record.kind) ?? 0) + 1)
+      for (const [kind, records] of [...counts].sort((a, b) => a[0].localeCompare(b[0]))) {
+        out.push({ scope: scope.scope, kind, records })
+      }
     }
     return out
+  }
+
+  /** 普通限制:范围外命中时创建一条待审批,等待面板回答(超时按拒绝)。 */
+  requestOutOfScope(
+    agent         ,
+    input                                                                                                 ,
+  )                                       {
+    if (input.items.length === 0) return Promise.resolve('allowed-once')
+    if (input.signal?.aborted) return Promise.resolve('rejected')
+    const sessionId = this.rawSessionIdOf(agent) ?? ''
+    const id = `vis-${Date.now().toString(36)}-${++this.approvalSeq}`
+    const createdAt = Date.now()
+    const expiresAt = createdAt + VISIBILITY_APPROVAL_TTL_MS
+    return new Promise((resolve) => {
+      let timer                                           
+      const onAbort = () => finish('rejected')
+      const finish = (outcome                             )       => {
+        const pending = this.pendingApprovals.get(id)
+        if (pending === undefined) return
+        this.pendingApprovals.delete(id)
+        if (timer !== undefined) clearTimeout(timer)
+        try { input.signal?.removeEventListener('abort', onAbort) } catch { /* 已卸载 */ }
+        pending.resolve(outcome)
+      }
+      timer = setTimeout(() => finish('rejected'), VISIBILITY_APPROVAL_TTL_MS)
+      timer.unref?.()
+      this.pendingApprovals.set(id, {
+        id,
+        sessionId,
+        tool: input.tool,
+        query: input.query,
+        items: input.items.slice(0, VISIBILITY_APPROVAL_MAX_ITEMS).map((item) => ({
+          ...item,
+          tags: [...item.tags],
+        })),
+        createdAt,
+        expiresAt,
+        resolve: resolve,
+        timer,
+      })
+      try { input.signal?.addEventListener('abort', onAbort, { once: true }) } catch { /* 已中止 */ }
+    })
+  }
+
+  /** 面板:当前所有待审批(可按会话过滤)。 */
+  pendingVisibilityApprovals(sessionId         )                           {
+    const out                           = []
+    for (const pending of this.pendingApprovals.values()) {
+      if (sessionId !== undefined && sessionId !== '' && pending.sessionId !== sessionId) continue
+      out.push({
+        id: pending.id,
+        sessionId: pending.sessionId,
+        tool: pending.tool,
+        query: pending.query,
+        // 轮询载荷保持轻量:正文截到 1200 字,悬浮需要全文时面板再按 id 取一次。
+        items: pending.items.map((item) => ({
+          ...item,
+          content: item.content.length > 1200 ? `${item.content.slice(0, 1200)}…` : item.content,
+          tags: [...item.tags],
+        })),
+        createdAt: pending.createdAt,
+        expiresAt: pending.expiresAt,
+      })
+    }
+    return out.sort((a, b) => a.createdAt - b.createdAt)
+  }
+
+  /** 面板:回答一条待审批。返回 false = 已经不存在/已超时。 */
+  answerVisibilityApproval(id        , outcome                             )          {
+    const pending = this.pendingApprovals.get(id)
+    if (pending === undefined) return false
+    this.pendingApprovals.delete(id)
+    if (pending.timer !== undefined) clearTimeout(pending.timer)
+    pending.resolve(outcome)
+    return true
   }
 
   /**
@@ -1412,6 +1653,7 @@ export class LocalMemoryService                             {
    */
   resolveReadScopes(agent         )                {
     const explicit = this.visibleScopes(agent)
+    // level='none' 时 visibleScopes 返回 undefined:不限制读取,继续用默认三路集合。
     if (explicit !== undefined) return explicit
     const refs = this.scopeRefs(agent)
     const out                = []
@@ -1605,10 +1847,18 @@ export class LocalMemoryService                             {
     // 面板的语义检索复用这条流水线,但它是"看一眼"的浏览:不写访问计数,也不在
     // 没有任何向量时白跑一次嵌入请求。这两个开关只给面板的 searchForPanel 用,
     // 工具 / 注入调用不会传。
-    const internal = query                                                                                                              
+    const internal = query                                                                                                                                                         
     const allowVector = internal.vector !== false && this.cfg.vector.enabled && this.cfg.vector.configured
     const includeSuperseded = internal.includeSuperseded === true
     const includeExpired = internal.includeExpired === true
+    // 注入侧按可见域的类型白名单检索(scope → 允许的类型;未列出的 scope 不限制)。
+    // 工具侧不传 kinds:它需要看到范围外命中,才能发起审批。
+    const kindFilter = internal.kinds === undefined
+      ? undefined
+      : (scope        , kind        )          => {
+          const allowed = internal.kinds [this.canonicalScope(scope)]
+          return allowed === undefined || allowed.length === 0 || allowed.includes(kind)
+        }
 
     // 候选 scope:显式 pin(单值)优先;否则用调用方给的合并集合(query.scopes,
     // 工具 / 注入传"会话 + 项目 + global");两者都没有才退回旧的 project + global。
@@ -1652,6 +1902,7 @@ export class LocalMemoryService                             {
         const rec = all[i] 
         if (!includeExpired && rec.expiredAt && rec.expiredAt < now) continue
         if (!includeSuperseded && retired.has(rec.id)) continue
+        if (kindFilter !== undefined && !kindFilter(rec.scope, rec.kind)) continue
         const lex = lexicalScore(queryTokens, tokenSets[i] , stats)
         if (lex <= 0) continue
         // Weak-only overlap (no shared word/bigram) must clear the "real hit"
@@ -1690,6 +1941,7 @@ export class LocalMemoryService                             {
         const rec = this.findById(id)
         if (!rec) continue
         if (!includeExpired && rec.expiredAt !== undefined && rec.expiredAt < now) continue
+        if (kindFilter !== undefined && !kindFilter(rec.scope, rec.kind)) continue
         if (!(rec.scope === 'global' && sim < this.cfg.globalThreshold)) {
           candidates.set(id, { record: rec, recallScore: sim, isGlobal: rec.scope === 'global' })
         }
@@ -1860,7 +2112,9 @@ export class LocalMemoryService                             {
    * 一律走 `peek`,所以列一个不存在的 scope 只会得到空数组,不会造出文件。
    */
   async list(input                  = {})                          {
-    const internal = input                                                                               
+    const internal = input                                                                                                
+    // 注入侧(摘要)传入 agent 时按可见域的类型白名单过滤;工具侧不传,以便处理范围外审批。
+    const visibleFilter = internal.agent !== undefined ? this.visibilityFilterFor(internal.agent) : undefined
     // 显式空集合 = 无可见范围(见 search 的同口径说明)。
     if (input.scope === undefined && input.scopes !== undefined && input.scopes.length === 0) return []
     const wanted = (input.scope !== undefined
@@ -1887,6 +2141,7 @@ export class LocalMemoryService                             {
       }
     }
     if (input.kind) records = records.filter((r) => r.kind === input.kind)
+    if (visibleFilter !== undefined) records = records.filter((r) => visibleFilter(r.scope, r.kind))
     records.sort((a, b) => b.updatedAt - a.updatedAt)
     return records.slice(0, input.limit ?? 50)
   }

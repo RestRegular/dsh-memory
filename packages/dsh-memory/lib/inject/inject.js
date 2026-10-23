@@ -40,6 +40,8 @@ export const defaultInjectConfig               = {
                                           
      
                                           
+                                               
+                                                                                                                                              
                                                            
                                              
                                                              
@@ -140,6 +142,8 @@ export function resolveInjectScopes(
                                                          
      
                             
+                                                         
+                                           
                                         
                     
  
@@ -323,13 +327,13 @@ export function recallText(text        )         {
  *   - 同一段文本 = 最后一道幂等。
  */
 export class MemoryInjector {
-                   search                                                                                           
+                   search                                                                                                                                      
                    cfg                            
                    renderOptions                                   
                    state                
 
   constructor(
-    search                                                                                           ,
+    search                                                                                                                                      ,
     cfg                            ,
     renderOptions                                    = {},
     state                 = new InjectionState(),
@@ -362,7 +366,7 @@ export class MemoryInjector {
 
     let hits             
     try {
-      hits = await this.search(query, input.signal, input.scopes)
+      hits = await this.search(query, input.signal, input.scopes, input.kinds)
     } catch {
       // 检索失败不能打断 agent 循环;审计会区分"失败"与"成功但无结果"。
       return {
@@ -460,10 +464,10 @@ const MAX_DIGESTED_SESSIONS = 500
  */
 export class MemoryDigester {
                    done = new Set        ()
-                   list                                                                    
+                   list                                                                                     
 
   constructor(
-    list                                                                    ,
+    list                                                                                     ,
   ) {
     this.list = list
   }
@@ -505,6 +509,7 @@ export class MemoryDigester {
     sessionId                    ,
     scopes                               ,
     render                                       ,
+    agent          ,
   )          
                                                                      
                                              
@@ -515,7 +520,7 @@ export class MemoryDigester {
     this.markDone(sessionId)
     let records                
     try {
-      records = await this.list(scopes)
+      records = await this.list(scopes, agent)
     } catch {
       return { status: 'failed', errorCode: 'source_load_failed' }
     }

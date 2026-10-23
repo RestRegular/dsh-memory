@@ -1514,7 +1514,7 @@ test('client apply 注册记忆视图、轨迹徽标与详情页签', async () =
   assert.equal(spec('conversation.view')?.id, 'memory', '会话内「记忆」视图已注册')
   assert.ok(!registered.some((entry) => entry.spec.name === 'conversation.session.header.actions'), '会话头部不再注册记忆按钮')
   const overlays = registered.filter((entry) => entry.spec.name === 'shell.overlay').map((entry) => entry.spec.id)
-  assert.deepEqual(overlays.sort(), ['memory-audit-badge', 'memory-audit-detail', 'memory-audit-marks'], '轨迹标记/徽标/详情页签浮层已注册')
+  assert.deepEqual(overlays.sort(), ['memory-access-approval', 'memory-audit-badge', 'memory-audit-detail', 'memory-audit-marks'], '轨迹标记/徽标/详情页签/审批浮层已注册')
   assert.ok(injected.includes('conversation.view'))
   assert.ok(!injected.includes('conversation.session.header.actions'))
   assert.ok(injected.includes('shell.overlay'))
@@ -1531,12 +1531,13 @@ test('输入框记忆范围按钮:按会话读取、勾选与保存', async () =
   const payload = {
     sessionId: 's1',
     override: null,
-    effective: ['session:s1', 'global'],
+    effective: { level: 'normal', scopes: [{ scope: 'session:s1' }, { scope: 'global' }] },
     inherited: false,
+    kinds: ['fact', 'rule'],
     scopes: [
-      { scope: 'session:s1', label: '当前会话', records: 2, pendingEmbeds: 0 },
-      { scope: 'project:D:/w', label: '项目', records: 1, pendingEmbeds: 0 },
-      { scope: 'global', label: '全局', records: 5, pendingEmbeds: 0 },
+      { scope: 'session:s1', label: '当前会话', records: 2, pendingEmbeds: 0, kinds: [{ kind: 'fact', records: 2 }] },
+      { scope: 'project:D:/w', label: '项目', records: 1, pendingEmbeds: 0, kinds: [{ kind: 'fact', records: 1 }] },
+      { scope: 'global', label: '全局', records: 5, pendingEmbeds: 0, kinds: [{ kind: 'rule', records: 5 }] },
     ],
   }
   const savedFetch = (globalThis as Record<string, unknown>).fetch
@@ -1545,10 +1546,10 @@ test('输入框记忆范围按钮:按会话读取、勾选与保存', async () =
     if (init === undefined) {
       return { status: 200, json: async () => ({ ok: true, value: payload }) }
     }
-    const body = JSON.parse(String(init.body ?? '{}')) as { scopes: string[] | null }
+    const body = JSON.parse(String(init.body ?? '{}')) as { visibility: { scopes: unknown[]; level: string } | null }
     return {
       status: 200,
-      json: async () => ({ ok: true, value: { ...payload, override: body.scopes, effective: body.scopes ?? payload.effective } }),
+      json: async () => ({ ok: true, value: { ...payload, override: body.visibility, effective: body.visibility ?? payload.effective } }),
     }
   }
   try {
@@ -1565,12 +1566,14 @@ test('输入框记忆范围按钮:按会话读取、勾选与保存', async () =
 
     assert.equal(calls[0]?.url, '/memory/api/visibility?session=s1')
     const text = textOf(current)
-    assert.ok(text.includes('记忆可见范围'))
+    assert.ok(text.includes('记忆可见域'))
     assert.ok(text.includes('当前会话'))
     assert.ok(text.includes('全局'))
-    const boxes = collect(current).filter((n) => n.tag === 'input')
-    assert.equal(boxes.length, 3, '三个可选范围')
-    assert.deepEqual(boxes.map((box) => box.props?.checked), [true, false, true], '默认预选生效范围')
+    assert.ok(text.includes('绝对限制') && text.includes('普通限制') && text.includes('无限制'), '三档限制等级')
+    assert.ok(text.includes('事实') && text.includes('规则'), '每个已选作用域展开类型 chips')
+    const boxes = collect(current).filter((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-check'))
+    assert.equal(boxes.length, 3, '三个可选范围(自定义勾选框)')
+    assert.deepEqual(boxes.map((box) => box.props?.['aria-checked']), [true, false, true], '默认预选生效范围')
 
     const save = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '保存')
     assert.ok(save, '保存按钮存在')
@@ -1578,9 +1581,68 @@ test('输入框记忆范围按钮:按会话读取、勾选与保存', async () =
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     assert.equal(calls[1]?.init?.method, 'POST')
-    const posted = JSON.parse(String(calls[1]?.init?.body ?? '{}')) as { session: string; scopes: string[] }
+    const posted = JSON.parse(String(calls[1]?.init?.body ?? '{}')) as { session: string; visibility: { scopes: Array<{ scope: string }>; level: string } }
     assert.equal(posted.session, 's1')
-    assert.deepEqual(posted.scopes, ['session:s1', 'global'])
+    assert.deepEqual(posted.visibility.scopes.map((item) => item.scope), ['session:s1', 'global'])
+    assert.equal(posted.visibility.level, 'normal')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
+})
+
+test('审批浮层:展示范围外摘要与拒绝/允许一次,回答一次后消失', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const Overlay = (exports.__test as { MemoryApprovalOverlay: () => unknown }).MemoryApprovalOverlay
+  const calls: Array<{ url: string; init?: { method?: string; body?: string } }> = []
+  const approval = {
+    id: 'a1',
+    sessionId: 's1',
+    tool: 'memory_search',
+    query: '发布流程',
+    items: [{
+      id: 'abcdef1234567890',
+      scope: 'global',
+      kind: 'rule',
+      content: '范围外规则：发布前必须跑完整测试。',
+      tags: ['release'],
+      importance: 0.9,
+      updatedAt: 1,
+      reason: 'scope',
+    }],
+    createdAt: 1,
+    expiresAt: 2,
+  }
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string, init?: { method?: string; body?: string }) => {
+    calls.push({ url, init })
+    if (init === undefined || init.method === 'GET') {
+      return { status: 200, json: async () => ({ ok: true, value: { approvals: [approval] } }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, value: { answered: true } }) }
+  }
+  try {
+    let current: RenderNode | null = null
+    const element = () => hooks.React.createElement(Overlay)
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const text = textOf(current)
+    assert.ok(text.includes('记忆访问审批'), '审批标题')
+    assert.ok(text.includes('发布流程'), '展示 Agent 的查询关键词')
+    assert.ok(text.includes('范围外规则：发布前必须跑完整测试。'), '展示范围外记忆摘要')
+    assert.ok(text.includes('拒绝') && text.includes('允许一次'), '两个审批选项')
+
+    const allow = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '允许一次')
+    assert.ok(allow, '允许一次按钮')
+    ;(allow!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.equal(calls[1]?.url, '/memory/api/approvals')
+    const posted = JSON.parse(String(calls[1]?.init?.body ?? '{}')) as { id: string; outcome: string }
+    assert.deepEqual(posted, { id: 'a1', outcome: 'allowed-once' })
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch
   }

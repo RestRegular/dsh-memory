@@ -37,7 +37,10 @@ test('默认没有覆盖:resolveReadScopes 仍是会话 + 项目 + global', () =
 
 test('设置后只返回覆盖集合;恢复默认后回到三路集合', () => {
   svc.setSessionVisibility('s1', ['project:D:/w', 'global'])
-  assert.deepEqual(svc.sessionVisibility('s1'), ['project:D:/w', 'global'])
+  assert.deepEqual(svc.sessionVisibility('s1'), {
+    scopes: [{ scope: CWD_PROJECT }, { scope: 'global' }],
+    level: 'absolute',
+  })
   assert.deepEqual(
     svc.resolveReadScopes(agent({ id: 's1', cwd: 'D:/w' })),
     [CWD_PROJECT, 'global'],
@@ -97,8 +100,72 @@ test('被 scope 开关禁用的项会被剔除;全被禁用时返回空集合', 
 test('覆盖会落盘,另一个 provider 实例能读到', () => {
   svc.setSessionVisibility('persisted', ['global'])
   const other = new LocalMemoryService({ storeDir: DIR })
-  assert.deepEqual(other.sessionVisibility('persisted'), ['global'])
+  assert.deepEqual(other.sessionVisibility('persisted'), { scopes: [{ scope: 'global' }], level: 'absolute' })
   other.flushSync()
+})
+
+test('可按作用域限定记忆类型:global 只允许 rule', async () => {
+  await svc.save({ scope: 'global', kind: 'rule', content: '全局规则 alpha' })
+  await svc.save({ scope: 'global', kind: 'fact', content: '全局事实 alpha' })
+  svc.setSessionVisibility('s1', { scopes: [{ scope: 'global', kinds: ['rule'] }], level: 'absolute' })
+  const agentCtx = { agent: agent({ id: 's1', cwd: 'D:/w' }) }
+  const search = memorySearchTool({ getService: () => svc })
+  const result = await search.execute({ query: 'alpha' }, agentCtx)
+  assert.deepEqual(result.records.map((r) => r.kind), ['rule'])
+  const get = memoryGetTool({ getService: () => svc })
+  const facts = await svc.list({ scope: 'global', kind: 'fact' })
+  const got = await get.execute({ ids: [facts[0]!.id] }, agentCtx)
+  assert.equal(got.records.length, 0, '类型不在白名单里也不能按 id 取正文')
+  assert.deepEqual(got.missing, [facts[0]!.id])
+})
+
+test('普通限制:范围外命中会发起一次审批;允许后返回、拒绝后隐藏', async () => {
+  await svc.save({ scope: 'global', kind: 'fact', content: '全局发布流程 beta' })
+  await svc.save({ scope: PROJECT, kind: 'fact', content: '项目发布流程 beta' })
+  svc.setSessionVisibility('s1', { scopes: [{ scope: PROJECT }], level: 'normal' })
+  const agentCtx = { agent: agent({ id: 's1', cwd: 'D:/w' }) }
+  const search = memorySearchTool({ getService: () => svc })
+
+  const calls: unknown[] = []
+  svc.requestOutOfScope = async (_agent, input) => {
+    calls.push(input)
+    return 'allowed-once'
+  }
+  const allowed = await search.execute({ query: 'beta' }, agentCtx)
+  assert.deepEqual([...new Set(allowed.records.map((r) => r.scope))].sort(), ['global', PROJECT].sort())
+  assert.equal(calls.length, 1)
+  assert.equal((calls[0] as { tool: string }).tool, 'memory_search')
+  assert.equal((calls[0] as { query: string }).query, 'beta')
+  assert.equal(allowed.withheld, undefined)
+
+  svc.requestOutOfScope = async () => 'rejected'
+  const denied = await search.execute({ query: 'beta' }, agentCtx)
+  assert.deepEqual([...new Set(denied.records.map((r) => r.scope))], [PROJECT])
+  assert.equal(denied.withheld?.reason, 'rejected')
+  assert.ok((denied.withheld?.count ?? 0) >= 1)
+})
+
+test('无限制:不做范围过滤,也不发起审批', async () => {
+  await svc.save({ scope: 'global', kind: 'fact', content: '全局发布流程 gamma' })
+  await svc.save({ scope: PROJECT, kind: 'fact', content: '项目发布流程 gamma' })
+  svc.setSessionVisibility('s1', { scopes: [{ scope: PROJECT }], level: 'none' })
+  const agentCtx = { agent: agent({ id: 's1', cwd: 'D:/w' }) }
+  let asked = 0
+  svc.requestOutOfScope = async () => { asked++; return 'rejected' }
+  const search = memorySearchTool({ getService: () => svc })
+  const result = await search.execute({ query: 'gamma', scope: 'all' }, agentCtx)
+  assert.deepEqual([...new Set(result.records.map((r) => r.scope))].sort(), ['global', PROJECT].sort())
+  assert.equal(asked, 0)
+})
+
+test('可见域变更通知:下一次 take 拿到配置,再取为空', () => {
+  const agentCtx = agent({ id: 's1', cwd: 'D:/w' })
+  assert.equal(svc.takeVisibilityNotice(agentCtx), undefined)
+  svc.setSessionVisibility('s1', { scopes: [{ scope: 'global', kinds: ['rule'] }], level: 'normal' })
+  assert.deepEqual(svc.takeVisibilityNotice(agentCtx), {
+    config: { scopes: [{ scope: 'global', kinds: ['rule'] }], level: 'normal' },
+  })
+  assert.equal(svc.takeVisibilityNotice(agentCtx), undefined)
 })
 
 test('工具层把可见范围当白名单:显式 scope 被拒、memory_get 过滤、all 收窄', async () => {

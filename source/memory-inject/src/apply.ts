@@ -103,16 +103,51 @@ export interface MemoryInjectConfig {
 
 /** provider 在注入侧能提供的那部分能力(多余的方法都用可选判断)。 */
 interface MemoryWithInject extends InjectMemoryService {
-  listSync?(input: { scopes?: string[]; kind?: string; limit?: number; includeSuperseded?: boolean }): MemoryRecord[]
+  listSync?(input: { scopes?: string[]; kind?: string; limit?: number; includeSuperseded?: boolean; agent?: unknown }): MemoryRecord[]
   injectSettings?(): InjectSettings
   attachInjectAudit?(sink: AuditSink | null): void
   detachInjectAudit?(sink?: unknown): void
+  /** 等待注入的可见域变更通知;取走即删除。 */
+  takeVisibilityNotice?(agent: unknown): { config: VisibilityNoticeConfig | null } | undefined
 }
 
 /** 轮末提醒的文案:短、祈使句,不占预算。 */
 const NUDGE_TEXT =
   '上一轮若产生了可复用的结论（决策、踩坑、流程、口径），先 memory_save 记一条再继续；' +
   '没有就忽略这条提醒。'
+
+/** 可见域配置的最小子集(避免注入半边依赖 provider 的实现类型)。 */
+interface VisibilityNoticeConfig {
+  level: 'absolute' | 'normal' | 'none'
+  scopes: Array<{ scope: string; kinds?: string[] }>
+}
+
+const VISIBILITY_LEVEL_TEXT: Record<VisibilityNoticeConfig['level'], string> = {
+  absolute: '绝对限制：可见域外的记忆一律查不到，即使工具内部命中也不会返回。',
+  normal: '普通限制：可见域外的记忆命中时会向用户发起一次审批；用户拒绝或超时则不返回。',
+  none: '无限制：可以读取所有作用域与类型（当前选择仅作为下次切换的偏好保留）。',
+}
+
+/**
+ * 可见域变更后的上下文通知(以 user 消息注入)。
+ * 只描述规则,不回显任何记忆正文 —— 它要告诉模型"边界变了",不是给它数据。
+ */
+export function renderVisibilityNotice(config: VisibilityNoticeConfig | null): string {
+  if (config === null) {
+    return '【记忆可见范围已恢复默认】本会话不再有显式可见域；memory_search / memory_get / memory_list 回到"会话 + 项目 + global"的默认读取集合。'
+  }
+  const scopes = config.scopes.length > 0
+    ? config.scopes.map((rule) => (rule.kinds !== undefined && rule.kinds.length > 0
+      ? `${rule.scope}（仅 ${rule.kinds.join(' / ')}）`
+      : rule.scope)).join('、')
+    : '（无）'
+  return [
+    '【记忆可见域已更新】用户修改了本会话（及其子 Agent）的记忆可见范围。',
+    `可见域：${scopes}`,
+    `限制等级：${VISIBILITY_LEVEL_TEXT[config.level]}`,
+    '后续 memory_search / memory_get / memory_list 请按这个边界工作；需要范围外信息时，先向用户说明要查什么，不要绕过限制。',
+  ].join('\n')
+}
 
 export const name = 'dsh-memory-inject'
 
@@ -253,13 +288,32 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
   const sameScopes = (a: readonly string[], b: readonly string[]): boolean =>
     a.length === b.length && a.every((scope, index) => scope === b[index])
 
+  /** 可见域的类型白名单(scope → kinds);undefined = 不按类型过滤。 */
+  const visibilityKindsFor = (memory: MemoryWithInject, agent: unknown): Record<string, readonly string[]> | undefined => {
+    try {
+      const policy = memory.visibilityPolicy?.(agent)
+      if (policy === undefined || policy.level === 'none') return undefined
+      const out: Record<string, readonly string[]> = {}
+      for (const rule of policy.scopes) {
+        if (rule.kinds !== undefined && rule.kinds.length > 0) out[rule.scope] = [...rule.kinds]
+      }
+      return Object.keys(out).length > 0 ? out : undefined
+    } catch {
+      return undefined
+    }
+  }
+
   const renderRulesFor = (
     memory: MemoryWithInject,
     scopes: readonly string[],
     cfg: InjectSettings['rules'],
+    agent?: unknown,
   ): { ok: true; render: RulesRender } | { ok: false; errorCode: string } => {
     try {
-      return { ok: true, render: renderRules(memory.listSync?.({ scopes: [...scopes], kind: 'rule', limit: 100 }) ?? [], cfg) }
+      return {
+        ok: true,
+        render: renderRules(memory.listSync?.({ scopes: [...scopes], kind: 'rule', limit: 100, ...(agent !== undefined ? { agent } : {}) }) ?? [], cfg),
+      }
     } catch {
       return { ok: false, errorCode: 'source_load_failed' }
     }
@@ -495,7 +549,7 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
   }
 
   const injector = new MemoryInjector(
-    async (query, signal, scopes) => {
+    async (query, signal, scopes, kinds) => {
       const memory = ctx.get('memory') as MemoryWithInject | undefined
       if (!memory?.search) return []
       return memory.search({
@@ -503,6 +557,7 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
         signal,
         topK: recallCfg().topK,
         ...(scopes !== undefined ? { scopes: [...scopes] } : {}),
+        ...(kinds !== undefined ? { kinds } : {}),
       })
     },
     recallCfg,
@@ -511,12 +566,13 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
   )
 
   // 摘要:provider 没有 list(旧版/半边加载失败)时自动退化为"不发摘要"。
-  const digester = new MemoryDigester(async (scopes) => {
+  const digester = new MemoryDigester(async (scopes, agent) => {
     const memory = ctx.get('memory') as MemoryWithInject | undefined
     if (!memory?.list) return []
     return memory.list({
       ...(scopes !== undefined ? { scopes: [...scopes] } : {}),
       limit: 200,
+      ...(agent !== undefined ? { agent } : {}),
     })
   })
   // 持久化状态恢复后，把「摘要已做过」同步给摘要器，避免插件重载后重复注入。
@@ -700,7 +756,7 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
           if (cached !== undefined && started !== undefined && cached.at >= started && sameScopes(cached.scopes, scopes)) {
             return cached.render.text
           }
-          const rendered = renderRulesFor(memory, scopes, settingsOf().rules)
+          const rendered = renderRulesFor(memory, scopes, settingsOf().rules, context?.agent)
           if (!rendered.ok) return ''
           if (sessionId !== undefined) rulesCache.set(sessionId, { at: Date.now(), scopes, render: rendered.render })
           return rendered.render.text
@@ -717,7 +773,7 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
           const sessionId = sessionIdOf(context?.agent)
           let records: MemoryRecord[] = []
           try {
-            records = memory.listSync({ scopes: [...scopes], kind: 'procedure', limit: 200 })
+            records = memory.listSync({ scopes: [...scopes], kind: 'procedure', limit: 200, ...(context?.agent !== undefined ? { agent: context.agent } : {}) })
           } catch {
             return ''
           }
@@ -769,6 +825,11 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
     attachSessionState(sessionId, workspaceOf(agent))
     if (sessionId !== undefined) rulesStepStart.set(sessionId, stepStartedAt)
     const scopes = readScopesFor(memory, agent)
+    // 可见域的类型白名单:召回/摘要/规则/流程索引都按它收窄,避免"只让看 global
+    // 的 rule"之后又从其它类型里召回正文。
+    const visibleKinds = visibilityKindsFor(memory, agent)
+    // 面板保存可见域后,下一次 pre-step 用一条 user 消息告知 Agent 边界已变。
+    const visibilityNotice = memory.takeVisibilityNotice?.(agent)
     if (sessionId !== undefined && scopes !== undefined) sessionScopes.set(sessionId, [...scopes])
     let autoScopes: string[] | undefined
     try { autoScopes = autoRecallScopes(memory.resolveReadScopes?.(agent) as string[] | undefined) } catch { autoScopes = undefined }
@@ -821,6 +882,17 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
     const parts: string[] = []
     const messageChannels = new Set<AuditChannel>()
     const stage = (entry: AuditDraft): void => { staged.push(entry) }
+
+    // 可见域刚被用户改过:先告知边界,再走后续召回/摘要。只注入规则说明,不回显记忆。
+    if (visibilityNotice !== undefined) {
+      const noticeText = renderVisibilityNotice(visibilityNotice.config)
+      parts.push(noticeText)
+      messageChannels.add('policy')
+      stage(auditBase('policy', {
+        kind: 'evaluation', stage: 'rendered', outcome: 'success', reasonCode: 'visibility_changed',
+        delivery: { status: 'unknown', appended: null, textChars: noticeText.length, textHash: hashAuditText(noticeText) },
+      }))
+    }
 
     if (signal !== undefined && usableSignal === undefined) {
       recordAudit(auditBase('signal', {
@@ -909,7 +981,7 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
         const rendered = renderDigest(records, settings.digest)
         digestStats = rendered?.stats
         return rendered
-      })
+      }, agent)
       // 失败也记 done（与内存行为一致：摘要不逐轮重试）；落盘后重载不再重复发。
       if (sessionId !== undefined && outcome.status !== 'skipped') injectionState.markDigestDone(sessionId)
       if (outcome.status === 'failed') {
@@ -971,7 +1043,7 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
         stage(auditBase('rules', { kind: 'evaluation', stage: 'skipped', outcome: 'skipped', reasonCode: 'system_prompt_unavailable' }))
       } else {
         const promptScopes = promptScopesFor(memory, agent)
-        const rendered = renderRulesFor(memory, promptScopes, settings.rules)
+        const rendered = renderRulesFor(memory, promptScopes, settings.rules, agent)
         if (!rendered.ok) {
           stage(auditBase('rules', {
             kind: 'evaluation', stage: 'source_load', outcome: 'failed', reasonCode: rendered.errorCode,
@@ -1059,7 +1131,13 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
         })
       }
       const recall = await injector.maybeInjectDetailed(
-        { messages: input.messages as never, signal: input.signal, ...(recallScopes !== undefined ? { scopes: recallScopes } : {}), ...(sessionId !== undefined ? { sessionId } : {}) },
+        {
+          messages: input.messages as never,
+          signal: input.signal,
+          ...(recallScopes !== undefined ? { scopes: recallScopes } : {}),
+          ...(visibleKinds !== undefined ? { kinds: visibleKinds } : {}),
+          ...(sessionId !== undefined ? { sessionId } : {}),
+        },
         { messages: decision.messages as never },
         {
           ...(sessionId !== undefined ? { sessionId } : {}),

@@ -470,11 +470,15 @@ function resolveScopeSelection(memory, rawScope) {
   return normalized.scope ?? null
 }
 
+/** 面板已知的记忆类型(与工具的 kind enum 一致)。 */
+const KNOWN_KINDS = ['fact', 'decision', 'preference', 'procedure', 'note', 'rule', 'state']
+
 /**
- * 会话「记忆可见范围」的完整快照:自己的覆盖 + 实际生效集合 + 可选范围目录。
+ * 会话「记忆可见域」的完整快照:自己的覆盖 + 生效策略 + 可选范围目录(含每个 scope
+ * 的类型统计)。
  *
  * 自己的覆盖(null = 没设置)用于面板上的"恢复默认";effective 用于预选(子 Agent
- * 会话会继承父会话的覆盖);scopes 是本次会话可以勾选的全部具体作用域键。
+ * 会话会继承父会话的覆盖);scopes 是本次会话可以勾选的全部具体作用域键 + 类型。
  */
 function visibilityPayload(ctx, memory, sessionId) {
   let session
@@ -484,45 +488,60 @@ function visibilityPayload(ctx, memory, sessionId) {
   let effective = null
   let inherited = false
   try {
-    if (typeof memory.visibleScopes === 'function') {
-      const resolved = memory.visibleScopes(agentLike)
-      if (Array.isArray(resolved)) {
-        effective = resolved
+    if (typeof memory.visibilityPolicy === 'function') {
+      const policy = memory.visibilityPolicy(agentLike)
+      if (policy !== undefined && policy !== null) {
+        effective = policy
         inherited = own === null
       }
     }
-    if (effective === null) {
-      const resolved = memory.resolveReadScopes?.(session !== undefined ? { session } : undefined)
-      if (Array.isArray(resolved)) effective = resolved
-    }
-  } catch { /* 可见范围是增强;拿不到就只返回自己的覆盖 */ }
+  } catch { /* 可见域是增强;拿不到就只返回自己的覆盖 */ }
 
   let refs
   try { if (session !== undefined) refs = resolveCurrentScopes({ session }) } catch { refs = undefined }
   const stats = typeof memory.scopeStats === 'function' ? memory.scopeStats() : []
+  const kindStats = typeof memory.scopeKindStats === 'function' ? memory.scopeKindStats() : []
   const byScope = new Map()
   for (const item of Array.isArray(stats) ? stats : []) {
-    if (item && typeof item.scope === 'string') byScope.set(item.scope, item)
+    if (item && typeof item.scope === 'string') byScope.set(item.scope, { ...item, kinds: [] })
   }
   // 即使还没有任何记录,也要能把"当前会话 / 当前项目 / global"勾进可见范围。
   const ensure = (scope) => {
     if (typeof scope === 'string' && scope !== '' && !byScope.has(scope)) {
-      byScope.set(scope, { scope, records: 0, pendingEmbeds: 0 })
+      byScope.set(scope, { scope, records: 0, pendingEmbeds: 0, kinds: [] })
     }
   }
   ensure(refs?.session)
   ensure(refs?.project)
   ensure('global')
+  for (const item of Array.isArray(kindStats) ? kindStats : []) {
+    const bucket = item && typeof item.scope === 'string' ? byScope.get(item.scope) : undefined
+    if (bucket === undefined || typeof item.kind !== 'string' || item.kind === '') continue
+    bucket.kinds.push({ kind: item.kind, records: Number(item.records) || 0 })
+  }
   const rank = (scope) => scope === refs?.session ? 0 : scope === refs?.project ? 1 : scope === 'global' ? 2 : 3
   const scopes = [...byScope.values()]
     .sort((a, b) => rank(a.scope) - rank(b.scope) || String(a.scope).localeCompare(String(b.scope)))
-    .map((item) => ({ ...item, label: item.name ?? scopeLabel(ctx, item.scope) }))
+    .map((item) => ({
+      ...item,
+      kinds: [...item.kinds].sort((a, b) => KNOWN_KINDS.indexOf(a.kind) - KNOWN_KINDS.indexOf(b.kind) || a.kind.localeCompare(b.kind)),
+      label: item.name ?? scopeLabel(ctx, item.scope),
+    }))
+  // 没有显式覆盖时,面板仍预选"当前默认读取集合"(会话 + 项目 + global),
+  // 让用户看到 Agent 现在实际能看到什么;保存后才变成显式覆盖。
+  let defaults = []
+  try {
+    const resolved = memory.resolveReadScopes?.(agentLike)
+    if (Array.isArray(resolved)) defaults = resolved
+  } catch { /* 降级为空 */ }
   return {
     sessionId,
     override: own,
-    effective: Array.isArray(effective) ? effective : null,
+    effective,
     inherited,
+    defaults,
     scopes,
+    kinds: KNOWN_KINDS,
   }
 }
 
@@ -613,22 +632,61 @@ async function handle(ctx, routePath, req, res) {
       const sessionId = typeof body?.session === 'string' ? body.session.trim() : ''
       if (sessionId === '') throw new ApiError(400, 'SESSION_REQUIRED', 'session 不能为空')
       let next = null
-      if (body?.scopes !== null && body?.scopes !== undefined) {
-        if (!Array.isArray(body.scopes)) throw new ApiError(400, 'SCOPE_INVALID', 'scopes 必须是数组或 null')
-        if (body.scopes.length === 0) throw new ApiError(400, 'SCOPE_EMPTY', '至少选择一个可见范围')
-        next = []
-        for (const raw of body.scopes) {
-          if (typeof raw !== 'string') throw new ApiError(400, 'SCOPE_INVALID', 'scope 必须是字符串')
-          const normalized = normalizeScopeInput(raw)
+      const rawConfig = body?.visibility
+      // 新协议:{ visibility: { scopes: [{ scope, kinds? }], level } } | null
+      // 兼容 0.18 的 { scopes: string[] | null }:按"绝对限制 + 全部类型"处理。
+      const rawScopes = rawConfig !== null && rawConfig !== undefined && typeof rawConfig === 'object'
+        ? rawConfig.scopes
+        : body?.scopes
+      if (rawScopes !== null && rawScopes !== undefined) {
+        if (!Array.isArray(rawScopes)) throw new ApiError(400, 'SCOPE_INVALID', 'scopes 必须是数组或 null')
+        if (rawScopes.length === 0) throw new ApiError(400, 'SCOPE_EMPTY', '至少选择一个可见范围')
+        const scopes = []
+        for (const raw of rawScopes) {
+          const scopeRaw = typeof raw === 'string' ? raw : raw?.scope
+          if (typeof scopeRaw !== 'string' || scopeRaw.trim() === '') {
+            throw new ApiError(400, 'SCOPE_INVALID', 'scope 必须是非空字符串')
+          }
+          const normalized = normalizeScopeInput(scopeRaw)
           if (!normalized.ok) throw new ApiError(400, normalized.code, normalized.message)
           if (normalized.kind === 'all' || normalized.kind === 'current-project' || normalized.kind === 'current-session') {
-            throw new ApiError(400, 'SCOPE_INVALID', `可见范围必须是具体作用域键: ${JSON.stringify(raw)}`)
+            throw new ApiError(400, 'SCOPE_INVALID', `可见范围必须是具体作用域键: ${JSON.stringify(scopeRaw)}`)
           }
-          if (normalized.scope !== undefined && !next.includes(normalized.scope)) next.push(normalized.scope)
+          if (normalized.scope === undefined || scopes.some((item) => item.scope === normalized.scope)) continue
+          const kinds = raw !== null && typeof raw === 'object' && Array.isArray(raw.kinds)
+            ? [...new Set(raw.kinds.map((kind) => String(kind).trim()).filter((kind) => kind !== ''))]
+            : []
+          scopes.push(kinds.length > 0 ? { scope: normalized.scope, kinds } : { scope: normalized.scope })
         }
+        const levelRaw = rawConfig !== null && rawConfig !== undefined && typeof rawConfig === 'object' ? rawConfig.level : 'absolute'
+        const level = levelRaw === 'normal' || levelRaw === 'none' ? levelRaw : 'absolute'
+        next = { scopes, level }
       }
       memory.setSessionVisibility(sessionId, next)
       writeJson(res, { ok: true, value: visibilityPayload(ctx, memory, sessionId) })
+      return
+    }
+
+    // 普通限制下的范围外访问审批:客户端浮层轮询待审批,用户点「拒绝 / 允许一次」后回写。
+    if (method === 'GET' && path === '/approvals') {
+      if (typeof memory.pendingVisibilityApprovals !== 'function') {
+        throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供可见域审批接口（请升级 @restregular/dsh-memory）')
+      }
+      const sessionId = (url.searchParams.get('session') ?? '').trim()
+      writeJson(res, { ok: true, value: { approvals: memory.pendingVisibilityApprovals(sessionId === '' ? undefined : sessionId) } })
+      return
+    }
+    if (method === 'POST' && path === '/approvals') {
+      if (typeof memory.answerVisibilityApproval !== 'function') {
+        throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供可见域审批接口（请升级 @restregular/dsh-memory）')
+      }
+      const body = await readJsonBody(req)
+      const id = typeof body?.id === 'string' ? body.id.trim() : ''
+      if (id === '') throw new ApiError(400, 'APPROVAL_ID_REQUIRED', 'id 不能为空')
+      const outcome = body?.outcome === 'allowed-once' ? 'allowed-once' : body?.outcome === 'rejected' ? 'rejected' : ''
+      if (outcome === '') throw new ApiError(400, 'APPROVAL_OUTCOME_INVALID', 'outcome 必须是 allowed-once 或 rejected')
+      const answered = memory.answerVisibilityApproval(id, outcome)
+      writeJson(res, { ok: true, value: { answered } })
       return
     }
 

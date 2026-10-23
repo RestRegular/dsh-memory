@@ -12,10 +12,16 @@
  *   同一个 storeDir 可能被多个进程共用(见 store.ts 的 issue #3)。单文件 map 在并发
  *   写入时会互相覆盖;按会话分文件后,一个会话的写入不影响另一个会话。
  *
- * 语义:
- *   - 文件存在且 scopes 非空 = 该会话显式指定了可见范围;
+ * 语义(0.19.0 起):
+ *   - 文件存在 = 该会话显式指定了可见域;`level` 决定范围外访问怎么处理:
+ *       absolute = 一律查不到;normal = 范围外命中时向用户发起一次审批;
+ *       none = 不限制(选择仅作为下次切换的偏好保留)。
  *   - 文件不存在 = 没有覆盖,继续用默认的三路集合(会话 + 项目 + global);
  *   - scopes 为空数组视为"无覆盖"(面板在保存时也会拒绝空选择),不会把会话锁死。
+ *   - 每个 scope 可以带 `kinds`:只允许这些记忆类型;省略/空数组 = 该 scope 全部类型。
+ *
+ * 向后兼容:0.18.x 的 v1 文件只有 `scopes: string[]`,按"绝对限制 + 全部类型"读取;
+ * 这样升级当天不会把原来被锁住的范围突然放开。
  *
  * 容错:读写失败都只退化为"没有覆盖",绝不把异常抛回检索/注入链路。
  */
@@ -23,7 +29,24 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 
-const VERSION = 1
+export const VISIBILITY_VERSION = 2
+
+/** 范围外访问的处理方式。 */
+                                                            
+
+export const VISIBILITY_LEVELS                             = ['absolute', 'normal', 'none']
+
+/** 一个可见作用域;`kinds` 省略/为空 = 该作用域下所有类型都可见。 */
+                                 
+               
+                  
+ 
+
+/** 一个会话的完整可见域配置。 */
+                                          
+                          
+                        
+ 
 
                                                 
                                                      
@@ -31,9 +54,10 @@ const VERSION = 1
                                   
  
 
-                          
+                            
                   
                   
+                 
                      
  
 
@@ -46,7 +70,7 @@ function safeName(sessionId        )         {
 }
 
 /** 只保留非空字符串并去重(顺序即用户勾选顺序);空数组返回 undefined。 */
-function cleanScopes(raw         )                       {
+function cleanStrings(raw         )                       {
   if (!Array.isArray(raw)) return undefined
   const out           = []
   for (const item of raw) {
@@ -58,11 +82,49 @@ function cleanScopes(raw         )                       {
   return out.length > 0 ? out : undefined
 }
 
+function cleanLevel(raw         , fallback                  = 'absolute')                  {
+  return raw === 'absolute' || raw === 'normal' || raw === 'none' ? raw : fallback
+}
+
+/**
+ * 规范化 scopes 字段。接受两种形状:
+ *   - v2: `[{ scope, kinds? }]`
+ *   - v1:  `['project:<path>', 'global']`
+ * 非法项跳过;返回 undefined 表示没有任何有效范围。
+ */
+export function cleanVisibilityRules(raw         )                               {
+  if (!Array.isArray(raw)) return undefined
+  const out                   = []
+  for (const item of raw) {
+    if (typeof item === 'string') {
+      const scope = item.trim()
+      if (scope !== '' && !out.some((rule) => rule.scope === scope)) out.push({ scope })
+      continue
+    }
+    if (item === null || typeof item !== 'object') continue
+    const scopeRaw = (item                       ).scope
+    if (typeof scopeRaw !== 'string') continue
+    const scope = scopeRaw.trim()
+    if (scope === '' || out.some((rule) => rule.scope === scope)) continue
+    const kinds = cleanStrings((item                       ).kinds)
+    out.push(kinds === undefined ? { scope } : { scope, kinds })
+  }
+  return out.length > 0 ? out : undefined
+}
+
+/** 读盘结果统一成不可变配置(拷贝一层数组,避免调用方改到缓存)。 */
+function cloneConfig(config                         )                          {
+  return {
+    level: config.level,
+    scopes: config.scopes.map((rule) => (rule.kinds === undefined ? { scope: rule.scope } : { scope: rule.scope, kinds: [...rule.kinds] })),
+  }
+}
+
 export class SessionVisibilityStore {
                    dir        
                    warn                           
-  /** sessionId -> 显式范围;null = 已确认没有文件(避免反复 stat)。 */
-                   cache = new Map                         ()
+  /** sessionId -> 显式配置;null = 已确认没有文件(避免反复 stat)。 */
+                   cache = new Map                                        ()
 
   constructor(options                               ) {
     this.dir = join(options.root, 'visibility')
@@ -73,52 +135,64 @@ export class SessionVisibilityStore {
     return join(this.dir, `${safeName(sessionId)}.json`)
   }
 
-  /** 显式可见范围;undefined = 没有覆盖(用默认集合)。 */
-  get(sessionId        )                       {
+  /** 显式可见域;undefined = 没有覆盖(用默认集合)。 */
+  get(sessionId        )                                      {
     if (sessionId === '') return undefined
     const cached = this.cache.get(sessionId)
-    if (cached !== undefined) return cached ?? undefined
-    let scopes                      
+    if (cached !== undefined) return cached === null ? undefined : cloneConfig(cached)
+    let config                                     
     try {
       const file = this.fileOf(sessionId)
       if (existsSync(file)) {
-        const parsed = JSON.parse(readFileSync(file, 'utf8'))                  
-        scopes = cleanScopes(parsed?.scopes)
-        if (parsed?.version !== undefined && parsed.version !== VERSION) {
-          // 未知版本:读得出来就继续用,读不出来就按"无覆盖"处理。
-          scopes = scopes ?? undefined
+        const parsed = JSON.parse(readFileSync(file, 'utf8'))                    
+        const rules = cleanVisibilityRules(parsed?.scopes)
+        if (rules !== undefined) {
+          // v1 没有 level:沿用旧的"白名单"语义(绝对限制),避免升级把范围放开。
+          config = { scopes: rules, level: cleanLevel(parsed?.level, 'absolute') }
         }
       }
     } catch (error) {
       // 损坏文件不应该让会话失去默认可见范围;只告警一次(缓存 null)。
       this.warn(`[dsh-memory-local] 忽略损坏的会话可见范围 ${this.fileOf(sessionId)}: ${error instanceof Error ? error.message : String(error)}`)
-      scopes = undefined
+      config = undefined
     }
-    this.cache.set(sessionId, scopes ?? null)
-    return scopes
+    this.cache.set(sessionId, config ?? null)
+    return config === undefined ? undefined : cloneConfig(config)
   }
 
-  /** 写入/清除显式范围。null 或空数组 = 清除(恢复默认)。返回写入后的值。 */
-  set(sessionId        , scopes                          )                  {
+  /** 写入/清除显式配置。null 或空 scopes = 清除(恢复默认)。返回写入后的值。 */
+  set(sessionId        , config                                )                                 {
     if (sessionId === '') return null
-    const cleaned = scopes === null ? undefined : cleanScopes(scopes)
-    try {
-      const file = this.fileOf(sessionId)
-      if (cleaned === undefined) {
-        rmSync(file, { force: true })
+    const scopes = config === null ? undefined : cleanVisibilityRules(config.scopes)
+    if (config === null || scopes === undefined) {
+      try {
+        rmSync(this.fileOf(sessionId), { force: true })
         this.cache.set(sessionId, null)
         return null
+      } catch (error) {
+        this.warn(`[dsh-memory-local] 无法清除会话可见范围 ${this.fileOf(sessionId)}: ${error instanceof Error ? error.message : String(error)}`)
+        return this.cache.get(sessionId) ?? null
       }
+    }
+    const cleaned                          = { scopes, level: cleanLevel(config.level, 'normal') }
+    try {
+      const file = this.fileOf(sessionId)
       mkdirSync(this.dir, { recursive: true })
       const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
-      writeFileSync(tmp, `${JSON.stringify({ version: VERSION, scopes: cleaned, updatedAt: Date.now() }, null, 2)}\n`, 'utf8')
+      writeFileSync(tmp, `${JSON.stringify({
+        version: VISIBILITY_VERSION,
+        scopes: cleaned.scopes,
+        level: cleaned.level,
+        updatedAt: Date.now(),
+      }, null, 2)}\n`, 'utf8')
       renameSync(tmp, file)
-      this.cache.set(sessionId, cleaned)
-      return [...cleaned]
+      this.cache.set(sessionId, cloneConfig(cleaned))
+      return cloneConfig(cleaned)
     } catch (error) {
       // 写盘失败:内存里的旧值不清空,但也不能假装成功。调用方会看到旧值。
       this.warn(`[dsh-memory-local] 无法写入会话可见范围 ${this.fileOf(sessionId)}: ${error instanceof Error ? error.message : String(error)}`)
-      return this.cache.get(sessionId) ?? null
+      const previous = this.cache.get(sessionId) ?? null
+      return previous === null ? null : cloneConfig(previous)
     }
   }
 

@@ -243,14 +243,54 @@ export class CordisMemoryService extends Service {
     return this.impl.visibleScopes(agent)
   }
 
-  /** 面板:读取某会话自己的可见范围(null = 未设置)。 */
-  sessionVisibility(sessionId        )                  {
+  /** 完整可见域(等级 + 每个 scope 的类型白名单)。 */
+  visibilityPolicy(agent         )                                                     {
+    return this.impl.visibilityPolicy(agent)
+  }
+
+  /** 某个 scope 下允许的记忆类型(undefined = 不限制)。 */
+  visibleKinds(agent         , scope        )                                                 {
+    return this.impl.visibleKinds(agent, scope)
+  }
+
+  /** 一条记录是否落在当前可见域内。 */
+  isRecordVisible(agent         , scope        , kind        )          {
+    return this.impl.isRecordVisible(agent, scope, kind)
+  }
+
+  /** 面板:读取某会话自己的可见域(null = 未设置)。 */
+  sessionVisibility(sessionId        )                                                      {
     return this.impl.sessionVisibility(sessionId)
   }
 
-  /** 面板:设置/清除某会话的可见范围(null = 恢复默认)。 */
-  setSessionVisibility(sessionId        , scopes                          )                  {
-    return this.impl.setSessionVisibility(sessionId, scopes)
+  /** 面板:设置/清除某会话的可见域(null = 恢复默认)。 */
+  setSessionVisibility(sessionId        , config                                                           )                                                         {
+    return this.impl.setSessionVisibility(sessionId, config)
+  }
+
+  /** 注入半边:下一次 pre-step 要注入的可见域变更通知(取走即删)。 */
+  takeVisibilityNotice(agent         )                                                         {
+    return this.impl.takeVisibilityNotice(agent)
+  }
+
+  /** 面板:每个 scope 下按类型统计条数。 */
+  scopeKindStats()                                                   {
+    return this.impl.scopeKindStats()
+  }
+
+  /** 普通限制:范围外访问审批(挂起,等面板回答)。 */
+  requestOutOfScope(agent         , input                                                        )                                                      {
+    return this.impl.requestOutOfScope(agent, input)
+  }
+
+  /** 面板:当前待审批列表。 */
+  pendingVisibilityApprovals(sessionId         )                                                               {
+    return this.impl.pendingVisibilityApprovals(sessionId)
+  }
+
+  /** 面板:回答一条待审批。 */
+  answerVisibilityApproval(id        , outcome                             )          {
+    return this.impl.answerVisibilityApproval(id, outcome)
   }
 
   /** 写路径默认 scope(省略 scope 时落到哪)。 */
