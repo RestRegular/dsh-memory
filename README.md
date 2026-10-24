@@ -265,7 +265,8 @@ memory_scopes({ action: "list", description: "看看有哪些作用域、各自�
 ```js
 memory_scopes({
   action: "request",
-  requests: [{ scope: "handbook", permissions: ["read"] }],
+  scopes: ["handbook"],
+  permissions: ["read"],
   reason: "需要团队约定与发布流程",
   description: "申请读取 handbook"
 })

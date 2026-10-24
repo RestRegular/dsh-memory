@@ -219,7 +219,7 @@ test('工具端到端：memory_scopes request 走审批并写入 grant', async (
     const tool = memoryScopesTool({ getService: () => svc as never })
     const result = await tool.execute({
       action: 'request',
-      requests: [{ scope: 'handbook', permissions: ['read'] }],
+      scopes: ['handbook'],
       reason: '需要团队约定',
       description: '申请手册',
     } as never, { agent: agent() })

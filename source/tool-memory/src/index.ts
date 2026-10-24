@@ -1361,19 +1361,19 @@ export function memoryListTool(opts: MemoryToolsOptions): ToolSpec<ListArgs, Lis
   }
 }
 
-export interface ScopeGrantRequestInputView {
-  scope: string
-  /** 省略 = 只申请只读；写权限必须显式列出。 */
-  permissions?: Array<'read' | 'write'>
-}
-
 export interface ScopesArgs {
   action?: 'list' | 'request'
   /** 默认 true；false 时只列当前可见域内的作用域。 */
   includeOutOfScope?: boolean
   limit?: number
-  /** action='request' 时必填：要申请的作用域与权限。 */
-  requests?: ScopeGrantRequestInputView[]
+  /**
+   * action='request' 时要申请的作用域（1~5 个）。
+   * 这里刻意用扁平字符串数组：DSH 的 defineTool 对象参数要求显式
+   * `additionalProperties`，嵌套对象 schema 很容易在注册期抛错（0.24.0 踩过）。
+   */
+  scopes?: string[]
+  /** action='request' 的权限，作用于上面所有 scopes；省略 = 只读。 */
+  permissions?: Array<'read' | 'write'>
   /** action='request' 时的申请理由（展示在审批卡上）。 */
   reason?: string
   /** 本次调用的用途(给用户看);普通限制下必填。 */
@@ -1407,17 +1407,15 @@ export function memoryScopesTool(opts: MemoryToolsOptions): ToolSpec<ScopesArgs,
       action: { type: 'string', enum: ['list', 'request'], description: 'list = 目录；request = 申请范围外作用域的会话权限（默认只读）' },
       includeOutOfScope: { type: 'boolean', description: 'list：默认 true；false 时只列当前可见域内的作用域。' },
       limit: { type: 'number', description: 'list：1~200，默认 50' },
-      requests: {
+      scopes: {
         type: 'array',
-        description: 'request：要申请的作用域与权限，最多 5 个 scope；permissions 省略 = 只读',
-        items: {
-          type: 'object',
-          properties: {
-            scope: { type: 'string' },
-            permissions: { type: 'array', items: { type: 'string', enum: ['read', 'write'] } },
-          },
-          required: ['scope'],
-        },
+        items: { type: 'string' },
+        description: 'request：要申请的作用域键，最多 5 个（一次申请多个时共用同一组 permissions）',
+      },
+      permissions: {
+        type: 'array',
+        items: { type: 'string', enum: ['read', 'write'] },
+        description: 'request：申请哪些权限，省略 = 只读；写权限必须显式加 "write"',
       },
       reason: { type: 'string', description: 'request：一句话申请理由，展示在审批卡上' },
       description: { type: 'string', description: DESCRIPTION_PARAM_DESCRIPTION },
@@ -1431,21 +1429,20 @@ export function memoryScopesTool(opts: MemoryToolsOptions): ToolSpec<ScopesArgs,
         if (typeof service.requestScopeGrants !== 'function') {
           throw new MemoryToolError('SCOPES_UNAVAILABLE', '当前 provider 不支持作用域权限申请（请升级 @restregular/dsh-memory）')
         }
-        const raw = Array.isArray(args.requests) ? args.requests : []
-        if (raw.length === 0) {
-          throw new MemoryToolError('REQUESTS_REQUIRED', 'action="request" 需要 requests 数组（scope + 可选 permissions）')
+        const scopes = Array.isArray(args.scopes)
+          ? [...new Set(args.scopes.map((scope) => String(scope).trim()).filter((scope) => scope !== ''))]
+          : []
+        if (scopes.length === 0) {
+          throw new MemoryToolError('REQUESTS_REQUIRED', 'action="request" 需要 scopes 数组（要申请的作用域键）')
         }
-        if (raw.length > 5) {
+        if (scopes.length > 5) {
           throw new MemoryToolError('REQUESTS_TOO_MANY', '一次最多申请 5 个作用域；请分批申请')
         }
-        const requests = raw.map((item) => {
-          const scope = typeof item?.scope === 'string' ? item.scope.trim() : ''
-          if (scope === '') throw new MemoryToolError('SCOPE_INVALID', 'requests[].scope 不能为空')
-          const permissions = Array.isArray(item.permissions)
-            ? [...new Set(item.permissions.filter((permission): permission is 'read' | 'write' => permission === 'read' || permission === 'write'))]
-            : ['read' as const]
-          return { scope, permissions: permissions.length > 0 ? permissions : ['read' as const] }
-        })
+        const permissions = Array.isArray(args.permissions)
+          ? [...new Set(args.permissions.filter((permission): permission is 'read' | 'write' => permission === 'read' || permission === 'write'))]
+          : ['read' as const]
+        const requested = permissions.length > 0 ? permissions : ['read' as const]
+        const requests = scopes.map((scope) => ({ scope, permissions: requested }))
         const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
         try {
           const result = await service.requestScopeGrants(agent, {

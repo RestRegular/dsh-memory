@@ -103,21 +103,31 @@ test('memory_scopes：普通限制下缺 description 直接拒绝', async () => 
   )
 })
 
-test('memory_scopes request：默认只申请只读，透传 scope 与权限', async () => {
-  const result = await tool.execute({
+test('memory_scopes request：默认只申请只读，写权限显式列出', async () => {
+  const readOnly = await tool.execute({
     action: 'request',
-    requests: [{ scope: 'handbook' }, { scope: 'secret-notes', permissions: ['read', 'write'] }],
+    scopes: ['handbook'],
     reason: '需要团队约定',
     description: '申请 handbook',
   }, agentExec)
-  assert.deepEqual(result.results, [
+  assert.deepEqual(readOnly.results, [
     { scope: 'handbook', permission: 'read', status: 'granted' },
+  ])
+
+  const readWrite = await tool.execute({
+    action: 'request',
+    scopes: ['secret-notes'],
+    permissions: ['read', 'write'],
+    reason: '需要读写',
+    description: '申请 secret-notes',
+  }, agentExec)
+  assert.deepEqual(readWrite.results, [
     { scope: 'secret-notes', permission: 'read', status: 'granted' },
     { scope: 'secret-notes', permission: 'write', status: 'granted' },
   ])
 })
 
-test('memory_scopes request：缺少 requests / 超过 5 个 scope 明确拒绝', async () => {
+test('memory_scopes request：缺少 scopes / 超过 5 个 scope 明确拒绝', async () => {
   await assert.rejects(
     tool.execute({ action: 'request', description: '申请' }, agentExec),
     (error: Error & { code?: string }) => error.code === 'REQUESTS_REQUIRED',
@@ -125,7 +135,7 @@ test('memory_scopes request：缺少 requests / 超过 5 个 scope 明确拒绝'
   await assert.rejects(
     tool.execute({
       action: 'request',
-      requests: Array.from({ length: 6 }, (_, i) => ({ scope: `scope-${i}` })),
+      scopes: Array.from({ length: 6 }, (_, i) => `scope-${i}`),
       description: '批量申请',
     }, agentExec),
     (error: Error & { code?: string }) => error.code === 'REQUESTS_TOO_MANY',

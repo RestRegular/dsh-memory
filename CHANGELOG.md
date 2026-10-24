@@ -2,6 +2,14 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.24.1 — 修复 memory_scopes 注册失败导致 memory_get 一起消失
+
+- **现象**：升级到 0.24.0 后，模型侧看不到 `memory_scopes`，连原本正常的 `memory_get` 也变成 `unknown tool`；`memory_search` / `memory_list` / `memory_save` / `memory_forget` 仍在。
+- **根因**：`memory_scopes` 的 `requests` 参数用了嵌套对象 schema。DSH `defineTool` 的 authoring DSL 要求对象类型必须显式写 `additionalProperties`（嵌套对象的 `required` 也不在允许关键字里），注册期抛错 → 整个 tool-memory apply 中断，排在 `memory_scopes` 后面的 `memory_get` 没有注册。
+- **修复**：`action="request"` 改为扁平参数 `scopes: string[]` + `permissions: ["read"|"write"][]`（作用于本次所有 scopes），不再使用 `object` / `properties` 参数；provider 的内部请求结构不变。
+- **回归守卫**：新增测试，禁止任何 `memory_*` 工具参数出现 `type:"object"` / `properties`，避免同类 schema 再次把后续工具注册带崩。
+- 验证：484 tests / 483 pass / 1 skipped；`npm run verify` BUILD OK。
+
 ## 0.24.0 — 作用域目录与用途元数据；自定义作用域原子初始化
 
 - **作用域元数据（`<storeDir>/scope-meta/<sha1(scope)>.json`）**：每个作用域可以带一句话用途，独立于记忆记录——删光记录、记录被 supersede / 过期都不会丢。旧作用域没有元数据时按「未填写用途」处理，不做迁移、不要求补齐。项目别名仍以 `scopes.json` 为准。
