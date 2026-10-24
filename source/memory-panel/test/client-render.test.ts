@@ -1805,6 +1805,10 @@ test('审批卡样式对齐系统审批弹窗:警告色 strip + 同一批主题 
     assert.match(css, new RegExp(`\\.mem-approval-${cls}\\{[^}]*flex:none`), `详情行 ${cls} 必须锁住,不能被列表压缩`)
   }
   assert.match(css, /\.mem-approval-list\{[^}]*min-height:0/, '只有条目列表可以收缩')
+  // 0.22.3:26vh 那层上限会让矮窗口里的列表只剩十几像素;与宿主审批卡同口径,
+  // 只受 composer 文本区最大高度约束。
+  assert.match(css, /\.mem-approval-body\{[^}]*max-height:var\(--dsh-composer-text-max-height/, '审批卡高度与宿主审批卡同口径')
+  assert.doesNotMatch(css, /\.mem-approval-body\{[^}]*46vh/, '不再叠一层 46vh 上限')
 })
 
 test('审批卡:全选/取消全选、展示 Agent 说明、点记忆 ID 跳到面板记录页', async () => {

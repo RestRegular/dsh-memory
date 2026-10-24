@@ -2,6 +2,12 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.22.3 — 审批卡高度与宿主同口径，矮窗口也给列表留空间
+
+- 0.22.2 把详情行锁成 `flex:none` 后，矮窗口里 `max-height: min(--dsh-composer-text-max-height, 46vh)` 那层 `46vh` 会让头部占满高度、条目列表只剩十几像素（437px 高窗口实测 ~18px）。
+- 审批卡 body 改为只受 `--dsh-composer-text-max-height` 约束（与宿主 `dsh-client-ui-approval` 同一口径），不再叠 `46vh`；同样窗口下列表恢复到 ~181px（headless Chrome 实测）。
+- 测试：CSS 断言锁定 `max-height:var(--dsh-composer-text-max-height,…)` 且不再出现 `46vh`。
+
 ## 0.22.2 — 修复审批卡不显示 Agent 查询 / 说明
 
 - **现象**：审批条目一多（例如 18 条）时，审批卡里只看到标题、提示和条目列表，`Agent 查询` 与 `Agent 说明` 两行完全消失。

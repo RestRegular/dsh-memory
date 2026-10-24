@@ -549,7 +549,9 @@ window.__ModuleLoader__.load({
       '.mem-approval-tool{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11.5px;opacity:.8;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.mem-approval .spacer{flex:1}',
       '.mem-approval .muted{color:var(--dsw-alias-label-secondary);font-size:11.5px}',
-      '.mem-approval-body{box-sizing:border-box;max-height:min(var(--dsh-composer-text-max-height,320px),46vh);display:flex;flex-direction:column;gap:6px;padding:12px 16px 0;overflow-y:auto;--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2,color-mix(in srgb,var(--dsw-alias-label-secondary) 35%,transparent))}',
+      // 与宿主审批卡同一口径:只受 composer 文本区最大高度约束(不再叠一层 46vh,
+      // 否则窗口一矮,详情行占位后条目列表只剩几十像素)。条目多时只让列表滚动(0.22.2)。
+      '.mem-approval-body{box-sizing:border-box;max-height:var(--dsh-composer-text-max-height,320px);display:flex;flex-direction:column;gap:6px;padding:12px 16px 0;overflow-y:auto;--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2,color-mix(in srgb,var(--dsw-alias-label-secondary) 35%,transparent))}',
       '.mem-approval-headline{color:var(--dsw-alias-label-primary);font-size:15px;font-weight:500;line-height:24px;flex:none}',
       '.mem-approval-hint{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.55;flex:none}',
       // 这三行的 overflow:auto 会让 flex 的自动最小尺寸变成 0;若不锁 flex:none,
