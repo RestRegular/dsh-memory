@@ -1680,7 +1680,11 @@ test('记忆权限浮窗:展示 Agent 授权、实时轮询并支持撤销', asy
     defaults: ['session:s1', 'global'],
     defaultScopes: ['session:s1', 'global'],
     bindings: [],
-    scopes: [{ scope: 'session:s1', label: '当前会话', records: 1 }, { scope: 'global', label: '全局', records: 2 }],
+    scopes: [
+      { scope: 'session:s1', label: '当前会话', records: 1 },
+      { scope: 'global', label: '全局', records: 2 },
+      { scope: 'handbook', label: 'handbook', records: 1 },
+    ],
   }
   let grants = [{
     id: 'grant-1',
@@ -1721,10 +1725,15 @@ test('记忆权限浮窗:展示 Agent 授权、实时轮询并支持撤销', asy
 
     const opened = textOf(current)
     assert.ok(opened.includes('记忆权限'), '浮窗标题是记忆权限')
-    assert.ok(opened.includes('Agent 会话授权'), '展示 Agent 授权区块')
+    assert.ok(opened.includes('勾选作用域'), '提示里说明了勾选与授权的区别')
+    assert.ok(opened.includes('Agent 授权：只读'), '授权直接标在作用域行内')
     assert.ok(opened.includes('handbook'), '展示授权作用域')
-    assert.ok(opened.includes('只读'), '展示权限')
     assert.ok(calls.some((call) => call.url.startsWith('/memory/api/grants?session=s1')), '打开即拉取授权')
+    // 同一行里既有「勾选 + 可读/可写」又有「Agent 授权」,不再单独开一块列表。
+    const grantItem = collect(current).find((n) => n.tag === 'div' && String(n.props?.className ?? '').includes('mem-scope-item')
+      && textOf(n).includes('handbook') && textOf(n).includes('Agent 授权：只读'))
+    assert.ok(grantItem, '授权与可见范围在同一作用域行内展示')
+    assert.ok(collect(grantItem).some((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-state')), '同一行仍有可读 / 可写状态按钮')
 
     // 实时轮询：3 秒内至少再拉一次。
     const before = calls.filter((call) => call.url.startsWith('/memory/api/grants?')).length
@@ -1741,7 +1750,7 @@ test('记忆权限浮窗:展示 Agent 授权、实时轮询并支持撤销', asy
     assert.ok(posted, '撤销走 POST /grants')
     const body = JSON.parse(String(posted?.init?.body ?? '{}')) as { session: string; id: string; view: string }
     assert.deepEqual(body, { session: 's1', id: 'grant-1', view: 's1' })
-    assert.ok(textOf(current).includes('暂无授权。'), '撤销后列表实时清空')
+    assert.ok(!textOf(current).includes('Agent 授权：'), '撤销后行内授权实时消失')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch
   }
@@ -1754,7 +1763,7 @@ test('记忆范围浮窗:深色模式用 business-primary + 前景色,列表高�
   assert.match(css, /\.mem-scope-check\.on \.box\{[^}]*state-business-primary[^}]*label-primary-foreground/, '选中勾选框用主题业务色 + 可翻转前景色')
   assert.match(css, /\.mem-scope-save\{[^}]*state-business-primary[^}]*label-primary-foreground/, '保存按钮不再用近白色的 brand-primary 填充')
   assert.match(css, /\.mem-scope-list\{[^}]*max-height:min\(220px,32vh\)/, '滚动列表高度收紧')
-  assert.match(css, /\.mem-scope-pop\{[^}]*max-height:min\(640px,84vh\)/, '浮窗高度容纳授权区块')
+  assert.match(css, /\.mem-scope-pop\{[^}]*max-height:min\(520px,72vh\)/, '浮窗整体高度收紧')
 })
 
 test('记忆范围按钮:数字展示范围,边框样式展示限制等级(橙黄实线/蓝色实线/灰色虚线)', async () => {
