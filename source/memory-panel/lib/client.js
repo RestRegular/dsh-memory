@@ -558,6 +558,11 @@ window.__ModuleLoader__.load({
       '.mem-scope-label{flex:1;min-width:0;padding:0;border:none;background:transparent;color:var(--dsw-alias-label-primary);font-size:12.5px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}',
       '.mem-scope-label:hover{color:var(--dsw-alias-brand-primary);border:none}',
       '.mem-scope-row .cnt{flex:none;color:var(--dsw-alias-label-secondary);font-size:10.5px}',
+      // 0.25.11:显示名与真实键不一致时露出完整键(项目别名→路径、会话短 id→uuid、
+      // 自定义名→裸键)。**不手工截断**:容器多宽就显示多少,放不下按 CSS 省略 ——
+      // 与勾选框左对齐,字号比名字小一档,便于扫读又不会抢戏。
+      '.mem-scope-key{min-width:0;padding:0 0 0 26px;font-family:var(--ds-font-family-code, ui-monospace, monospace);font-size:10px;line-height:1.45;color:color-mix(in srgb,var(--dsw-alias-label-secondary) 88%,transparent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+      '.mem-scope-item:hover .mem-scope-key{color:var(--dsw-alias-label-secondary)}',
       // 0.23.0:每个作用域的状态按钮行 —— 绑定 | 可读 | 可写。
       '.mem-scope-state-row{display:flex;align-items:center;gap:4px;padding-left:26px}',
       '.mem-scope-state{padding:1px 7px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:10.5px;line-height:1.65;cursor:pointer;transition:border-color .12s ease,background .12s ease,color .12s ease}',
@@ -726,6 +731,19 @@ window.__ModuleLoader__.load({
       const mapped = labels && labels[scope]
       if (typeof mapped === 'string' && mapped.length > 0) return mapped
       return scopeDisplayName(scope)
+    }
+
+    /**
+     * 悬停提示里的作用域身份:`显示名 → 真实键`。
+     *
+     * 0.25.11：项目作用域有别名时显示名是 `project:dsh-pocket`,真实键却是完整路径;
+     * 会话与自定义作用域同理(短 id / 裸键)。只给键看不出它是哪个项目,只给名字又拿不到
+     * 能直接粘进工具参数的值，所以两段都给。显示名与键相同时不重复。
+     */
+    function scopeTitle(scope, label) {
+      const key = String(scope === null || scope === undefined ? '' : scope)
+      const name = typeof label === 'string' && label !== '' ? label : scopeDisplayName(scope)
+      return key === '' || key === name ? key : `${name} → ${key}`
     }
 
     /** 记忆类型 → 中文名 + 树里的强调色(与宿主主题无关的固定色相,底色用 color-mix 自适应)。 */
@@ -1081,7 +1099,7 @@ window.__ModuleLoader__.load({
           },
         },
           h('span', { className: open ? 'chev open' : 'chev' }, '▶'),
-          h('span', { className: 'badge scope', title: rec.scope }, scopeLabel(rec.scope, labels)),
+          h('span', { className: 'badge scope', title: scopeTitle(rec.scope, scopeLabel(rec.scope, labels)) }, scopeLabel(rec.scope, labels)),
           h('span', { className: 'badge' }, rec.kind),
           score !== null && score !== undefined && Number.isFinite(Number(score))
             ? h('span', {
@@ -1231,7 +1249,7 @@ window.__ModuleLoader__.load({
         role: 'button',
         tabIndex: 0,
         'aria-expanded': !node.collapsed,
-        title: `${node.scope} · 点击${node.collapsed ? '展开' : '折叠'}`,
+        title: `${scopeTitle(node.scope, node.label)} · 点击${node.collapsed ? '展开' : '折叠'}`,
         onClick: () => onToggle(node.scope),
         onKeyDown: (event) => {
           if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onToggle(node.scope) }
@@ -5131,6 +5149,7 @@ window.__ModuleLoader__.load({
                         && target.closest('button,input,textarea,select,a,label')) return
                       toggleScope(row.scope)
                     }
+                    const shownName = displayName(row.scope, item ? item.label : row.grant.label)
                     return h('div', {
                       className: `mem-scope-item${checked ? ' on' : ''}${aiOnly ? ' ai' : ''}`,
                       key: row.scope,
@@ -5153,12 +5172,18 @@ window.__ModuleLoader__.load({
                         h('button', {
                           type: 'button',
                           className: 'mem-scope-label',
-                          title: item ? row.scope : `${row.scope}（目录中已不可见）`,
+                          title: item ? scopeTitle(row.scope, shownName) : `${row.scope}（目录中已不可见）`,
                           onClick: () => toggleScope(row.scope),
-                        }, displayName(row.scope, item ? item.label : row.grant.label)),
+                        }, shownName),
                         grant ? grantTag(grant, row.scope) : null,
                         h('span', { className: 'cnt' }, item ? `${item.records ?? 0}` : '目录中已不可见'),
                       ),
+                      // 0.25.11：显示名与真实键不一致时，把**完整键**单独一行放出来
+                      // （项目别名 → 完整路径、会话短 id → 完整 uuid、自定义名 → 裸键）。
+                      // 不做手工截断：CSS 按可用宽度省略，容器宽就多显示几个字符，窗口变窄自动收。
+                      shownName === String(row.scope)
+                        ? null
+                        : h('div', { className: 'mem-scope-key', title: String(row.scope) }, String(row.scope)),
                       item
                         ? h('div', { className: 'mem-scope-state-row' },
                           h('button', {
@@ -5500,8 +5525,8 @@ window.__ModuleLoader__.load({
                             : h('span', { className: 'mem-approval-id', title: item.id }, grantMode
                               ? (item.grantPermission === 'write' ? '可写' : '只读')
                               : (String(item.id).length > 12 ? `${item.id.slice(0, 8)}…${item.id.slice(-4)}` : String(item.id))),
-                          // 作用域显示名带类型前缀;精确的 scope 键留在 title 里。
-                          h('span', { className: 'audit-pill mute', title: item.scope }, scopeLabel(item.scope)),
+                          // 作用域显示名带类型前缀;title 里给出「显示名 → 真实键」。
+                          h('span', { className: 'audit-pill mute', title: scopeTitle(item.scope, scopeLabel(item.scope)) }, scopeLabel(item.scope)),
                           grantMode
                             ? h('span', { className: 'audit-pill mute' }, item.grantPermission === 'write' ? '写入 / 删除' : '只读访问')
                             : h('span', { className: 'audit-pill mute' }, item.kind ? kindMeta(item.kind).label : '未知'),
@@ -5818,6 +5843,7 @@ window.__ModuleLoader__.load({
       sessionShortId: sessionShortId,
       scopeDisplayName: scopeDisplayName,
       scopeTypePrefix: scopeTypePrefix,
+      scopeTitle: scopeTitle,
       scopeLabel: scopeLabel,
       KIND_META: KIND_META,
       CSS: CSS,

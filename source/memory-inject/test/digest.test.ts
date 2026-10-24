@@ -29,7 +29,9 @@ test('digestScopeLabel maps scopes to short labels', () => {
   assert.equal(digestScopeLabel('global'), '全局')
   assert.equal(digestScopeLabel('project:D:/repo'), '项目')
   assert.equal(digestScopeLabel('session:abc'), '会话')
-  assert.equal(digestScopeLabel('handbook'), 'handbook')
+  // 0.25.11:自定义作用域补 custom: 前缀,否则摘要里是个裸名字,和上面三个分类词分不清
+  assert.equal(digestScopeLabel('handbook'), 'custom:handbook')
+  assert.equal(digestScopeLabel('dsh-plugin-dev'), 'custom:dsh-plugin-dev')
 })
 
 test('renderDigestBlock returns null for no records and stays within budget', () => {

@@ -72,12 +72,18 @@ export interface DigestRender {
   stats: DigestStats
 }
 
-/** scope 的中文标签:global/项目/会话/自定义。 */
+/**
+ * scope 的紧凑分类标签:global/项目/会话/自定义。
+ *
+ * 前三种是**分类词**(摘要按预算只给类型,不给完整名字);自定义作用域没有分类可归,
+ * 所以给 `custom:<名字>` —— 0.25.11 起补上前缀,否则摘要里它是个裸名字,和全局/项目/
+ * 会话这些分类词混在一起看不出是什么。
+ */
 export function digestScopeLabel(scope: string): string {
   if (scope === 'global') return '全局'
   if (scope === 'project' || scope.startsWith('project:')) return '项目'
   if (scope === 'session' || scope.startsWith('session:')) return '会话'
-  return scope
+  return `custom:${scope}`
 }
 
 /**

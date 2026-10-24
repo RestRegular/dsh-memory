@@ -545,6 +545,7 @@ test('会话作用域展示名:客户端也取会话 id 前 16 位(前 8 位恒�
     sessionShortId: (id: string) => string
     scopeDisplayName: (scope: string, humanName?: string) => string
     scopeTypePrefix: (scope: string) => string
+    scopeTitle: (scope: string, label?: string) => string
     scopeLabel: (scope: string, labels?: Record<string, string>) => string
   }
   const real = 'session-1a2b3c4d-0000-4000-8000-000000000001'
@@ -569,6 +570,69 @@ test('会话作用域展示名:客户端也取会话 id 前 16 位(前 8 位恒�
   assert.equal(helpers.scopeDisplayName('handbook', '工作笔记'), 'custom:工作笔记')
   assert.equal(helpers.scopeTypePrefix('global'), 'global:')
   assert.equal(helpers.scopeTypePrefix('handbook'), 'custom:')
+  // 悬停提示:`显示名 → 真实键`;名字与键相同时不重复(0.25.11)
+  const pocketKey = String.raw`project:D:\DeepseekHarnessProjects\dsh-pocket`
+  assert.equal(helpers.scopeTitle(pocketKey, 'project:dsh-pocket'), `project:dsh-pocket → ${pocketKey}`)
+  assert.equal(helpers.scopeTitle('project:D:\w', 'project:D:\w'), 'project:D:\w', '名字与键相同不重复')
+  assert.equal(helpers.scopeTitle('global'), 'global:全局 → global')
+})
+test('记忆权限浮窗:只有显示名与真实键不同才多出一行完整键;键行靠 CSS 省略而不是手工截断', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  // CSS:完整键要能按容器宽度自动省略(不写死截断长度)
+  const css = (exports.__test as { CSS: string }).CSS
+  assert.match(css, /\.mem-scope-key\{[^}]*white-space:nowrap[^}]*overflow:hidden[^}]*text-overflow:ellipsis/, '键行按容器宽度省略')
+  assert.match(css, /\.mem-scope-key\{[^}]*font-size:10px/, '键行比名字小一档')
+
+  const Button = (exports.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
+  const payload = {
+    sessionId: 's1',
+    override: null,
+    effective: { level: 'normal', scopes: [{ scope: 'session:s1' }, { scope: 'project:D:\w' }] },
+    source: 'default',
+    inherited: false,
+    defaults: ['session:s1', 'project:D:\w'],
+    defaultScopes: ['session:s1', 'project:D:\w'],
+    bindings: [],
+    scopes: [
+      { scope: 'session:s1', label: 'session:当前会话', records: 1 },
+      // 没有别名的项目作用域:显示名就是完整键,不该再多一行
+      { scope: 'project:D:\w', label: 'project:D:\w', records: 2 },
+      { scope: 'handbook', label: 'custom:handbook', records: 1 },
+    ],
+  }
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string) => {
+    if (url.startsWith('/memory/api/grants?')) {
+      return { status: 200, json: async () => ({ ok: true, value: { sessionId: 's1', grants: [] } }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, value: payload }) }
+  }
+  try {
+    let current: RenderNode | null = null
+    const element = () => hooks.React.createElement(Button, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const button = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))
+    ;(button!.props!.onClick as (event: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 40, top: 500 }) } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const keyLines = collect(current)
+      .filter((n) => String(n.props?.className ?? '') === 'mem-scope-key')
+      .map((n) => textOf(n))
+    assert.ok(keyLines.includes('session:s1'), '会话行:显示名(session:当前会话)与键不同 → 露出键')
+    assert.ok(keyLines.includes('handbook'), '自定义行:显示名(custom:handbook)与键不同 → 露出裸键')
+    assert.ok(!keyLines.includes('project:D:\w'), '项目行:显示名与键相同 → 不重复渲染')
+    // 键行也不许手工截断(不能出现自己加的省略号)
+    assert.ok(!keyLines.some((line) => line.includes('…')), '完整键保持原样,省略交给 CSS')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
 })
 
 test('未配置的后端:展开「模型与硬件」给出模型列表与安装按钮,而不是一个死开关', async () => {
@@ -1636,7 +1700,7 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
     bindings: [],
     scopes: [
       { scope: 'global', label: 'global:全局', records: 5, pendingEmbeds: 0, read: true, write: true, bound: true, defaultBound: true, bindable: false },
-      { scope: 'handbook', label: 'handbook', records: 1, pendingEmbeds: 0, read: true, write: true, bound: false, defaultBound: false, bindable: true },
+      { scope: 'handbook', label: 'custom:handbook', records: 1, pendingEmbeds: 0, read: true, write: true, bound: false, defaultBound: false, bindable: true },
     ],
   }
   const savedFetch = (globalThis as Record<string, unknown>).fetch
@@ -1672,11 +1736,19 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
 
     const text = textOf(current)
     assert.ok(text.includes('记忆权限'))
-    // 0.25.8:本会话的 session scope 在列表里显示为「当前会话」,原始 scope 键退到 title 提示里。
+    // 0.25.8:本会话的 session scope 在列表里显示为「当前会话」。
     assert.ok(text.includes('session:当前会话'), '本会话 session scope 显示为 session:当前会话')
+    // 0.25.11:显示名与真实键不一致时,完整键单独一行(raw),并且 title 是「显示名 → 键」。
+    const keyLines = collect(current)
+      .filter((n) => n.tag === 'div' && String(n.props?.className ?? '') === 'mem-scope-key')
+      .map((n) => textOf(n))
+    assert.ok(keyLines.includes('session:s1'), `会话行露出完整键(实际:${JSON.stringify(keyLines)})`)
+    assert.ok(keyLines.includes('global'), 'global 行露出裸键 global(显示名是 global:全局)')
+    assert.ok(keyLines.includes('handbook'), '自定义作用域露出裸键 handbook(显示名是 custom:handbook)')
     const sessionLabel = collect(current).find((n) => n.tag === 'button'
-      && String(n.props?.className ?? '') === 'mem-scope-label' && String(n.props?.title ?? '') === 'session:s1')
-    assert.ok(sessionLabel, '原始 scope 键仍留在 label 的 title 里')
+      && String(n.props?.className ?? '') === 'mem-scope-label' && String(n.props?.title ?? '').startsWith('session:当前会话'))
+    assert.ok(sessionLabel, 'label 的 title 带显示名')
+    assert.match(String(sessionLabel!.props!.title), /→ session:s1$/, 'title 里同时给出真实键')
     assert.ok(text.includes('全局'))
     assert.ok(text.includes('绝对限制') && text.includes('普通限制') && text.includes('无限制'), '三档限制等级')
     assert.ok(!text.includes('事实') && !text.includes('规则'), '不再显示类型 chips')
