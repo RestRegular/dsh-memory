@@ -6,15 +6,15 @@
  * 正文走 memory_get；memory_get 的 fields 决定渲染哪些元数据。
  *
  * 0.20.0：范围外命中被挡住时，把**真实原因**（用户拒绝 / 审批超时 / 无法审批）
- * 写进渲染文本。绝对限制下工具根本不会带 withheld（视为不存在），所以这里
- * 不需要也不应该提"被挡住"。
+ * 写进渲染文本。
+ * 0.23.0：绝对限制与「不可读」开关也会被说明（不再假装"不存在"），并提示怎么调整。
  */
                                                                                                
 
 /** 把 scope 键渲染成展示文案（宿主能查到会话标题时用它，否则用短 id）。 */
                                                   
 
-/** 有内容没返回时的原因（absolute 模式不会走到这里）。 */
+/** 有内容没返回时的原因。 */
                                                                     
 
 /**
@@ -33,7 +33,7 @@ const joinList = (value         )         =>
 
 /**
  * 范围外内容为什么没返回——给模型看的真实原因。
- * 空字符串 = 没有需要说明的（没有 withheld，或 absolute 模式下不告知）。
+ * 空字符串 = 没有需要说明的（没有 withheld）。
  */
 export function renderWithheldNote(withheld                          )         {
   if (withheld === undefined || withheld.count <= 0) return ''
@@ -47,6 +47,10 @@ export function renderWithheldNote(withheld                          )         {
       return `另有 ${count} 条记忆在本会话的可见域外，当前环境无法发起审批，未返回。`
     case 'partial':
       return `另有 ${count} 条记忆在本会话的可见域外，用户在本次审批中只允许了其余条目（限制等级：普通限制），未返回。如确实需要，请让用户调整「记忆范围」后重试。`
+    case 'absolute':
+      return `另有 ${count} 条记忆在本会话的可见域外，当前限制等级为「绝对限制」，不会发起审批，未返回。如确实是本次任务需要的内容，请让用户调整「记忆范围」后重试。`
+    case 'read-disabled':
+      return `另有 ${count} 条记忆所在的作用域在本会话记忆范围里被标记为「不可读」（可读/可写按钮），未返回。如确实需要，请让用户打开该作用域的「可读」状态后重试。`
     default:
       return ''
   }
@@ -144,8 +148,7 @@ export function renderGetResult(value           , label            )         {
     return text === '' ? head : `${head}\n${text}`
   }).join('\n\n')
   const missing = value.missing.length > 0 ? `未找到：${value.missing.join(', ')}` : ''
-  // 被可见域挡住的那几条:absolute 模式下 provider 不会给 withheld(视为不存在),
-  // 其余情况把真实原因(拒绝 / 超时 / 无法审批)告诉模型。
+  // 被可见域挡住的那几条:把真实原因(拒绝 / 超时 / 绝对限制 / 不可读)告诉模型。
   const note = renderWithheldNote(value.withheld)
   const tail = [missing, note].filter((part) => part !== '').join('\n\n')
   if (body === '') return tail === '' ? '没有找到记忆。' : tail

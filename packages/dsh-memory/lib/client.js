@@ -530,6 +530,15 @@ window.__ModuleLoader__.load({
       '.mem-scope-label{flex:1;min-width:0;padding:0;border:none;background:transparent;color:var(--dsw-alias-label-primary);font-size:12.5px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}',
       '.mem-scope-label:hover{color:var(--dsw-alias-brand-primary);border:none}',
       '.mem-scope-row .cnt{flex:none;color:var(--dsw-alias-label-secondary);font-size:10.5px}',
+      // 0.23.0:每个作用域的状态按钮行 —— 绑定 | 可读 | 可写。
+      '.mem-scope-state-row{display:flex;align-items:center;gap:4px;padding-left:26px}',
+      '.mem-scope-state{padding:1px 7px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:10.5px;line-height:1.65;cursor:pointer;transition:border-color .12s ease,background .12s ease,color .12s ease}',
+      '.mem-scope-state:hover:not(:disabled){border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,var(--dsw-alias-border-l1));color:var(--dsw-alias-label-primary)}',
+      '.mem-scope-state.on{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 58%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 14%,transparent);color:var(--dsw-alias-state-business-primary)}',
+      '.mem-scope-state.bind.on{border-style:dashed}',
+      '.mem-scope-state:disabled{opacity:.42;cursor:default}',
+      '.mem-scope-state:focus-visible{outline:1px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
+      '.mem-scope-sep{width:1px;height:12px;margin:0 1px;background:var(--dsw-alias-border-l1);flex:none}',
       '.mem-scope-foot{display:flex;align-items:center;gap:8px}',
       '.mem-scope-foot .spacer{flex:1}',
       '.mem-scope-reset{padding:6px 13px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer;transition:border-color .12s ease,color .12s ease}',
@@ -1049,9 +1058,10 @@ window.__ModuleLoader__.load({
                         : null,
                     ),
                     h('div', { className: 'acts' },
-                      h('button', { disabled: busy, onClick: save }, busy ? '保存中…' : '保存'),
+                      h('button', { disabled: busy, onClick: save }, busy ? '保存中…' : '保存修正版'),
                       h('button', { disabled: busy, onClick: cancelEdit }, '取消'),
                     ),
+                    h('div', { className: 'hint' }, '保存会新建一条修正版（supersedes 当前记录），旧记录保留；记录页默认隐藏已被修正的旧版本。'),
                   )
                 : h('div', null,
                     h('div', { className: 'content' }, rec.content),
@@ -3413,6 +3423,9 @@ window.__ModuleLoader__.load({
       const [installRequested, setInstallRequested] = React.useState(false)
       const [dangerAsk, setDangerAsk] = React.useState('')
       const [scopeFilter, setScopeFilter] = React.useState('')
+      // 0.23.0:记录页「是否被修正」筛选。默认隐藏已被 supersede 的旧记录,
+      // 但历史仍可切到「显示全部 / 只看已修正」查看。
+      const [supersededFilter, setSupersededFilter] = React.useState('hide')
       const [q, setQ] = React.useState('')
       // 语义检索:默认关(记录页原本是"关键词过滤");开启后搜索走 /search,
       // 由 provider 用向量 + 词法同一套排序,列表按相关度排。
@@ -3688,7 +3701,7 @@ window.__ModuleLoader__.load({
         notice = h('div', { className: 'hint err' }, `安装失败：${install.error || install.message}`)
       }
 
-      const filtering = q.trim() !== '' || scopeFilter !== ''
+      const filtering = q.trim() !== '' || scopeFilter !== '' || supersededFilter !== 'hide'
 
       // 三个标签的内容分开构建:记录(概览) / 数据(列表) / 设置。
       const statsCard = h('div', { className: 'stats' },
@@ -3807,9 +3820,21 @@ window.__ModuleLoader__.load({
           disabled: loading,
           onChange: (next) => { setScopeFilter(next); load(q, next) },
         }),
+        // 0.23.0:是否被修正。默认隐藏旧版本;要看历史关系时切到另外两档。
+        h(Dropdown, {
+          items: [
+            { value: 'hide', label: '隐藏已修正' },
+            { value: 'all', label: '显示全部' },
+            { value: 'only', label: '只看已修正' },
+          ],
+          value: supersededFilter,
+          disabled: loading,
+          title: '是否被修正：默认隐藏已被新版本取代的旧记录',
+          onChange: setSupersededFilter,
+        }),
         h('button', { onClick: () => setCreating((v) => !v), disabled: loading }, creating ? '收起' : '新建'),
         h('button', { onClick: () => load(q, scopeFilter), disabled: loading }, loading ? '刷新中…' : '刷新'),
-        filtering ? h('button', { className: 'linkbtn', onClick: () => { setQ(''); setScopeFilter(''); setSearchInfo(null); load('', '', semantic) } }, '清空筛选') : null,
+        filtering ? h('button', { className: 'linkbtn', onClick: () => { setQ(''); setScopeFilter(''); setSupersededFilter('hide'); setSearchInfo(null); load('', '', semantic) } }, '清空筛选') : null,
       )
       // 语义检索结果的出处:真跑了向量,还是因为服务/向量缺失退回了词法 —— 明说,
       // 不把词法结果冒充成"语义找到的"。
@@ -3848,11 +3873,18 @@ window.__ModuleLoader__.load({
           })
         : null
       const emptyText = searchInfo ? '没有语义相关的记忆' : filtering ? '没有匹配的记忆' : '还没有记忆'
-      // 从审计跳过来的目标记录如果不在当前加载结果里，先把它补到列表最前面，
+      // 0.23.0:「是否被修正」筛选。默认隐藏已被 supersede 的旧记录,
+      // 历史核对时可切到「显示全部 / 只看已修正」。
+      const supersededRecords = supersededFilter === 'all'
+        ? records
+        : supersededFilter === 'only'
+          ? records.filter((rec) => Boolean(rec.supersededBy))
+          : records.filter((rec) => !rec.supersededBy)
+      // 从审计跳过来的目标记录如果不在当前筛选结果里，先把它补到列表最前面，
       // 否则跳转后列表里根本没有这张卡，focus 自然也无法展开。
-      const displayRecords = focusRecordData !== null && !records.some((rec) => rec.id === focusRecordData.id)
-        ? [focusRecordData, ...records]
-        : records
+      const displayRecords = focusRecordData !== null && !supersededRecords.some((rec) => rec.id === focusRecordData.id)
+        ? [focusRecordData, ...supersededRecords]
+        : supersededRecords
       const listBody = !loading && !error && displayRecords.length === 0
         ? h('div', { className: 'empty' },
             emptyText,
@@ -4514,8 +4546,14 @@ window.__ModuleLoader__.load({
      *   - 不再按记忆类型收窄,只选作用域。
      *
      * 读写走 /memory/api/visibility:
-     *   GET  ?session=<id> → { override, effective, inherited, defaults, scopes }
-     *   POST { session, visibility: { scopes: [{ scope }], level } | null } → 同上
+     *   GET  ?session=<id> → { override, effective, inherited, defaults, workspace, bindings, scopes }
+     *   POST { session, visibility: { scopes: [{ scope, read?, write? }], level } | null,
+     *          bindings: string[] } → 同上
+     *
+     * 0.23.0:
+     *   - 每个作用域有「绑定 / 可读 / 可写」状态按钮;绑定是工作区级(新会话默认可见),
+     *     可读 / 可写是会话级,直接影响工具读到 / 写到该作用域时的结果与失败原因;
+     *   - 保存时 read/write 只在关掉时提交 false,绑定整体提交。
      */
     function MemoryVisibilityButton({ sessionId } = {}) {
       const [open, setOpen] = React.useState(false)
@@ -4525,6 +4563,8 @@ window.__ModuleLoader__.load({
       const [data, setData] = React.useState(null)
       const [level, setLevel] = React.useState('normal')
       const [entries, setEntries] = React.useState({})
+      const [perms, setPerms] = React.useState({})
+      const [bound, setBound] = React.useState({})
       const [catalog, setCatalog] = React.useState([])
       const [search, setSearch] = React.useState('')
       const [anchor, setAnchor] = React.useState(null)
@@ -4591,8 +4631,30 @@ window.__ModuleLoader__.load({
         }
         const nextEntries = {}
         for (const item of nextCatalog) nextEntries[item.scope] = selected.has(item.scope)
+        // 0.23.0:每个作用域的 read / write 状态 + 工作区绑定。
+        const ruleByScope = new Map()
+        for (const rule of selectedRules) {
+          const scope = typeof rule === 'string' ? rule : rule && typeof rule.scope === 'string' ? rule.scope : ''
+          if (scope !== '' && !ruleByScope.has(scope)) ruleByScope.set(scope, rule)
+        }
+        const boundSet = new Set(
+          (Array.isArray(value.bindings) ? value.bindings : [])
+            .filter((scope) => typeof scope === 'string' && scope !== ''),
+        )
+        const nextPerms = {}
+        const nextBound = {}
+        for (const item of nextCatalog) {
+          const rule = ruleByScope.get(item.scope)
+          nextPerms[item.scope] = {
+            read: rule ? rule.read !== false : item.read !== false,
+            write: rule ? rule.write !== false : item.write !== false,
+          }
+          nextBound[item.scope] = boundSet.has(item.scope) || item.bound === true
+        }
         setCatalog(nextCatalog)
         setEntries(nextEntries)
+        setPerms(nextPerms)
+        setBound(nextBound)
       }
 
       const load = () => {
@@ -4629,6 +4691,19 @@ window.__ModuleLoader__.load({
         setEntries((prev) => ({ ...prev, [scope]: !prev[scope] }))
       }
 
+      /** 切换某个作用域的可读 / 可写状态（会话级）。 */
+      const togglePerm = (scope, key) => {
+        setPerms((prev) => {
+          const current = prev[scope] ?? { read: true, write: true }
+          return { ...prev, [scope]: { ...current, [key]: !current[key] } }
+        })
+      }
+
+      /** 切换某个作用域是否绑定到当前工作区（工作区级，新会话默认可见）。 */
+      const toggleBound = (scope) => {
+        setBound((prev) => ({ ...prev, [scope]: !prev[scope] }))
+      }
+
       const selectAll = () => {
         setEntries((prev) => {
           const next = { ...prev }
@@ -4648,7 +4723,11 @@ window.__ModuleLoader__.load({
       const save = (config) => {
         setBusy(true)
         setError('')
-        api('visibility', { session: sessionId, visibility: config })
+        // 绑定是工作区级、与本次会话的显式覆盖一起提交;会话作用域不能绑定。
+        const bindings = catalog
+          .filter((item) => bound[item.scope] && !String(item.scope).startsWith('session:'))
+          .map((item) => item.scope)
+        api('visibility', { session: sessionId, visibility: config, bindings })
           .then((value) => {
             applyPayload(value)
             setOpen(false)
@@ -4658,7 +4737,11 @@ window.__ModuleLoader__.load({
       }
 
       const saveDraft = () => {
-        const scopes = catalog.filter((item) => entries[item.scope]).map((item) => ({ scope: item.scope }))
+        const scopes = catalog.filter((item) => entries[item.scope]).map((item) => ({
+          scope: item.scope,
+          read: perms[item.scope]?.read !== false,
+          write: perms[item.scope]?.write !== false,
+        }))
         if (scopes.length === 0) { setError('至少选择一个可见范围'); return }
         save({ scopes, level })
       }
@@ -4778,6 +4861,41 @@ window.__ModuleLoader__.load({
                           onClick: () => toggleScope(item.scope),
                         }, item.label || item.scope),
                         h('span', { className: 'cnt' }, `${item.records ?? 0}`),
+                      ),
+                      // 0.23.0:状态按钮 —— 绑定(工作区级) / 可读 | 可写(会话级)。
+                      h('div', { className: 'mem-scope-state-row' },
+                        item.bindable === false || String(item.scope).startsWith('session:')
+                          ? null
+                          : h('button', {
+                              type: 'button',
+                              className: `mem-scope-state bind${bound[item.scope] ? ' on' : ''}`,
+                              'aria-pressed': Boolean(bound[item.scope]),
+                              title: bound[item.scope]
+                                ? '已绑定到当前工作区：本工作区新会话的默认可见范围会包含它'
+                                : '绑定到当前工作区：本工作区新会话的默认可见范围会包含它',
+                              onClick: () => toggleBound(item.scope),
+                            }, '绑定'),
+                        h('span', { className: 'mem-scope-sep', 'aria-hidden': 'true' }),
+                        h('button', {
+                          type: 'button',
+                          className: `mem-scope-state read${perms[item.scope]?.read !== false ? ' on' : ''}`,
+                          'aria-pressed': perms[item.scope]?.read !== false,
+                          disabled: !entries[item.scope],
+                          title: entries[item.scope]
+                            ? (perms[item.scope]?.read !== false ? '可读：搜索 / 读取会命中该作用域' : '不可读：搜索 / 读取会跳过该作用域')
+                            : '先勾选该作用域再调整可读 / 可写',
+                          onClick: () => togglePerm(item.scope, 'read'),
+                        }, '可读'),
+                        h('button', {
+                          type: 'button',
+                          className: `mem-scope-state write${perms[item.scope]?.write !== false ? ' on' : ''}`,
+                          'aria-pressed': perms[item.scope]?.write !== false,
+                          disabled: !entries[item.scope],
+                          title: entries[item.scope]
+                            ? (perms[item.scope]?.write !== false ? '可写：保存 / 删除会作用到该作用域' : '不可写：保存 / 删除会被拒绝并告知原因')
+                            : '先勾选该作用域再调整可读 / 可写',
+                          onClick: () => togglePerm(item.scope, 'write'),
+                        }, '可写'),
                       ),
                     )),
               ),

@@ -18,7 +18,10 @@
  *       none = 不限制(选择仅作为下次切换的偏好保留)。
  *   - 文件不存在 = 没有覆盖,继续用默认的三路集合(会话 + 项目 + global);
  *   - scopes 为空数组视为"无覆盖"(面板在保存时也会拒绝空选择),不会把会话锁死。
- *   - 每个 scope 可以带 `kinds`:只允许这些记忆类型;省略/空数组 = 该 scope 全部类型。
+ *   - 每个 scope 可以带 `read` / `write`:该作用域在本会话里是否可读 / 可写。
+ *     省略 = 都可(向后兼容);`read:false` 的作用域不会进入读取集合,`write:false`
+ *     的作用域写入 / 删除会被拒绝(工具会把真实原因告诉 Agent)。
+ *   - 每个 scope 仍可带旧的 `kinds`(0.19.1 起 provider 忽略,只为兼容旧文件)。
  *
  * 向后兼容:0.18.x 的 v1 文件只有 `scopes: string[]`,按"绝对限制 + 全部类型"读取;
  * 这样升级当天不会把原来被锁住的范围突然放开。
@@ -29,16 +32,20 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 
-export const VISIBILITY_VERSION = 2
+export const VISIBILITY_VERSION = 3
 
 /** 范围外访问的处理方式。 */
 export type VisibilityLevel = 'absolute' | 'normal' | 'none'
 
 export const VISIBILITY_LEVELS: readonly VisibilityLevel[] = ['absolute', 'normal', 'none']
 
-/** 一个可见作用域;`kinds` 省略/为空 = 该作用域下所有类型都可见。 */
+/** 一个可见作用域;`read` / `write` 省略 = 都可;`kinds` 省略/为空 = 所有类型。 */
 export interface VisibilityRule {
   scope: string
+  /** false = 该作用域不可读(搜索 / 读取不会命中它)。 */
+  read?: boolean
+  /** false = 该作用域不可写(保存 / 删除会被拒绝)。 */
+  write?: boolean
   kinds?: string[]
 }
 
@@ -106,8 +113,13 @@ export function cleanVisibilityRules(raw: unknown): VisibilityRule[] | undefined
     if (typeof scopeRaw !== 'string') continue
     const scope = scopeRaw.trim()
     if (scope === '' || out.some((rule) => rule.scope === scope)) continue
+    const rule: VisibilityRule = { scope }
+    // 只落"false"这两档:省略 = 默认可读可写,旧文件因此不需要迁移。
+    if ((item as { read?: unknown }).read === false) rule.read = false
+    if ((item as { write?: unknown }).write === false) rule.write = false
     const kinds = cleanStrings((item as { kinds?: unknown }).kinds)
-    out.push(kinds === undefined ? { scope } : { scope, kinds })
+    if (kinds !== undefined) rule.kinds = kinds
+    out.push(rule)
   }
   return out.length > 0 ? out : undefined
 }
@@ -116,7 +128,12 @@ export function cleanVisibilityRules(raw: unknown): VisibilityRule[] | undefined
 function cloneConfig(config: SessionVisibilityConfig): SessionVisibilityConfig {
   return {
     level: config.level,
-    scopes: config.scopes.map((rule) => (rule.kinds === undefined ? { scope: rule.scope } : { scope: rule.scope, kinds: [...rule.kinds] })),
+    scopes: config.scopes.map((rule) => ({
+      scope: rule.scope,
+      ...(rule.read === false ? { read: false } : {}),
+      ...(rule.write === false ? { write: false } : {}),
+      ...(rule.kinds === undefined ? {} : { kinds: [...rule.kinds] }),
+    })),
   }
 }
 

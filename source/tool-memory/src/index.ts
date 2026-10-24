@@ -59,13 +59,19 @@ export interface ApprovalDecision {
 export type ApprovalAnswer = ApprovalOutcome | ApprovalDecision
 
 /**
- * 被可见域挡住、没有返回给模型的原因(absolute 模式不会出现:一律视为不存在)。
- * `partial` = 用户只允许了其中几条，其余按拒绝处理。
+ * 被可见域挡住、没有返回给模型的原因。
+ *   - rejected / timeout / unavailable / partial = 普通限制审批的结局;
+ *   - absolute = 绝对限制下作用域根本不在范围内(0.23 起不再假装"不存在");
+ *   - read-disabled = 作用域在范围内但「可读」开关被关掉(0.23)。
  */
-export type WithheldReason = 'rejected' | 'timeout' | 'unavailable' | 'partial'
+export type WithheldReason = 'rejected' | 'timeout' | 'unavailable' | 'partial' | 'absolute' | 'read-disabled'
 
 export interface VisibilityRuleView {
   scope: string
+  /** false = 该作用域不可读(0.23.0 的可读状态按钮)。省略 = 可读。 */
+  read?: boolean
+  /** false = 该作用域不可写。省略 = 可写。 */
+  write?: boolean
   /** 省略/空 = 该作用域全部类型可见。 */
   kinds?: string[]
 }
@@ -131,9 +137,13 @@ export interface MemoryToolService {
   /** 完整可见域(等级 + 每个 scope 的类型白名单);老 provider 可能返回 undefined。 */
   visibilityPolicy?(agent: unknown): VisibilityPolicyView | undefined
   /**
-   * 某个 scope 是否可读**且可写**(可见范围 = 可操作范围)。provider 的权威口径;
+   * 某个 scope 是否可写（0.23 起 write 开关独立于 read）。provider 的权威口径；
    * 旧 provider 没有时工具层用 visibilityPolicy 自己判断。
    */
+  isScopeWritable?(agent: unknown, scope: string): boolean
+  /** 某个 scope 是否可读（0.23 的 read 开关）。 */
+  isScopeReadable?(agent: unknown, scope: string): boolean
+  /** @deprecated 0.20 的旧名（可读且可写）；新代码用 isScopeWritable。 */
   isScopeOperable?(agent: unknown, scope: string): boolean
   /**
    * 普通限制:向用户发起一次范围外访问审批(等待面板回答)。
@@ -259,17 +269,34 @@ function scopeInPolicy(policy: VisibilityPolicyView | undefined, scope: string):
   return policy.scopes.some((rule) => rule.scope === scope)
 }
 
-/** 这条记录是否在可见域内(scope 与类型都要满足)。 */
+/** 该 scope 的规则;不在策略里时 undefined(等于范围外)。 */
+function policyRule(policy: VisibilityPolicyView | undefined, scope: string): VisibilityRuleView | undefined {
+  if (policy === undefined || policy.level === 'none') return undefined
+  return policy.scopes.find((item) => item.scope === scope)
+}
+
+/** 这条记录是否在可见域内(scope、read 开关与类型都要满足)。 */
 function recordAllowed(policy: VisibilityPolicyView | undefined, scope: string, kind: string): boolean {
   if (policy === undefined || policy.level === 'none') return true
-  const rule = policy.scopes.find((item) => item.scope === scope)
-  if (rule === undefined) return false
+  const rule = policyRule(policy, scope)
+  if (rule === undefined || rule.read === false) return false
   return rule.kinds === undefined || rule.kinds.length === 0 || rule.kinds.includes(kind)
 }
 
 /** 记录在可见域外时,是"整个 scope 不可见"还是"只是类型不允许"。 */
 function outsideReason(policy: VisibilityPolicyView | undefined, scope: string): 'scope' | 'kind' {
   return scopeInPolicy(policy, scope) ? 'kind' : 'scope'
+}
+
+/** 范围被挡住时给模型的原因:绝对限制 / 可读开关 / 普通审批结局。 */
+function withheldReasonFor(
+  policy: VisibilityPolicyView | undefined,
+  verdict: ApprovalVerdict | undefined,
+  hasAbsolute: boolean,
+): WithheldReason | undefined {
+  if (verdict !== undefined) return verdict.outcome === 'allowed-once' ? 'partial' : verdict.outcome
+  if (policy !== undefined && policy.level === 'absolute' && hasAbsolute) return 'absolute'
+  return 'read-disabled'
 }
 
 /** memory_* 的 description 参数说明(模型可见)。 */
@@ -401,14 +428,46 @@ function visibilityError(outcome: WithheldReason, action: 'write' | 'delete', sc
   )
 }
 
-/** 写入/删除前判断一个 scope 是否可操作(可见范围 = 可操作范围)。 */
-function scopeOperable(service: MemoryToolService, agent: unknown, policy: VisibilityPolicyView | undefined, scope: string): boolean {
+/** 写入/删除被「可写」开关或绝对限制挡住时给模型的真实原因。 */
+function scopeWriteBlockedError(policy: VisibilityPolicyView | undefined, scope: string, action: 'write' | 'delete'): MemoryToolError {
+  const verb = action === 'write' ? '写入' : '删除'
+  const rule = policyRule(policy, scope)
+  if (rule !== undefined && rule.write === false) {
+    return new MemoryToolError(
+      'SCOPE_READ_ONLY',
+      `作用域 ${scope} 在本会话记忆范围里被标记为「不可写」（可读/可写按钮），本次${verb}没有执行。如需${verb}，请让用户打开该作用域的「可写」状态。`,
+    )
+  }
+  return new MemoryToolError(
+    'VISIBILITY_ABSOLUTE',
+    `作用域 ${scope} 不在本会话可见范围内（限制等级：绝对限制），本次${verb}没有执行。如需${verb}，请让用户调整「记忆范围」后重试。`,
+  )
+}
+
+/** 按 id 删除时,记录存在但被可见域挡住的原因(绝对限制 / 不可写)。 */
+function blockedRecordError(policy: VisibilityPolicyView | undefined, scope: string, id: string): MemoryToolError {
+  const rule = policyRule(policy, scope)
+  if (rule !== undefined && rule.write === false) {
+    return new MemoryToolError(
+      'SCOPE_READ_ONLY',
+      `记忆 ${id} 所在作用域 ${scope} 在本会话记忆范围里被标记为「不可写」，本次删除没有执行。如需删除，请让用户打开该作用域的「可写」状态。`,
+    )
+  }
+  return new MemoryToolError(
+    'VISIBILITY_ABSOLUTE',
+    `记忆 ${id} 不在本会话可见范围内（限制等级：绝对限制），本次删除没有执行。如需删除，请让用户调整「记忆范围」后重试。`,
+  )
+}
+
+/** 写入/删除前判断一个 scope 是否可写(0.23 起独立于 read 开关)。 */
+function scopeWritable(service: MemoryToolService, agent: unknown, policy: VisibilityPolicyView | undefined, scope: string): boolean {
   if (policy === undefined || policy.level === 'none') return true
   try {
-    const verdict = service.isScopeOperable?.(agent, scope)
+    const verdict = service.isScopeWritable?.(agent, scope) ?? service.isScopeOperable?.(agent, scope)
     if (typeof verdict === 'boolean') return verdict
   } catch { /* 退回本地判断 */ }
-  return scopeInPolicy(policy, scope)
+  const rule = policyRule(policy, scope)
+  return rule !== undefined && rule.write !== false
 }
 
 /** 规范里所有已知 scope(用来在普通限制下把范围外也搜一遍,看看有没有可审批的命中)。 */
@@ -563,18 +622,20 @@ export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, Sav
         explicit = resolved
       }
 
-      // 写入护栏(0.20.0):可见范围 = 可操作范围。范围外写入:
-      //   - absolute → 按"作用域不存在/不可写"处理,不暴露可见域配置;
-      //   - normal   → 先向用户审批一次,拒绝/超时把真实原因抛给模型;
-      //   - none     → 不限制。
+      // 写入护栏（0.20.0 / 0.23.0）：write 开关与范围等级分开判断。
+      //   - 作用域在范围内但「可写」关掉 → 直接拒绝并说明开关;
+      //   - absolute 且作用域不在范围内 → 直接拒绝并说明绝对限制;
+      //   - normal 且作用域不在范围内 → 先向用户审批一次,拒绝/超时讲真实原因;
+      //   - none → 不限制。
       // 拿不到会话(老宿主 / 无 exec)时不判断:没有会话就没有"本会话的可见域"。
       const policy = agent === undefined ? undefined : visibilityPolicy(service, agent)
       const level = policy?.level ?? 'none'
       const target = explicit ?? (typeof service.resolveWriteScope === 'function' ? service.resolveWriteScope(agent) : undefined)
       let approved = false
-      if (level !== 'none' && target !== undefined && !scopeOperable(service, agent, policy, target)) {
-        if (level === 'absolute') {
-          throw new MemoryToolError('SCOPE_NOT_WRITABLE', `作用域 ${target} 不存在或不可写`)
+      if (level !== 'none' && target !== undefined && !scopeWritable(service, agent, policy, target)) {
+        const rule = policyRule(policy, target)
+        if (rule !== undefined || level === 'absolute') {
+          throw scopeWriteBlockedError(policy, target, 'write')
         }
         const draft = {
           id: 'new-record',
@@ -698,7 +759,7 @@ export interface SearchResult {
   records: SearchHit[]
   /**
    * 有命中被可见域挡住、没有返回时告知模型数量与真实原因(不泄露正文)。
-   * absolute 模式**不会**出现这个字段:范围外一律视为不存在。
+   * 0.23 起绝对限制 / 「不可读」开关也会出现在这里(不再假装不存在)。
    */
   withheld?: { count: number; reason: WithheldReason }
 }
@@ -727,15 +788,17 @@ export function memorySearchTool(opts: MemoryToolsOptions): ToolSpec<SearchArgs,
       const level = policy?.level ?? 'none'
       // level=none 时策略里的 scopes 只是偏好,不参与限制(等价于没有可见域)。
       const visible = policy !== undefined && policy.level !== 'none' ? policy.scopes.map((rule) => rule.scope) : undefined
-      // 只有"用户显式设过"的普通限制才把磁盘上其它 scope 也搜一遍(才有范围外命中
-      // 可以审批)。默认策略下普通检索就只搜默认的三路集合,避免每次都弹审批。
-      const expand = level === 'normal' && explicitPolicy(policy)
+      // 用户显式设过的策略(absolute / normal)才把磁盘上其它 scope 也搜一遍:
+      // 既为普通限制找"可审批的命中",也让绝对限制能告诉 Agent「有几条被挡住」。
+      // 默认策略不主动外扩,避免普通检索每次都扫全盘/弹审批。
+      const expand = explicitPolicy(policy) && level !== 'none'
       let scopes: MemoryScope[] | undefined
       if (resolved.all) {
         if (visible !== undefined) {
           // 'all' 在有可见范围限制时只等于"所有可见范围",不是磁盘上的全部 scope。
-          // 普通限制额外把磁盘上其它 scope 也搜一遍,才有"范围外命中"可审批。
-          scopes = level === 'normal' ? [...new Set([...visible, ...allKnownScopes(service)])] : visible
+          // 但显式 'all' 本身就表达"跨作用域",所以仍把磁盘上其它 scope 搜一遍:
+          // 普通限制据此发起审批,绝对限制据此告诉 Agent 被挡住了几条。
+          scopes = [...new Set([...visible, ...allKnownScopes(service)])]
         } else {
           scopes = allKnownScopes(service)
         }
@@ -757,29 +820,30 @@ export function memorySearchTool(opts: MemoryToolsOptions): ToolSpec<SearchArgs,
         })
         const inside = hits.filter((hit) => recordAllowed(policy, hit.record.scope, hit.record.kind))
         const outside = hits.filter((hit) => !recordAllowed(policy, hit.record.scope, hit.record.kind))
-        // undefined = 没有范围外命中 / 绝对限制(不审批);只有普通限制会真的问一次。
+        // 只有"作用域不在范围里"才可能审批;read:false 的作用域显式不可读,审批也不该放行。
+        const needsApproval = outside.filter((hit) => policyRule(policy, hit.record.scope) === undefined || policyRule(policy, hit.record.scope)?.read !== false)
         let verdict: ApprovalVerdict | undefined
-        if (outside.length > 0 && level === 'normal') {
+        if (needsApproval.length > 0 && level === 'normal') {
           verdict = await askOutOfScope(
             service,
             agent,
             policy,
             'memory_search',
             args.query,
-            outside.map((hit) => hit.record),
+            needsApproval.map((hit) => hit.record),
             'read',
             (exec as { signal?: AbortSignal } | undefined)?.signal,
             descriptionOf(args.description),
           )
         }
-        // verdict 为空 = 没有发起审批(绝对限制 / 没有范围外命中):范围外一律不放行。
+        // verdict 为空 = 没有发起审批(绝对限制 / read:false / 没有范围外命中):范围外不放行。
         const approvedOutside = verdict === undefined
           ? []
           : verdict.outcome !== 'allowed-once'
             ? []
             : verdict.allowedIds === undefined
-              ? outside
-              : outside.filter((hit) => verdict!.allowedIds!.has(hit.record.id))
+              ? needsApproval
+              : needsApproval.filter((hit) => verdict!.allowedIds!.has(hit.record.id))
         const insideIds = new Set(inside.map((hit) => hit.record.id))
         const approvedOutsideIds = new Set(approvedOutside.map((hit) => hit.record.id))
         const selected = hits.filter((hit) => insideIds.has(hit.record.id) || approvedOutsideIds.has(hit.record.id))
@@ -794,10 +858,11 @@ export function memorySearchTool(opts: MemoryToolsOptions): ToolSpec<SearchArgs,
             summary: summarize(h.record.content, chars),
           })),
         }
-        // absolute:范围外视为不存在,连"被挡住"都不告诉模型。
-        if (verdict !== undefined) {
-          const denied = outside.length - approvedOutside.length
-          if (denied > 0) result.withheld = { count: denied, reason: verdict.outcome === 'allowed-once' ? 'partial' : verdict.outcome }
+        // 0.23:被挡住时告诉模型真实原因(绝对限制 / 不可读 / 审批拒绝…),不再假装不存在。
+        const denied = outside.length - approvedOutside.length
+        if (denied > 0) {
+          const reason = withheldReasonFor(policy, verdict, outside.length > 0)
+          if (reason !== undefined) result.withheld = { count: denied, reason }
         }
         if (wantedTopK !== undefined) result.records = result.records.slice(0, wantedTopK)
         // 上下文去重:同一条记忆同版本已经出现过 → 只回 id,摘要让 memory_get 按需取。
@@ -843,15 +908,15 @@ export function memoryForgetTool(opts: MemoryToolsOptions): ToolSpec<ForgetArgs,
       const policy = agent === undefined ? undefined : visibilityPolicy(service, agent)
       const level = policy?.level ?? 'none'
       const signal = (exec as { signal?: AbortSignal } | undefined)?.signal
-      // ---- 按 id 删除:先查出这条记录在哪个 scope,再按可操作范围判断 ----
+      // ---- 按 id 删除:先查出这条记录在哪个 scope,再按可写范围判断 ----
       if (args.id) {
         const matches = (service.getByIds?.([args.id]) ?? []).filter((record) => record.id === args.id)
-        const blocked = matches.filter((record) => !recordAllowed(policy, record.scope, record.kind))
+        const blocked = matches.filter((record) => !scopeWritable(service, agent, policy, record.scope))
         let approved = false
         if (blocked.length > 0) {
-          if (level === 'absolute') {
-            // 绝对限制:范围外的记录"视为不存在",与真的没有这条 id 完全一样。
-            throw new MemoryToolError('RECORD_NOT_FOUND', `id ${args.id} not found`)
+          // 作用域在范围内但「可写」关掉,或绝对限制下根本不在范围内:直接说明原因。
+          if (level === 'absolute' || policyRule(policy, blocked[0]!.scope) !== undefined) {
+            throw blockedRecordError(policy, blocked[0]!.scope, args.id)
           }
           if (level === 'normal') {
             const verdict = await askOutOfScope(
@@ -881,17 +946,17 @@ export function memoryForgetTool(opts: MemoryToolsOptions): ToolSpec<ForgetArgs,
           throw toolError(error)
         }
       }
-      // ---- 按 query 删除:目标 scope 必须在可操作范围内 ----
+      // ---- 按 query 删除:目标 scope 必须可写 ----
       const resolved = resolveScope(opts, service, exec, args.scope, 'read')
       if (resolved.all) {
         throw new MemoryToolError('SCOPE_NOT_WRITABLE', "scope 'all' cannot be combined with query; name the scope you mean")
       }
       const scope = resolved.scope ?? readScopes(opts, service, agent)[0]
       let approved = false
-      if (level !== 'none' && scope !== undefined && !scopeOperable(service, agent, policy, scope)) {
-        if (level === 'absolute') {
-          // 绝对限制:这个作用域"不存在",按一条都没匹配处理(不删、也不泄露原因)。
-          return { removed: 0, ids: [] }
+      if (level !== 'none' && scope !== undefined && !scopeWritable(service, agent, policy, scope)) {
+        // 绝对限制 / 「可写」关掉:直接说明原因,不再静默返回"删了 0 条"。
+        if (policyRule(policy, scope) !== undefined || level === 'absolute') {
+          throw scopeWriteBlockedError(policy, scope, 'delete')
         }
         const verdict = await askOutOfScope(
           service,
@@ -945,7 +1010,7 @@ export interface ListResult {
   scopeStats?: Array<{ scope: string; records: number; pendingEmbeds: number }>
   /**
    * 有记录被可见域挡住时告知模型数量与真实原因(不泄露正文)。
-   * absolute 模式不会出现:范围外一律视为不存在。
+   * 0.23 起绝对限制 / 「不可读」开关也会出现在这里。
    */
   withheld?: { count: number; reason: WithheldReason }
 }
@@ -969,10 +1034,14 @@ export function memoryListTool(opts: MemoryToolsOptions): ToolSpec<ListArgs, Lis
       const level = policy?.level ?? 'none'
       // level=none 时策略里的 scopes 只是偏好,不参与限制(等价于没有可见域)。
       const visible = policy !== undefined && policy.level !== 'none' ? policy.scopes.map((rule) => rule.scope) : undefined
+      const readable = policy !== undefined && policy.level !== 'none'
+        ? policy.scopes.filter((rule) => rule.read !== false).map((rule) => rule.scope)
+        : undefined
+      const expand = explicitPolicy(policy) && level !== 'none'
       let scopes: MemoryScope[] | undefined
       if (resolved.all) {
         if (visible !== undefined) {
-          scopes = level === 'normal' ? [...new Set([...visible, ...allKnownScopes(service)])] : visible
+          scopes = [...new Set([...visible, ...allKnownScopes(service)])]
         } else {
           scopes = allKnownScopes(service)
         }
@@ -994,16 +1063,16 @@ export function memoryListTool(opts: MemoryToolsOptions): ToolSpec<ListArgs, Lis
         })
         const inside = raw.filter((record) => recordAllowed(policy, record.scope, record.kind))
         const outside = raw.filter((record) => !recordAllowed(policy, record.scope, record.kind))
-        // undefined = 没有范围外命中 / 绝对限制(不审批);只有普通限制会真的问一次。
+        const needsApproval = outside.filter((record) => policyRule(policy, record.scope) === undefined || policyRule(policy, record.scope)?.read !== false)
         let verdict: ApprovalVerdict | undefined
-        if (outside.length > 0 && level === 'normal') {
+        if (needsApproval.length > 0 && level === 'normal') {
           verdict = await askOutOfScope(
             service,
             agent,
             policy,
             'memory_list',
             resolved.scope ?? args.scope ?? 'all',
-            outside,
+            needsApproval,
             'read',
             (exec as { signal?: AbortSignal } | undefined)?.signal,
             descriptionOf(args.description),
@@ -1014,8 +1083,8 @@ export function memoryListTool(opts: MemoryToolsOptions): ToolSpec<ListArgs, Lis
           : verdict.outcome !== 'allowed-once'
             ? []
             : verdict.allowedIds === undefined
-              ? outside
-              : outside.filter((record) => verdict!.allowedIds!.has(record.id))
+              ? needsApproval
+              : needsApproval.filter((record) => verdict!.allowedIds!.has(record.id))
         const insideIds = new Set(inside.map((record) => record.id))
         const approvedOutsideIds = new Set(approvedOutside.map((record) => record.id))
         const selected = raw
@@ -1028,9 +1097,10 @@ export function memoryListTool(opts: MemoryToolsOptions): ToolSpec<ListArgs, Lis
           updatedAt: r.updatedAt,
           content: r.content,
         }))
-        if (verdict !== undefined) {
-          const denied = outside.length - approvedOutside.length
-          if (denied > 0) withheld = { count: denied, reason: verdict.outcome === 'allowed-once' ? 'partial' : verdict.outcome }
+        const denied = outside.length - approvedOutside.length
+        if (denied > 0) {
+          const reason = withheldReasonFor(policy, verdict, outside.length > 0)
+          if (reason !== undefined) withheld = { count: denied, reason }
         }
         // 上下文去重:同版本已经出现过 → 只回 id,正文让 memory_get 按需取。
         const dedup = opts.contextDedup?.(exec)
@@ -1051,8 +1121,8 @@ export function memoryListTool(opts: MemoryToolsOptions): ToolSpec<ListArgs, Lis
         throw toolError(error)
       }
       const statsAll = service.scopeStats?.()
-      const stats = statsAll !== undefined && visible !== undefined
-        ? statsAll.filter((s) => visible.includes(s.scope))
+      const stats = statsAll !== undefined && readable !== undefined
+        ? statsAll.filter((s) => readable.includes(s.scope))
         : statsAll
       return {
         records,
@@ -1102,7 +1172,7 @@ export interface GetResult {
   missing: string[]
   /**
    * 有 id 命中但被可见域挡住时告知模型数量与真实原因(不泄露正文)。
-   * absolute 模式不会出现:范围外一律视为不存在。
+   * 0.23 起绝对限制 / 「不可读」开关也会出现在这里;被挡住的 id 不再进 missing。
    */
   withheld?: { count: number; reason: WithheldReason }
 }
@@ -1195,39 +1265,42 @@ export function memoryGetTool(opts: MemoryToolsOptions): ToolSpec<GetArgs, GetRe
         const level = policy?.level ?? 'none'
         const inside = all.filter((record) => recordAllowed(policy, record.scope, record.kind))
         const outside = all.filter((record) => !recordAllowed(policy, record.scope, record.kind))
-        // undefined = 没有范围外命中 / 绝对限制(不审批);只有普通限制会真的问一次。
+        // read:false 是用户显式关掉的可读状态,审批也不放行;只有"作用域不在范围里"才审批。
+        const needsApproval = outside.filter((record) => policyRule(policy, record.scope) === undefined || policyRule(policy, record.scope)?.read !== false)
         let verdict: ApprovalVerdict | undefined
-        if (outside.length > 0 && level === 'normal') {
+        if (needsApproval.length > 0 && level === 'normal') {
           verdict = await askOutOfScope(
             service,
             agent,
             policy,
             'memory_get',
             ids.join(' '),
-            outside,
+            needsApproval,
             'read',
             (exec as { signal?: AbortSignal } | undefined)?.signal,
             descriptionOf(args.description),
           )
         }
-        // verdict 为空 = 没有发起审批(绝对限制):范围外一律按不存在处理。
+        // verdict 为空 = 没有发起审批(绝对限制 / read:false):范围外不放行。
         const approvedOutside = verdict === undefined
           ? []
           : verdict.outcome !== 'allowed-once'
             ? []
             : verdict.allowedIds === undefined
-              ? outside
-              : outside.filter((record) => verdict!.allowedIds!.has(record.id))
+              ? needsApproval
+              : needsApproval.filter((record) => verdict!.allowedIds!.has(record.id))
         const insideIds = new Set(inside.map((record) => record.id))
         const approvedIds = new Set(approvedOutside.map((record) => record.id))
         const found = all.filter((record) => insideIds.has(record.id) || approvedIds.has(record.id))
         const denied = outside.length - approvedOutside.length
+        const reason = denied > 0 ? withheldReasonFor(policy, verdict, outside.length > 0) : undefined
         return {
           records: found.map((r) => pickGetFields(r, fields, chars)),
           fields,
-          missing: ids.filter((token) => !found.some((r) => r.id === token || r.id.startsWith(token))),
-          ...(verdict !== undefined && denied > 0
-            ? { withheld: { count: denied, reason: verdict.outcome === 'allowed-once' ? 'partial' : verdict.outcome } }
+          // 被可见域挡住的 id 不是"不存在":它们进 withheld 说明原因,不进 missing。
+          missing: ids.filter((token) => !all.some((r) => r.id === token || r.id.startsWith(token))),
+          ...(reason !== undefined
+            ? { withheld: { count: denied, reason } }
             : {}),
         }
       } catch (error) {

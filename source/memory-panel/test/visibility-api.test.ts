@@ -236,3 +236,98 @@ test('面板 /visibility:没有 session 参数返回 400', async () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('面板 /visibility:read/write 状态与工作区绑定落盘,默认范围包含绑定作用域', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-visibility-'))
+  const svc = makeService(dir)
+  const session = { id: 's1', header: { id: 's1', cwd: 'D:/w' } }
+  try {
+    await svc.save({ scope: 'handbook', kind: 'fact', content: '绑定作用域正文' })
+
+    const set = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/visibility`, {
+      session: 's1',
+      visibility: {
+        scopes: [{ scope: 'global', read: false }, { scope: 'project:D:\\w' }, { scope: 'handbook' }],
+        level: 'normal',
+      },
+      bindings: ['global', 'handbook'],
+    }), set)
+    assert.equal(set.out.status, 200)
+    const value = set.out.body.value
+    assert.deepEqual(value.override.scopes, [
+      { scope: 'global', read: false },
+      { scope: 'project:D:\\w' },
+      { scope: 'handbook' },
+    ])
+    assert.equal(value.workspace, 'project:D:\\w')
+    assert.deepEqual([...value.bindings].sort(), ['global', 'handbook'])
+    const globalItem = value.scopes.find((item) => item.scope === 'global')
+    assert.equal(globalItem.read, false, '可读状态随目录返回')
+    assert.equal(globalItem.write, true)
+    assert.equal(globalItem.bound, true, '绑定状态随目录返回')
+    assert.equal(value.scopes.find((item) => item.scope === 'session:s1')?.bindable, false, '会话作用域不可绑定')
+
+    // 恢复默认:绑定保留,默认范围额外并入 handbook。
+    const reset = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/visibility`, {
+      session: 's1',
+      visibility: null,
+      bindings: ['handbook'],
+    }), reset)
+    assert.equal(reset.out.status, 200)
+    assert.equal(reset.out.body.value.override, null)
+    assert.deepEqual(reset.out.body.value.defaults, ['session:s1', 'project:D:\\w', 'global', 'handbook'])
+    assert.deepEqual(reset.out.body.value.bindings, ['handbook'])
+
+    // 会话作用域不能绑定到工作区。
+    const bad = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/visibility`, {
+      session: 's1',
+      visibility: null,
+      bindings: ['session:s1'],
+    }), bad)
+    assert.equal(bad.out.status, 400)
+    assert.equal(bad.out.body.error.code, 'SCOPE_INVALID')
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('面板 /update:编辑新建修正版,旧记录保留且指向关系正确', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-update-'))
+  const svc = makeService(dir)
+  const session = { id: 's1', header: { id: 's1', cwd: 'D:/w' } }
+  try {
+    const old = await svc.save({ scope: 'global', kind: 'fact', content: '旧内容', tags: ['old'] })
+    const res = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/update`, {
+      id: old.id,
+      content: '新内容',
+      tags: ['new'],
+      importance: 0.9,
+    }), res)
+    assert.equal(res.out.status, 200)
+    const value = res.out.body.value
+    assert.equal(value.superseded, old.id)
+    assert.notEqual(value.record.id, old.id, '编辑生成新 id')
+    assert.equal(value.record.content, '新内容')
+    assert.equal(value.record.supersedes, old.id)
+    assert.equal(value.record.supersededBy, null)
+
+    const still = svc.getByIds([old.id])[0]!
+    assert.equal(still.content, '旧内容', '旧记录内容不被原地修改')
+    assert.equal(still.supersedes, undefined)
+
+    const records = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, get(`${ROUTE}/records`), records)
+    const oldWire = records.out.body.value.records.find((record) => record.id === old.id)
+    assert.equal(oldWire.supersededBy, value.record.id, '旧记录标上被谁修正')
+    const newWire = records.out.body.value.records.find((record) => record.id === value.record.id)
+    assert.equal(newWire.supersedes, old.id)
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

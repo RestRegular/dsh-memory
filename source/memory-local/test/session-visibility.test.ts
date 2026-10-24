@@ -189,13 +189,14 @@ test('工具层把可见范围当白名单:显式 scope 视为不存在、memory
   const result = await search.execute({ query: '秘密 结论' }, agentCtx)
   assert.deepEqual(result.records.map((r) => r.scope), [PROJECT], '只搜可见范围')
 
-  // 0.20.0:绝对限制下显式问范围外的 scope 不再报错暴露可见域,而是当作那里没有记忆。
+  // 0.23.0:绝对限制下也告诉 Agent 真实原因(不再假装"那里没有记忆")。
   const outsideScope = await search.execute({ query: '秘密', scope: 'global' }, agentCtx)
   assert.deepEqual(outsideScope.records, [])
-  assert.equal(outsideScope.withheld, undefined, '绝对限制不告诉模型"被挡住"')
+  assert.equal(outsideScope.withheld?.reason, 'absolute', '绝对限制:命中被挡住时说明原因')
 
   const all = await search.execute({ query: '秘密 结论', scope: 'all' }, agentCtx)
   assert.deepEqual(all.records.map((r) => r.scope), [PROJECT], "'all' 只等于所有可见范围")
+  assert.equal(all.withheld?.reason, 'absolute')
 
   const list = described(memoryListTool({ getService: () => svc }))
   const listed = await list.execute({ scope: 'all' }, agentCtx)
@@ -205,8 +206,9 @@ test('工具层把可见范围当白名单:显式 scope 视为不存在、memory
   const globalRecord = (await svc.list({ scope: 'global' }))[0]!
   const got = await get.execute({ ids: [globalRecord.id] }, agentCtx)
   assert.equal(got.records.length, 0, 'memory_get 不能读可见范围之外的正文')
-  assert.deepEqual(got.missing, [globalRecord.id])
-  assert.equal(got.withheld, undefined, '绝对限制:被挡住也按不存在处理')
+  assert.deepEqual(got.missing, [], '被挡住 ≠ 不存在:不再进 missing')
+  assert.equal(got.withheld?.reason, 'absolute')
+  assert.equal(got.withheld?.count, 1)
 
   // 不设置覆盖时回到默认策略(会话 + 项目 + global,普通限制),global 仍在范围内。
   svc.setSessionVisibility('s1', null)
@@ -259,19 +261,19 @@ test('新会话默认可见域:会话 + 项目 + global,普通限制;范围外�
   const get = described(memoryGetTool({ getService: () => svc }))
   const got = await get.execute({ ids: [elsewhere.id] }, agentCtx)
   assert.equal(got.records.length, 0)
-  assert.deepEqual(got.missing, [elsewhere.id])
+  assert.deepEqual(got.missing, [], '被审批挡住 ≠ 不存在')
   assert.equal(got.withheld?.reason, 'timeout')
 })
 
-test('写入护栏:绝对限制下范围外写入/删除按不存在处理', async () => {
+test('写入护栏:绝对限制下范围外写入/删除被拒绝并说明原因', async () => {
   svc.setSessionVisibility('s1', { scopes: [{ scope: PROJECT }], level: 'absolute' })
   const agentCtx = { agent: agent({ id: 's1', cwd: 'D:/w' }) }
   const save = described(memorySaveTool({ getService: () => svc }))
 
   await assert.rejects(
     () => save.execute({ scope: 'global', content: '绝对限制不该写进去' }, agentCtx),
-    (error: Error & { code?: string }) => error.code === 'SCOPE_NOT_WRITABLE' && !/可见/.test(error.message),
-    '范围外写入报"不存在或不可写",不暴露可见域',
+    (error: Error & { code?: string }) => error.code === 'VISIBILITY_ABSOLUTE' && /绝对限制/.test(error.message),
+    '范围外写入报绝对限制,并告诉 Agent 怎么调整',
   )
   assert.equal(
     (await svc.list({ scope: 'global', kind: 'fact' })).some((r) => r.content === '绝对限制不该写进去'),
@@ -287,15 +289,18 @@ test('写入护栏:绝对限制下范围外写入/删除按不存在处理', asy
   assert.equal(record, undefined)
   await assert.rejects(
     () => forget.execute({ id: secret.id }, agentCtx),
-    (error: Error & { code?: string }) => error.code === 'RECORD_NOT_FOUND',
-    '范围外的 id 当作不存在',
+    (error: Error & { code?: string }) => error.code === 'VISIBILITY_ABSOLUTE' && /绝对限制/.test(error.message),
+    '范围外的 id 明确告知是绝对限制',
   )
   assert.ok(
     (await svc.list({ scope: 'global', kind: 'fact' })).some((r) => r.id === secret.id),
     '范围外记录不能被删掉',
   )
-  const byQuery = await forget.execute({ query: '绝对限制全局秘密', scope: 'global' }, agentCtx)
-  assert.deepEqual(byQuery, { removed: 0, ids: [] }, '范围外按 query 删除静默无匹配')
+  await assert.rejects(
+    () => forget.execute({ query: '绝对限制全局秘密', scope: 'global' }, agentCtx),
+    (error: Error & { code?: string }) => error.code === 'VISIBILITY_ABSOLUTE' && /绝对限制/.test(error.message),
+    '范围外按 query 删除也说明原因',
+  )
   assert.ok(
     (await svc.list({ scope: 'global', kind: 'fact' })).some((r) => r.id === secret.id),
     '记录仍然在',
@@ -378,4 +383,93 @@ test('provider 层也守写入:有 agent 时范围外 save 拒绝;面板写入(�
     visibilityApproved: true,
   } as never)
   assert.equal(approved.scope, 'global')
+})
+
+test('0.23 可读开关:read:false 的作用域不参与读取,memory_get 说明不可读', async () => {
+  await svc.save({ scope: 'global', kind: 'fact', content: '不可读开关 全局正文' })
+  await svc.save({ scope: PROJECT, kind: 'fact', content: '可读开关 项目正文' })
+  svc.setSessionVisibility('s1', {
+    scopes: [{ scope: PROJECT }, { scope: 'global', read: false }],
+    level: 'normal',
+  })
+  const agentCtx = { agent: agent({ id: 's1', cwd: 'D:/w' }) }
+  assert.equal(svc.isScopeReadable(agentCtx.agent, 'global'), false)
+  assert.equal(svc.isScopeWritable(agentCtx.agent, 'global'), true, '不可读不等于不可写')
+  assert.deepEqual(svc.resolveReadScopes(agentCtx.agent), [PROJECT], '读取集合跳过 read:false')
+
+  let asked = 0
+  svc.requestOutOfScope = async () => { asked += 1; return 'allowed-once' }
+  const search = described(memorySearchTool({ getService: () => svc }))
+  const res = await search.execute({ query: '开关' }, agentCtx)
+  assert.deepEqual(res.records.map((record) => record.scope), [PROJECT])
+  assert.equal(res.withheld?.reason, 'read-disabled', '命中不可读作用域时说明原因')
+  assert.equal(asked, 0, 'read:false 不发起审批')
+
+  const get = described(memoryGetTool({ getService: () => svc }))
+  const globalRecord = (await svc.list({ scope: 'global' }))[0]!
+  const got = await get.execute({ ids: [globalRecord.id] }, agentCtx)
+  assert.equal(got.records.length, 0)
+  assert.deepEqual(got.missing, [], '不可读 ≠ 不存在')
+  assert.equal(got.withheld?.reason, 'read-disabled')
+})
+
+test('0.23 可写开关:write:false 的作用域可读,但写入/删除被拒绝并说明原因', async () => {
+  await svc.save({ scope: 'global', kind: 'fact', content: '只读作用域 全局正文' })
+  svc.setSessionVisibility('s1', {
+    scopes: [{ scope: PROJECT }, { scope: 'global', write: false }],
+    level: 'normal',
+  })
+  const agentCtx = { agent: agent({ id: 's1', cwd: 'D:/w' }) }
+  assert.equal(svc.isScopeReadable(agentCtx.agent, 'global'), true)
+  assert.equal(svc.isScopeWritable(agentCtx.agent, 'global'), false)
+
+  const search = described(memorySearchTool({ getService: () => svc }))
+  const res = await search.execute({ query: '只读作用域', scope: 'global' }, agentCtx)
+  assert.deepEqual(res.records.map((record) => record.scope), ['global'], '可读仍然能读')
+
+  const save = described(memorySaveTool({ getService: () => svc }))
+  await assert.rejects(
+    () => save.execute({ scope: 'global', kind: 'fact', content: '只读作用域 不该写' }, agentCtx),
+    (error: Error & { code?: string }) => error.code === 'SCOPE_READ_ONLY' && /不可写/.test(error.message),
+  )
+  const record = (await svc.list({ scope: 'global', kind: 'fact' }))[0]!
+  const forget = described(memoryForgetTool({ getService: () => svc }))
+  await assert.rejects(
+    () => forget.execute({ id: record.id }, agentCtx),
+    (error: Error & { code?: string }) => error.code === 'SCOPE_READ_ONLY' && /不可写/.test(error.message),
+  )
+  assert.ok((await svc.list({ scope: 'global', kind: 'fact' })).some((item) => item.id === record.id))
+})
+
+test('0.23 工作区绑定:默认可见范围包含绑定作用域,新会话继承并持久化', async () => {
+  await svc.save({ scope: 'handbook', kind: 'fact', content: '绑定作用域 手册正文' })
+  const a = agent({ id: 's1', cwd: 'D:/w' })
+  assert.deepEqual(svc.workspaceBindings(a), [])
+  assert.deepEqual(svc.setWorkspaceBindings(a, ['global', 'handbook']), ['global', 'handbook'])
+  assert.deepEqual(svc.workspaceBindings(a), ['global', 'handbook'])
+
+  assert.deepEqual(
+    svc.resolveReadScopes(agent({ id: 's2', cwd: 'D:/w' })),
+    ['session:s2', CWD_PROJECT, 'global', 'handbook'],
+    '同一工作区的新会话默认看到绑定作用域',
+  )
+  assert.deepEqual(
+    svc.visibilityPolicy(agent({ id: 's2', cwd: 'D:/w' })).scopes.map((rule) => rule.scope),
+    ['session:s2', CWD_PROJECT, 'global', 'handbook'],
+  )
+  assert.deepEqual(
+    svc.resolveReadScopes(agent({ id: 's3', cwd: 'D:/other' })),
+    ['session:s3', 'project:D:\\other', 'global'],
+    '别的工作区不受影响',
+  )
+
+  const other = new LocalMemoryService({ storeDir: DIR, scopes: { global: true, project: true } })
+  assert.deepEqual(other.workspaceBindings(agent({ id: 's9', cwd: 'D:/w' })), ['global', 'handbook'], '绑定落盘')
+  other.flushSync()
+
+  assert.throws(
+    () => svc.setWorkspaceBindings(a, ['session:s1']),
+    (error: Error & { code?: string }) => error.code === 'SCOPE_INVALID',
+    '会话作用域不能绑定到工作区',
+  )
 })

@@ -305,6 +305,7 @@ async function mountPanel(
   state: { scopes: unknown[]; embedServer: unknown },
   report = modelReport(),
   tab = 'data',
+  records: Array<Record<string, unknown>> = [],
 ) {
   const globals = globalThis as Record<string, unknown>
   globals.fetch = async (url: string) => ({
@@ -313,7 +314,7 @@ async function mountPanel(
       ? { ok: true, value: report }
       : String(url).includes('/status')
         ? { ok: true, value: state }
-        : { ok: true, value: { records: [] } }),
+        : { ok: true, value: { records } }),
   })
   const { exports } = await loadBundle()
   const MemoryPanel = (exports.__test as { MemoryPanel: (p: Record<string, unknown>) => unknown }).MemoryPanel
@@ -504,7 +505,8 @@ test('作用域下拉用服务端给的 label(会话标题 / project 的 cwd)', 
   // 选项文字必须用 label(而不是原始 scope 键)
   const dropdowns = collect(tree()).filter((n) => n.props?.['aria-haspopup'] === 'listbox')
   assert.ok(dropdowns.length >= 1, '找到自绘下拉')
-  const scopeDropdown = dropdowns[dropdowns.length - 1]!
+  const scopeDropdown = dropdowns.find((n) => textOf(n).includes('全部作用域'))
+  assert.ok(scopeDropdown, '找到作用域下拉')
   ;(scopeDropdown.props!.onClick as () => void)()
   hooks.runEffects()
   const optionTexts = collect(tree())
@@ -625,7 +627,7 @@ test('「本机配置」「当前模型」两行:都带标题、都横向滚动,
   assert.equal(nodes.filter((n) => n.tag === 'select').length, 0, '不再使用原生 select')
   assert.equal(nodes.filter((n) => n.props?.['aria-haspopup'] === 'listbox').length, 2, '服务页有模型 / 运行时两个自绘下拉')
   await switchTab(configuredTree, hooks, '记录')
-  assert.equal(collect(configuredTree()).filter((n) => n.props?.['aria-haspopup'] === 'listbox').length, 1, '记录页有作用域下拉')
+  assert.equal(collect(configuredTree()).filter((n) => n.props?.['aria-haspopup'] === 'listbox').length, 2, '记录页有作用域 + 是否被修正两个下拉')
   await switchTab(configuredTree, hooks, '服务')
 
   // 已装好的那一档:按钮显示「已安装」且不可点(点它只会重复下载)
@@ -1207,6 +1209,43 @@ test('记录卡:标签渲染成气泡,修正关系两个方向都有明确徽标
   assert.ok(textOf(tree).includes('已被修正'), '被修正的记录有「已被修正」徽标')
 })
 
+test('记录页「是否被修正」筛选:默认隐藏旧版本,可切到全部 / 只看已修正', async () => {
+  const { hooks } = await loadBundle()
+  hooks.resetAll()
+  const old = makeRecord({ id: 'old', content: '旧事实正文', supersededBy: 'new' })
+  const fresh = makeRecord({ id: 'new', content: '新事实正文', supersedes: 'old' })
+  const tree = await mountPanel(hooks, {
+    scopes: [{ scope: 'project:C:/demo', records: 2, pendingEmbeds: 0 }],
+    embedServer: null,
+  }, undefined, 'data', [old, fresh])
+  const drop = () => {
+    const list = collect(tree()).filter((n) => n.props?.['aria-haspopup'] === 'listbox')
+    return list[list.length - 1]
+  }
+  assert.ok(drop(), '记录页有「是否被修正」下拉')
+  assert.ok(textOf(tree()).includes('新事实正文'), '默认显示未修正记录')
+  assert.ok(!textOf(tree()).includes('旧事实正文'), '默认隐藏被修正的旧记录')
+
+  ;(drop()!.props!.onClick as () => void)()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const allOption = collect(tree()).find((n) => n.props?.role === 'option' && textOf(n).includes('显示全部'))
+  assert.ok(allOption, '筛选包含「显示全部」')
+  ;(allOption!.props!.onClick as () => void)()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.ok(textOf(tree()).includes('旧事实正文'), '显示全部时旧记录出现')
+
+  ;(drop()!.props!.onClick as () => void)()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const onlyOption = collect(tree()).find((n) => n.props?.role === 'option' && textOf(n).includes('只看已修正'))
+  assert.ok(onlyOption, '筛选包含「只看已修正」')
+  ;(onlyOption!.props!.onClick as () => void)()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  const text = textOf(tree())
+  assert.ok(text.includes('旧事实正文'), '只看已修正时显示旧记录')
+  assert.ok(!text.includes('新事实正文'), '只看已修正时隐藏新记录')
+  hooks.resetAll()
+})
+
 test('服务页底部:Star 与 issue 链接', async () => {
   const { hooks } = await loadBundle()
   hooks.resetAll()
@@ -1527,7 +1566,7 @@ test('client apply 注册记忆视图、轨迹徽标与详情页签', async () =
   assert.ok(injected.includes('conversation.input.right'))
 })
 
-test('输入框记忆范围按钮:打开会话就显示数字、默认范围预选、保存只带 scope', async () => {
+test('输入框记忆范围按钮:打开会话就显示数字、默认范围预选、保存带 scope + 读写状态 + 绑定', async () => {
   const { exports, hooks } = await loadBundle()
   hooks.resetAll()
   const Button = (exports.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
@@ -1539,8 +1578,9 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
     effective: null,
     inherited: false,
     defaults: ['session:s1', 'global'],
+    bindings: [],
     scopes: [
-      { scope: 'global', label: '全局', records: 5, pendingEmbeds: 0 },
+      { scope: 'global', label: '全局', records: 5, pendingEmbeds: 0, read: true, write: true, bound: false, bindable: true },
     ],
   }
   const savedFetch = (globalThis as Record<string, unknown>).fetch
@@ -1584,6 +1624,18 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
     assert.equal(boxes.length, 2, '默认范围补齐为两层(当前会话 + 全局)')
     assert.deepEqual(boxes.map((box) => box.props?.['aria-checked']), [true, true], '默认范围全部预选')
 
+    // 0.23:状态按钮 —— 绑定 / 可读 | 可写;会话作用域不可绑定,读写默认开启。
+    const stateButtons = collect(current).filter((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-state'))
+    assert.equal(stateButtons.filter((node) => textOf(node) === '可读').length, 2, '每个已选作用域都有可读')
+    assert.equal(stateButtons.filter((node) => textOf(node) === '可写').length, 2, '可读与可写并列')
+    assert.equal(stateButtons.filter((node) => textOf(node) === '绑定').length, 1, '会话作用域不可绑定,只有 global 有绑定')
+    const bind = stateButtons.find((node) => textOf(node) === '绑定')
+    assert.ok(bind, '全局作用域可绑定到工作区')
+    ;(bind!.props!.onClick as () => void)()
+    const writable = stateButtons.filter((node) => textOf(node) === '可写' && node.props?.disabled !== true)
+    assert.equal(writable.length, 2, '已勾选的两个作用域都能调可写状态')
+    ;(writable[0]!.props!.onClick as () => void)()
+
     const save = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '保存')
     assert.ok(save, '保存按钮存在')
     ;(save!.props!.onClick as () => void)()
@@ -1591,10 +1643,14 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
 
     const post = calls.find((call) => call.init?.method === 'POST')
     assert.ok(post, '保存走 POST')
-    const posted = JSON.parse(String(post?.init?.body ?? '{}')) as { session: string; visibility: { scopes: Array<{ scope: string }>; level: string } }
+    const posted = JSON.parse(String(post?.init?.body ?? '{}')) as { session: string; visibility: { scopes: Array<{ scope: string; read?: boolean; write?: boolean }>; level: string }; bindings: string[] }
     assert.equal(posted.session, 's1')
     assert.deepEqual(posted.visibility.scopes.map((item) => item.scope).sort(), ['global', 'session:s1'])
-    assert.deepEqual(Object.keys(posted.visibility.scopes[0]), ['scope'], '不再提交 kinds')
+    assert.deepEqual(Object.keys(posted.visibility.scopes[0]!).sort(), ['read', 'scope', 'write'], '提交可读/可写状态')
+    const globalScope = posted.visibility.scopes.find((item) => item.scope === 'global')!
+    assert.equal(globalScope.read, true)
+    assert.equal(globalScope.write, false, '关掉可写后按 false 提交')
+    assert.deepEqual(posted.bindings, ['global'], '绑定工作区随保存提交')
     assert.equal(posted.visibility.level, 'normal')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch

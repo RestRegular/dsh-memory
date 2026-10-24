@@ -14,7 +14,7 @@
               
                    
                    
-import { MemoryStore, scopeFileName,                 } from './store.js'
+import { MemoryStore, newId, scopeFileName,                 } from './store.js'
 import {
   canonicalWorkspacePath,
   isCustomScope,
@@ -34,6 +34,7 @@ import {
                        
                       
 } from './session-visibility.js'
+import { WorkspaceBindingsStore } from './workspace-bindings.js'
 import { mergeInjectSettings, normalizeInjectSettings,                     } from './inject-settings.js'
 import { buildStats, lexicalScore, recordScore, tokenize, cosine, normalizeInPlace, hasStrongHit } from './scoring.js'
 import { EmbedClient } from './embed.js'
@@ -598,8 +599,10 @@ export class LocalMemoryService                             {
           names            
   /** 注入设置(面板「设置」标签页可改;落盘在 <storeDir>/settings.json)。 */
           inject                
-  /** 会话级「记忆可见范围」覆盖;没有覆盖时沿用默认三路集合。 */
+  /** 会话级「记忆可见范围」覆盖;没有覆盖时沿用默认集合。 */
                    visibility                        
+  /** 工作区级「绑定作用域」:默认范围会额外并入这些作用域。 */
+                   bindings                        
   /** 可见域变更通知:下一次 pre-step 注入给 Agent 后删除(按会话)。 */
                    visibilityNotices = new Map                                                                ()
   /** 普通限制下等待用户审批的范围外访问(按审批 id)。 */
@@ -624,6 +627,7 @@ export class LocalMemoryService                             {
     this.inject = this.loadInjectSettings((config                        ).inject)
     this.names = new ScopeNames(join(this.cfg.storeDir, 'scopes.json'))
     this.visibility = new SessionVisibilityStore({ root: this.cfg.storeDir })
+    this.bindings = new WorkspaceBindingsStore({ root: this.cfg.storeDir })
     this.rerankBudget = new DailyBudget(this.cfg.llm.dailyBudgetTokens)
     this.store = new MemoryStore(this.cfg.storeDir, { onWarn: (m) => console.warn(`[dsh-memory-local] ${m}`) })
     // Identity BEFORE the eager load (issue #1): ScopeStore skips its sidecar
@@ -1414,8 +1418,13 @@ export class LocalMemoryService                             {
         case 'session': if (!this.cfg.sessionEnabled) continue; break
         default: if (!this.cfg.customEnabled) continue; break
       }
-      // 0.19.1 起不再按记忆类型收窄:旧文件里的 kinds 忽略,只保留作用域。
-      out.push({ scope })
+      // 0.19.1 起不再按记忆类型收窄:旧文件里的 kinds 忽略,只保留作用域;
+      // 0.23.0 保留每个作用域的 read / write 状态(false 才落)。
+      out.push({
+        scope,
+        ...(raw.read === false ? { read: false } : {}),
+        ...(raw.write === false ? { write: false } : {}),
+      })
     }
     return out
   }
@@ -1460,7 +1469,7 @@ export class LocalMemoryService                             {
     }
   }
 
-  /** 没有显式覆盖时的默认可见域范围(当前会话 + 当前项目 + global,各自开关生效)。 */
+  /** 没有显式覆盖时的默认可见域范围(会话 + 项目 + global + 工作区绑定的作用域)。 */
           defaultReadScopes(agent         )                {
     const refs = this.scopeRefs(agent)
     const out                = []
@@ -1471,7 +1480,24 @@ export class LocalMemoryService                             {
     push(refs.session, this.cfg.sessionEnabled)
     push(refs.project, this.cfg.projectEnabled)
     push('global', this.cfg.globalEnabled)
+    // 0.23.0:工作区绑定的作用域默认可见。会话作用域不能绑定,这里再守一次。
+    for (const raw of this.bindings.get(refs.project)) {
+      const scope = this.canonicalScope(raw)
+      if (scopeKind(scope) === 'session') continue
+      if (!this.scopeEnabled(scope)) continue
+      push(scope, true)
+    }
     return out
+  }
+
+  /** 某个具体作用域在当前配置下是否启用(global/project/session/custom 各自开关)。 */
+          scopeEnabled(scope             )          {
+    switch (scopeKind(scope)) {
+      case 'global': return this.cfg.globalEnabled
+      case 'project': return this.cfg.projectEnabled
+      case 'session': return this.cfg.sessionEnabled
+      default: return this.cfg.customEnabled
+    }
   }
 
   /**
@@ -1503,7 +1529,9 @@ export class LocalMemoryService                             {
   visibleScopes(agent         )                            {
     const resolved = this.resolveVisibility(this.rawSessionIdOf(agent))
     if (resolved === undefined || resolved.config.level === 'none') return undefined
-    return this.filterEnabledRules(resolved.config.scopes).map((rule) => this.canonicalScope(rule.scope))
+    return this.filterEnabledRules(resolved.config.scopes)
+      .filter((rule) => rule.read !== false)
+      .map((rule) => this.canonicalScope(rule.scope))
   }
 
   /** 某个 scope 下允许的记忆类型;undefined = 不限制(可见且没有类型白名单)。 */
@@ -1513,6 +1541,7 @@ export class LocalMemoryService                             {
     const key = this.canonicalScope(scope)
     const rule = policy.scopes.find((item) => this.canonicalScope(item.scope) === key)
     if (rule === undefined) return []
+    if (rule.read === false) return []
     return rule.kinds !== undefined && rule.kinds.length > 0 ? [...rule.kinds] : undefined
   }
 
@@ -1522,20 +1551,35 @@ export class LocalMemoryService                             {
     if (policy.level === 'none') return true
     const key = this.canonicalScope(scope)
     const rule = policy.scopes.find((item) => this.canonicalScope(item.scope) === key)
-    if (rule === undefined) return false
+    if (rule === undefined || rule.read === false) return false
     if (rule.kinds === undefined || rule.kinds.length === 0) return true
     return rule.kinds.includes(kind)
   }
 
-  /**
-   * 一个作用域是否可读**且可写**(0.20.0 起「可见范围 = 可操作范围」,
-   * save / forget 与读取共用这一份口径)。等级 none 时恒为 true。
-   */
-  isScopeOperable(agent         , scope        )          {
+  /** 某个作用域是否可读(0.23.0:read 开关);等级 none 时恒为 true。 */
+  isScopeReadable(agent         , scope        )          {
     const policy = this.visibilityPolicy(agent)
     if (policy.level === 'none') return true
     const key = this.canonicalScope(scope)
-    return policy.scopes.some((item) => this.canonicalScope(item.scope) === key)
+    const rule = policy.scopes.find((item) => this.canonicalScope(item.scope) === key)
+    return rule !== undefined && rule.read !== false
+  }
+
+  /** 某个作用域是否可写(0.23.0:write 开关);等级 none 时恒为 true。 */
+  isScopeWritable(agent         , scope        )          {
+    const policy = this.visibilityPolicy(agent)
+    if (policy.level === 'none') return true
+    const key = this.canonicalScope(scope)
+    const rule = policy.scopes.find((item) => this.canonicalScope(item.scope) === key)
+    return rule !== undefined && rule.write !== false
+  }
+
+  /**
+   * 一个作用域是否可写。0.20 的旧名保留给旧调用方;0.23 起 write 开关独立于 read,
+   * 权威判断见 `isScopeWritable`。
+   */
+  isScopeOperable(agent         , scope        )          {
+    return this.isScopeWritable(agent, scope)
   }
 
   /**
@@ -1545,15 +1589,18 @@ export class LocalMemoryService                             {
           visibilityFilterFor(agent         )                                                         {
     const policy = this.visibilityPolicy(agent)
     if (policy.level === 'none') return undefined
-    const byScope = new Map                              ()
+    const byScope = new Map                                                        ()
     for (const rule of policy.scopes) {
-      byScope.set(this.canonicalScope(rule.scope), rule.kinds !== undefined && rule.kinds.length > 0 ? rule.kinds : undefined)
+      byScope.set(this.canonicalScope(rule.scope), {
+        kinds: rule.kinds !== undefined && rule.kinds.length > 0 ? rule.kinds : undefined,
+        read: rule.read !== false,
+      })
     }
     return (scope, kind) => {
       const key = this.canonicalScope(scope)
-      if (!byScope.has(key)) return false
-      const kinds = byScope.get(key)
-      return kinds === undefined || kinds.includes(kind)
+      const entry = byScope.get(key)
+      if (entry === undefined || !entry.read) return false
+      return entry.kinds === undefined || entry.kinds.includes(kind)
     }
   }
 
@@ -1582,6 +1629,51 @@ export class LocalMemoryService                             {
     return written
   }
 
+  /** 当前工作区 key(= 会话 cwd 解析出的 project scope)。 */
+  workspaceKeyFor(agent         )              {
+    return this.scopeRefs(agent).project
+  }
+
+  /** 面板:当前工作区绑定的作用域(默认可见范围会额外并入它们)。 */
+  workspaceBindings(agent         )                {
+    const workspace = this.workspaceKeyFor(agent)
+    return this.bindings.get(workspace).map((scope) => this.canonicalScope(scope))
+  }
+
+  /**
+   * 面板:设置当前工作区绑定的作用域。
+   *
+   * 绑定只接受具体作用域键;会话作用域不能绑定(它属于某一次会话,不属于工作区)。
+   * 空数组 = 取消全部绑定。写入后给当前会话发一条可见域变更通知,下一次 pre-step
+   * 让 Agent 知道默认范围可能变了。
+   */
+  setWorkspaceBindings(agent         , scopes                   )                {
+    const workspace = this.workspaceKeyFor(agent)
+    const out                = []
+    for (const raw of scopes) {
+      const normalized = normalizeScopeInput(typeof raw === 'string' ? raw : '')
+      if (!normalized.ok) throw memoryError(normalized.code, normalized.message)
+      if (normalized.kind === 'all' || normalized.kind === 'current-session' || normalized.kind === 'current-project' || normalized.scope === undefined) {
+        throw memoryError('SCOPE_INVALID', `绑定必须是具体作用域键: ${JSON.stringify(raw)}`)
+      }
+      const scope = this.canonicalScope(normalized.scope)
+      if (scopeKind(scope) === 'session') {
+        throw memoryError('SCOPE_INVALID', '会话作用域不能绑定到工作区(它只属于某一次会话)')
+      }
+      if (!this.scopeEnabled(scope)) throw memoryError('SCOPE_DISABLED', `作用域 ${scope} 已被禁用,不能绑定`)
+      if (out.includes(scope)) continue
+      out.push(scope)
+    }
+    const written = this.bindings.set(workspace, out)
+    const sessionId = this.rawSessionIdOf(agent)
+    if (sessionId !== undefined) {
+      // 通知的载荷是"本会话自己的覆盖";绑定变化不属于覆盖,但 Agent 需要知道
+      // 默认范围/状态变了,所以仍触发一次(配置取当前自己的覆盖)。
+      this.visibilityNotices.set(sessionId, { config: this.visibility.get(sessionId) ?? null, at: Date.now() })
+    }
+    return written.map((scope) => this.canonicalScope(scope))
+  }
+
   /** 校验并规范化面板提交的可见域(必须是具体作用域键;不接受 all/current-*)。 */
           normalizeVisibilityConfig(config                         )                          {
     const rules = cleanVisibilityRules(config.scopes)
@@ -1598,8 +1690,12 @@ export class LocalMemoryService                             {
       if (normalized.scope === undefined) continue
       const scope = this.canonicalScope(normalized.scope)
       if (out.some((item) => item.scope === scope)) continue
-      // 不再支持按记忆类型收窄:提交里的 kinds 一律忽略。
-      out.push({ scope })
+      // 不再支持按记忆类型收窄:提交里的 kinds 一律忽略;read/write 只保留 false。
+      out.push({
+        scope,
+        ...(rule.read === false ? { read: false } : {}),
+        ...(rule.write === false ? { write: false } : {}),
+      })
     }
     if (out.length === 0) throw memoryError('SCOPE_EMPTY', '至少选择一个可见的记忆范围')
     const level                  = config.level === 'normal' || config.level === 'none' ? config.level : 'absolute'
@@ -1767,18 +1863,22 @@ export class LocalMemoryService                             {
   }
 
   /**
-   * 写入/删除护栏(0.20.0):可见范围 = 可操作范围。
+   * 写入/删除护栏（0.20.0，0.23.0 起区分 read / write 状态）。
    *
-   * - absolute:范围外一律拒绝,而且**不暴露**这是可见域限制(视为不存在);
-   * - normal:没经过审批就拒绝(工具层会用 `requestOutOfScope` 先问一次,
-   *   批准后带 `visibilityApproved` 再调进来);
-   * - none:不限制。
+   * - 作用域在范围内但 `write:false` → SCOPE_READ_ONLY，说明是「可写」开关关掉了；
+   * - absolute 且作用域不在范围内 → SCOPE_NOT_WRITABLE，明确告诉 Agent 是绝对限制；
+   * - normal 且作用域不在范围内 → VISIBILITY_APPROVAL_REQUIRED（工具层先审批）；
+   * - none：不限制。
    */
           assertOperable(agent         , scope             )       {
-    if (this.isScopeOperable(agent, scope)) return
-    const level = this.visibilityPolicy(agent).level
-    if (level === 'absolute') {
-      throw memoryError('SCOPE_NOT_WRITABLE', `作用域 ${scope} 不存在或不可写`)
+    if (this.isScopeWritable(agent, scope)) return
+    const policy = this.visibilityPolicy(agent)
+    const rule = policy.scopes.find((item) => this.canonicalScope(item.scope) === this.canonicalScope(scope))
+    if (rule !== undefined) {
+      throw memoryError('SCOPE_READ_ONLY', `作用域 ${scope} 在本会话记忆范围里被标记为「不可写」（可读/可写按钮），本次写入/删除没有执行。如需写入，请让用户打开该作用域的「可写」状态。`)
+    }
+    if (policy.level === 'absolute') {
+      throw memoryError('SCOPE_NOT_WRITABLE', `作用域 ${scope} 不在本会话可见范围内（限制等级：绝对限制），本次写入/删除没有执行。如需写入，请让用户调整「记忆范围」后重试。`)
     }
     throw memoryError('VISIBILITY_APPROVAL_REQUIRED', `作用域 ${scope} 不在本会话的可操作范围内,需要用户审批`)
   }
@@ -2338,6 +2438,83 @@ export class LocalMemoryService                             {
       ...(input.ttlMs !== undefined ? { ttlMs: input.ttlMs } : {}),
       ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
     }                   )
+  }
+
+  /**
+   * 面板编辑（0.23.0）：**不原地改旧记录**，而是新建一条修正版并在 `supersedes`
+   * 指向旧记录。旧记录保留（面板历史 / memory_get 仍可取，检索默认隐藏它）。
+   *
+   * 返回 `{ record, superseded }`。内容为空 / 超长 / 命中凭据扫描时的行为与 save 一致。
+   */
+  async reviseRecord(input   
+              
+                    
+                 
+                   
+                       
+                       
+                                                  
+                             
+                                     
+                  
+   )                                                        {
+    this.discoverScopes()
+    let found                                                         
+    for (const store of this.store.allScopes()) {
+      const record = store.records.get(input.id)
+      if (record !== undefined) { found = { store, record }; break }
+    }
+    if (found === undefined) throw memoryError('RECORD_NOT_FOUND', `no record ${input.id}`)
+    const { store, record: old } = found
+    let content = input.content !== undefined ? String(input.content).trim() : old.content
+    if (content === '') throw memoryError('CONTENT_EMPTY', 'content must be a non-empty string')
+    if (content.length > this.cfg.maxRecordChars) {
+      throw memoryError('CONTENT_TOO_LONG', `content exceeds ${this.cfg.maxRecordChars} chars`)
+    }
+    if (this.cfg.secrets.enabled) {
+      const findings = scanSecrets(content)
+      if (findings.length > 0) {
+        if (this.cfg.secrets.mode === 'refuse') {
+          throw memoryError('SECRET_DETECTED', `content matches credential denylist: ${[...new Set(findings.map((f) => f.kind))].join(', ')}`)
+        }
+        content = redactSecrets(content)
+      }
+    }
+    const now = Date.now()
+    const kind = (input.kind !== undefined ? String(input.kind) : old.kind)                        
+    const next               = {
+      id: newId(),
+      scope: old.scope,
+      kind,
+      content,
+      tags: input.tags !== undefined ? input.tags.map(String) : [...old.tags],
+      source: { origin: 'explicit' },
+      createdAt: now,
+      updatedAt: now,
+      lastAccessedAt: now,
+      accessCount: 0,
+      importance: input.importance !== undefined
+        ? Math.min(1, Math.max(0, Number(input.importance) || 0))
+        : old.importance,
+      supersedes: old.id,
+    }
+    const triggers = input.triggers !== undefined
+      ? input.triggers.map(String)
+      : (old                                          ).triggers
+    if (Array.isArray(triggers)) (next                                          ).triggers = [...triggers]
+    if (input.expiresAt === null) {
+      // 显式清除:不设置 expiredAt。
+    } else if (typeof input.expiresAt === 'number' && Number.isFinite(input.expiresAt)) {
+      next.expiredAt = input.expiresAt
+    } else if (typeof input.ttlMs === 'number' && Number.isFinite(input.ttlMs) && input.ttlMs > 0) {
+      next.expiredAt = now + input.ttlMs
+    } else if (old.expiredAt !== undefined) {
+      next.expiredAt = old.expiredAt
+    }
+    store.insert(next)
+    this.store.scheduleFlush()
+    void this.embedRecord(next).catch(() => {})
+    return { record: next, superseded: old.id }
   }
 
   /**

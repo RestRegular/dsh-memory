@@ -2,6 +2,22 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.23.0 — 修正版编辑与记录页筛选；作用域绑定 / 可读 / 可写状态
+
+- **编辑记忆 = 新建修正版（不再原地修改）**：
+  - 面板 `POST /memory/api/update` 改为调用 provider 的 `reviseRecord()`：新建一条记录、把 `supersedes` 指向旧记录，旧记录内容与元数据保持原样。
+  - 内容、类型、标签、重要度、触发词、过期时间都按提交值写入新记录；内容为空 / 超长 / 命中凭据扫描时的行为与 `memory_save` 一致。
+  - 返回 `{ record, superseded }`；`/records` 反查 `supersededBy`，旧记录仍可 `memory_get` / 面板历史查看，检索默认隐藏。
+- **记录页「是否被修正」筛选**：默认「隐藏已修正」；可切到「显示全部」「只看已修正」。审计 / 审批跳转过来的目标记录即使被隐藏也会补一张卡并展开。
+- **每个作用域的【绑定 / 可读 / 可写】状态按钮**：
+  - **绑定**是工作区级：写入 `<storeDir>/bindings/<hash>.json`；同一工作区里没有显式覆盖的会话，默认范围额外包含已绑定作用域（`resolveReadScopes` / `visibilityPolicy` 同口径）。会话作用域不可绑定。
+  - **可读 / 可写**是会话级、独立生效：`read:false` 的作用域不进入读取集合，搜索命中 / `memory_get` 返回 `withheld.reason='read-disabled'` 且不会发起审批；`write:false` 的保存 / 删除直接拒绝并返回 `SCOPE_READ_ONLY`。
+  - 状态按钮与 `Scope visibility` 一起提交：`visibility.scopes[{ scope, read?, write? }]` + `bindings: string[]`；只落 `false`，旧文件 / 旧客户端默认都可读可写。
+- **失败回复讲真实原因**：绝对限制下被挡住的读取 / 写入 / 删除不再伪装成「不存在」。
+  - 读：`memory_search` / `memory_list` / `memory_get` 返回 `withheld.reason='absolute'`；被挡住的 id 不再进 `missing`，渲染层提示「绝对限制，不会发起审批」及调整方式。
+  - 写 / 删：工具返回 `VISIBILITY_ABSOLUTE`（绝对限制）或 `SCOPE_READ_ONLY`（可写开关关闭）；普通限制的拒绝 / 超时 / 无法审批保持原有真实原因。
+- **测试**：provider 的 read/write 开关、工作区绑定持久化与默认范围、`reviseRecord` 修正链、`/update` 旧记录保留、记录页筛选、状态按钮与 POST 载荷、绝对限制 `withheld` / 删除错误原因。全套通过（441 tests / 0 fail）。
+
 ## 0.22.3 — 审批卡高度与宿主同口径，矮窗口也给列表留空间
 
 - 0.22.2 把详情行锁成 `flex:none` 后，矮窗口里 `max-height: min(--dsh-composer-text-max-height, 46vh)` 那层 `46vh` 会让头部占满高度、条目列表只剩十几像素（437px 高窗口实测 ~18px）。

@@ -151,6 +151,11 @@ export class CordisMemoryService extends Service {
     return this.impl.createRecord(input)
   }
 
+  /** 面板编辑:新建一条修正版并通过 supersedes 指向旧记录(0.23.0)。 */
+  reviseRecord(input: Parameters<LocalMemoryService['reviseRecord']>[0]): ReturnType<LocalMemoryService['reviseRecord']> {
+    return this.impl.reviseRecord(input)
+  }
+
   /** 面板导出:纯文本 + 元数据,不含向量。 */
   exportAll(): ReturnType<LocalMemoryService['exportAll']> {
     return this.impl.exportAll()
@@ -251,6 +256,31 @@ export class CordisMemoryService extends Service {
   /** 可见范围 = 可操作范围:写入/删除前用它判断一个 scope 是否可操作。 */
   isScopeOperable(agent: unknown, scope: string): boolean {
     return this.impl.isScopeOperable(agent, scope)
+  }
+
+  /** 某个作用域是否可读(0.23.0 的 read 开关)。 */
+  isScopeReadable(agent: unknown, scope: string): boolean {
+    return this.impl.isScopeReadable(agent, scope)
+  }
+
+  /** 某个作用域是否可写(0.23.0 的 write 开关)。 */
+  isScopeWritable(agent: unknown, scope: string): boolean {
+    return this.impl.isScopeWritable(agent, scope)
+  }
+
+  /** 当前工作区 key(= 会话 cwd 解析出的 project scope)。 */
+  workspaceKeyFor(agent: unknown): ReturnType<LocalMemoryService['workspaceKeyFor']> {
+    return this.impl.workspaceKeyFor(agent)
+  }
+
+  /** 面板:当前工作区绑定的作用域。 */
+  workspaceBindings(agent: unknown): ReturnType<LocalMemoryService['workspaceBindings']> {
+    return this.impl.workspaceBindings(agent)
+  }
+
+  /** 面板:设置当前工作区绑定的作用域。 */
+  setWorkspaceBindings(agent: unknown, scopes: readonly string[]): ReturnType<LocalMemoryService['setWorkspaceBindings']> {
+    return this.impl.setWorkspaceBindings(agent, scopes)
   }
 
   /** 某个 scope 下允许的记忆类型(undefined = 不限制)。 */

@@ -11,7 +11,8 @@
  *   GET  /status    各 scope 记录数 + 待嵌入数 + 展示标签
  *   GET  /records   ?scope=&q=  枚举/过滤记录
  *   GET  /search    ?scope=&q=&topK=  语义检索(向量 + 词法,provider 排序)
- *   POST /update    {id, content?, kind?, importance?, tags?, supersededBy?}
+ *   POST /update    {id, content?, kind?, importance?, tags?, triggers?, expiresAt?/ttlMs?}
+ *                   → 新建一条修正版(supersedes=id),旧记录保留(0.23.0)
  *   POST /delete    {id}
  * scope 惰性加载是同步的(store.peek(),**读路径不创建**),无需 ready 门。内容编辑会作废旧
  * 向量并加入 embedPending,由 provider 的回填队列重新嵌入。
@@ -505,13 +506,29 @@ function visibilityPayload(ctx, memory, sessionId) {
 
   let refs
   try { if (session !== undefined) refs = resolveCurrentScopes({ session }) } catch { refs = undefined }
-  // 没有显式覆盖时,面板仍预选"当前默认读取集合"(会话 + 项目 + global),
+  // 没有显式覆盖时,面板仍预选"当前默认读取集合"(会话 + 项目 + global + 工作区绑定),
   // 让用户看到 Agent 现在实际能看到什么;保存后才变成显式覆盖。
   let defaults = []
   try {
     const resolved = memory.resolveReadScopes?.(agentLike)
     if (Array.isArray(resolved)) defaults = resolved
   } catch { /* 降级为空 */ }
+
+  // 0.23.0:工作区级绑定 + 每个作用域的 read / write 状态。
+  let workspace = null
+  let bindings = []
+  try {
+    if (typeof memory.projectKeyFor === 'function') workspace = memory.projectKeyFor(agentLike)
+    if (typeof memory.workspaceBindings === 'function') {
+      const list = memory.workspaceBindings(agentLike)
+      if (Array.isArray(list)) bindings = list
+    }
+  } catch { /* 绑定是增强;拿不到就按"没有绑定"处理 */ }
+  const bound = new Set(bindings)
+  const rules = new Map()
+  for (const rule of (Array.isArray(effective?.scopes) ? effective.scopes : [])) {
+    if (rule && typeof rule.scope === 'string' && !rules.has(rule.scope)) rules.set(rule.scope, rule)
+  }
 
   const stats = typeof memory.scopeStats === 'function' ? memory.scopeStats() : []
   const byScope = new Map()
@@ -530,10 +547,21 @@ function visibilityPayload(ctx, memory, sessionId) {
   ensure(projectScope)
   ensure('global')
   for (const scope of defaults) ensure(scope)
+  for (const scope of bindings) ensure(scope)
   const rank = (scope) => scope === sessionScope ? 0 : scope === projectScope ? 1 : scope === 'global' ? 2 : 3
   const scopes = [...byScope.values()]
     .sort((a, b) => rank(a.scope) - rank(b.scope) || String(a.scope).localeCompare(String(b.scope)))
-    .map((item) => ({ ...item, label: item.name ?? scopeLabel(ctx, item.scope) }))
+    .map((item) => {
+      const rule = rules.get(item.scope)
+      return {
+        ...item,
+        label: item.name ?? scopeLabel(ctx, item.scope),
+        read: rule === undefined ? true : rule.read !== false,
+        write: rule === undefined ? true : rule.write !== false,
+        bound: bound.has(item.scope),
+        bindable: !String(item.scope).startsWith('session:'),
+      }
+    })
   return {
     sessionId,
     override: own,
@@ -541,6 +569,8 @@ function visibilityPayload(ctx, memory, sessionId) {
     inherited,
     source,
     defaults,
+    workspace,
+    bindings: [...bound],
     scopes,
   }
 }
@@ -633,7 +663,7 @@ async function handle(ctx, routePath, req, res) {
       if (sessionId === '') throw new ApiError(400, 'SESSION_REQUIRED', 'session 不能为空')
       let next = null
       const rawConfig = body?.visibility
-      // 新协议:{ visibility: { scopes: [{ scope }], level } } | null
+      // 新协议:{ visibility: { scopes: [{ scope, read?, write? }], level } } | null
       // 兼容 0.19.0 的 { scopes: [{ scope, kinds? }] } 与 0.18 的 { scopes: string[] }:
       // 0.19.1 起不再限制记忆类型,提交里的 kinds 一律忽略。
       const rawScopes = rawConfig !== null && rawConfig !== undefined && typeof rawConfig === 'object'
@@ -654,11 +684,42 @@ async function handle(ctx, routePath, req, res) {
             throw new ApiError(400, 'SCOPE_INVALID', `可见范围必须是具体作用域键: ${JSON.stringify(scopeRaw)}`)
           }
           if (normalized.scope === undefined || scopes.some((item) => item.scope === normalized.scope)) continue
-          scopes.push({ scope: normalized.scope })
+          // 0.23.0:read / write 状态。省略 = 可读可写;只有显式 false 才落盘。
+          const read = typeof raw === 'object' && raw !== null && raw.read === false
+          const write = typeof raw === 'object' && raw !== null && raw.write === false
+          scopes.push({
+            scope: normalized.scope,
+            ...(read ? { read: false } : {}),
+            ...(write ? { write: false } : {}),
+          })
         }
         const levelRaw = rawConfig !== null && rawConfig !== undefined && typeof rawConfig === 'object' ? rawConfig.level : 'absolute'
         const level = levelRaw === 'normal' || levelRaw === 'none' ? levelRaw : 'absolute'
         next = { scopes, level }
+      }
+      // 工作区级绑定:省略 = 不改;数组 = 整体替换。与可见范围同一个保存动作提交。
+      const rawBindings = body?.bindings
+      if (rawBindings !== undefined) {
+        if (!Array.isArray(rawBindings)) throw new ApiError(400, 'SCOPE_INVALID', 'bindings 必须是字符串数组')
+        if (typeof memory.setWorkspaceBindings !== 'function') {
+          throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供工作区绑定接口（请升级 @restregular/dsh-memory）')
+        }
+        const bindings = []
+        for (const raw of rawBindings) {
+          if (typeof raw !== 'string' || raw.trim() === '') throw new ApiError(400, 'SCOPE_INVALID', '绑定项必须是非空字符串')
+          const normalized = normalizeScopeInput(raw)
+          if (!normalized.ok) throw new ApiError(400, normalized.code, normalized.message)
+          if (normalized.kind === 'all' || normalized.kind === 'current-project' || normalized.kind === 'current-session' || normalized.scope === undefined) {
+            throw new ApiError(400, 'SCOPE_INVALID', `绑定必须是具体作用域键: ${JSON.stringify(raw)}`)
+          }
+          if (normalized.scope.startsWith('session:')) {
+            throw new ApiError(400, 'SCOPE_INVALID', '会话作用域不能绑定到工作区')
+          }
+          if (!bindings.includes(normalized.scope)) bindings.push(normalized.scope)
+        }
+        let session
+        try { session = ctx.get('sessions')?.get?.(sessionId) } catch { session = undefined }
+        memory.setWorkspaceBindings({ session: session !== undefined ? session : { id: sessionId } }, bindings)
       }
       memory.setSessionVisibility(sessionId, next)
       writeJson(res, { ok: true, value: visibilityPayload(ctx, memory, sessionId) })
@@ -944,6 +1005,28 @@ async function handle(ctx, routePath, req, res) {
     if (method === 'POST' && path === '/update') {
       const body = await readJsonBody(req)
       const id = String(body.id ?? '')
+      // 0.23.0:编辑 = 新建一条修正版,旧记录不原地修改。旧 provider 没有
+      // reviseRecord 时才退回原来的原地编辑,避免版本错配直接报错。
+      if (typeof memory.reviseRecord === 'function') {
+        const input = { id }
+        if (body.content !== undefined) input.content = String(body.content)
+        if (body.kind !== undefined) input.kind = String(body.kind)
+        if (body.importance !== undefined) input.importance = Number(body.importance)
+        if (body.tags !== undefined) input.tags = Array.isArray(body.tags) ? body.tags.map(String) : []
+        if (body.triggers !== undefined) input.triggers = Array.isArray(body.triggers) ? body.triggers.map(String) : []
+        if (body.expiredAt === null) input.expiresAt = null
+        else if (typeof body.expiresAt === 'number') input.expiresAt = body.expiresAt
+        else if (typeof body.ttlMs === 'number' && body.ttlMs > 0) input.ttlMs = body.ttlMs
+        const { record, superseded } = await memory.reviseRecord(input)
+        const scopeStore = store.peek(record.scope) ?? { embedPending: new Map(), vectors: new Map() }
+        let supersededBy = null
+        for (const other of scopeStore.records.values()) {
+          if (other.supersedes === record.id) { supersededBy = other.id; break }
+        }
+        console.log(`[dsh-memory-panel] 修正记忆 ${superseded} -> ${record.id}`)
+        writeJson(res, { ok: true, value: { record: wireRecord(record, scopeStore, supersededBy), superseded } })
+        return
+      }
       let target = null
       for (const s of store.allScopes()) {
         const rec = s.records.get(id)
