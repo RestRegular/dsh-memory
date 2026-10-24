@@ -678,29 +678,54 @@ window.__ModuleLoader__.load({
      * 会话 id → 展示用的短 id(前 16 位,如 `session-1a2b3c4d`)。
      *
      * 为什么是 16 而不是 8:DSH 的会话 id 以 `session-` 开头 —— 正好 8 个字符。
-     * 取前 8 位会让所有会话作用域都显示成「会话 session-」,等于没给 id。
-     * 服务端 memory-local 的 sessionShortId / sessionScopeLabel 是同一口径。
+     * 取前 8 位会让所有会话作用域都显示成同一个名字,等于没给 id。
+     * 服务端 memory-local 的 sessionShortId 是同一口径。
      */
     const SESSION_SHORT_ID_CHARS = 16
     function sessionShortId(sessionId) {
       return String(sessionId === null || sessionId === undefined ? '' : sessionId).slice(0, SESSION_SHORT_ID_CHARS)
     }
-    /** 会话 scope 键(`session:<id>`)→「会话 + 前 16 位 id」。 */
-    function sessionScopeLabel(scope) {
-      return `会话 ${sessionShortId(String(scope).slice('session:'.length))}`
+
+    /**
+     * scope 键 → **类型前缀**:`global:` / `project:` / `session:` / `custom:`。
+     *
+     * 注意后两个坑:①会话 id 以 `session-` 开头(正好 8 个字符),短 id 必须取 16 位;
+     * ②**自定义作用域的键本身没有前缀**(就是一个名字,例如 `handbook`),global 的键
+     * 也只有 `global` 这个词 —— 所以前缀只能按类型补,不能靠键里现成的样子。
+     * 服务端 memory-local 的 scopeTypePrefix / scopeDisplayName 是同一口径。
+     */
+    function scopeTypePrefix(scope) {
+      if (scope === 'global') return 'global:'
+      const value = String(scope)
+      if (value.startsWith('project:')) return 'project:'
+      if (value.startsWith('session:')) return 'session:'
+      return 'custom:'
+    }
+
+    /** 没有别名 / 标题时,各类型自己的名字(前缀之后那一段)。 */
+    function scopeDefaultName(scope) {
+      if (scope === 'global') return '全局'
+      const value = String(scope)
+      if (value.startsWith('project:')) return value.slice('project:'.length)
+      if (value.startsWith('session:')) return sessionShortId(value.slice('session:'.length))
+      return value
+    }
+
+    /** scope 键 → 展示名(带类型前缀),形如 `global:全局` / `custom:handbook`。 */
+    function scopeDisplayName(scope, humanName) {
+      const name = typeof humanName === 'string' && humanName.length > 0 ? humanName : scopeDefaultName(scope)
+      return `${scopeTypePrefix(scope)}${name}`
     }
 
     /**
-     * scope 键 → 展示标签。优先用 /status 返回的 `label`(服务端能查会话标题、能解析
-     * project 的 cwd);服务端没给(旧 provider / 还没加载到)时用本地回退。
+     * scope 键 → 展示名。优先用 /status 返回的 `label`(服务端能查会话标题、能解析
+     * project 的 cwd,且已经带类型前缀);服务端没给(旧 provider / 还没加载到)时用
+     * 本地回退 —— 回退也必须带前缀,所以走 scopeDisplayName 而不是裸键。
      */
     function scopeLabel(scope, labels) {
       const mapped = labels && labels[scope]
       if (typeof mapped === 'string' && mapped.length > 0) return mapped
-      if (scope === 'global') return '全局'
-      if (scope.startsWith('project:')) return scope.slice(8)
-      if (scope.startsWith('session:')) return sessionScopeLabel(scope)
-      return scope
+      return scopeDisplayName(scope)
     }
 
     /** 记忆类型 → 中文名 + 树里的强调色(与宿主主题无关的固定色相,底色用 color-mix 自适应)。 */
@@ -3042,10 +3067,10 @@ window.__ModuleLoader__.load({
       const sessionOptions = [{ value: '', label: '全部会话（显式）' }]
         .concat((scopes || []).filter((scope) => scope.scope?.startsWith('session:')).map((scope) => ({
           value: scope.scope.slice('session:'.length),
-          label: scope.label || sessionScopeLabel(scope.scope),
+          label: scope.label || scopeDisplayName(scope.scope),
         })))
       if (effectiveSession && !sessionOptions.some((item) => item.value === effectiveSession)) {
-        sessionOptions.push({ value: effectiveSession, label: sessionScopeLabel(`session:${effectiveSession}`) })
+        sessionOptions.push({ value: effectiveSession, label: scopeDisplayName(`session:${effectiveSession}`) })
       }
       const channelOptions = [{ value: '', label: '全部通道' }].concat(Object.keys(AUDIT_CHANNEL_META).map((key) => ({ value: key, label: AUDIT_CHANNEL_META[key] })))
       const outcomeOptions = [{ value: '', label: '全部结果' }].concat(Object.keys(AUDIT_OUTCOME_META).map((key) => ({ value: key, label: AUDIT_OUTCOME_META[key].label })))
@@ -3086,7 +3111,7 @@ window.__ModuleLoader__.load({
       const toolbar = h('div', { className: 'audit-toolbar' },
         h('div', { className: 'audit-filter-row' },
           lockSession
-            ? h('span', { className: 'audit-pill mute', title: lockSession }, sessionScopeLabel(`session:${lockSession}`))
+            ? h('span', { className: 'audit-pill mute', title: lockSession }, scopeDisplayName(`session:${lockSession}`))
             : h(Dropdown, {
                 items: sessionOptions, value: session, disabled: loading,
                 onChange: (next) => { setSession(next); writeAuditSession(next); resetAndReload() },
@@ -3399,7 +3424,7 @@ window.__ModuleLoader__.load({
       const tipNode = tip === null ? null : (() => {
         if (tip.type === 'session') {
           const summary = tip.summary || {}
-          const title = summary.title || summary.name || sessionScopeLabel(`session:${tip.id}`)
+          const title = summary.title || summary.name || sessionShortId(tip.id)
           return h('div', { className: 'audit-tip', style: { left: tip.x, top: tip.y }, onMouseEnter: cancelHideTip, onMouseLeave: hideTip, onClick: () => openSessionId(tip.id) },
             h('div', { className: 'audit-tip-head' }, h('span', null, '会话'), h('span', { className: 'audit-tip-title' }, title)),
             h('div', { className: 'audit-tip-meta' },
@@ -4684,7 +4709,7 @@ window.__ModuleLoader__.load({
         for (const scope of selected) {
           if (seen.has(scope)) continue
           seen.add(scope)
-          nextCatalog.push({ scope, label: scope, records: 0 })
+          nextCatalog.push({ scope, label: scopeDisplayName(scope), records: 0 })
         }
         // 旧服务端没有 defaults 时的兜底:至少把默认三路(会话 / 项目 / global)选上,
         // 不要再出现"一打开什么都没选"。
@@ -4967,17 +4992,21 @@ window.__ModuleLoader__.load({
       /** 已保存状态的勾选（排序只看它，草稿改动不立刻重排）。 */
       const savedChecked = (scope) => Boolean(savedEntries[scope]) || grantsByScope.has(scope)
       /**
-       * 0.25.8：本会话自己的 session scope 在列表里叫「当前会话」。
+       * 0.25.8：本会话自己的 session scope 在列表里叫「当前会话」；0.25.10 起名字统一带
+       * 类型前缀，所以是 `session:当前会话`。
        *
        * 面板是「这个会话」的权限面板，那一行就是用户正在用的会话 —— 显示
-       * `session:<uuid>` 或「会话 1a2b3c4d」都只有实现细节，用户无从对号。
+       * `session:<uuid>` 或 `session-1a2b3c4d` 都只有实现细节，用户无从对号。
        * **只**改本会话那一条：目录里可能还有别的会话的 scope（它们带记录就会被发现），
        * 那些仍按标题 / 短 id 显示，不能跟着叫「当前会话」。
+       *
+       * 标签一律带类型前缀（`global:` / `project:` / `session:` / `custom:`）：自定义
+       * 作用域的键本身没有前缀，直接吐裸名字会和 global / project 混在一起分不清种类。
        */
       const currentSessionScope = (typeof sessionId === 'string' && sessionId !== '') ? `session:${sessionId}` : ''
       const displayName = (scope, label) => (currentSessionScope !== '' && scope === currentSessionScope)
-        ? '当前会话'
-        : String(label || scope)
+        ? scopeDisplayName(scope, '当前会话')
+        : (typeof label === 'string' && label !== '' ? label : scopeDisplayName(scope))
       const matches = (label, scope) => !needle
         || displayName(scope, label).toLowerCase().includes(needle) || String(scope).toLowerCase().includes(needle)
       const visibleScopes = catalog.filter((item) => matches(item.label || item.scope, item.scope))
@@ -5471,7 +5500,8 @@ window.__ModuleLoader__.load({
                             : h('span', { className: 'mem-approval-id', title: item.id }, grantMode
                               ? (item.grantPermission === 'write' ? '可写' : '只读')
                               : (String(item.id).length > 12 ? `${item.id.slice(0, 8)}…${item.id.slice(-4)}` : String(item.id))),
-                          h('span', { className: 'audit-pill mute' }, item.scope),
+                          // 作用域显示名带类型前缀;精确的 scope 键留在 title 里。
+                          h('span', { className: 'audit-pill mute', title: item.scope }, scopeLabel(item.scope)),
                           grantMode
                             ? h('span', { className: 'audit-pill mute' }, item.grantPermission === 'write' ? '写入 / 删除' : '只读访问')
                             : h('span', { className: 'audit-pill mute' }, item.kind ? kindMeta(item.kind).label : '未知'),
@@ -5786,7 +5816,8 @@ window.__ModuleLoader__.load({
       buildMemoryTree: buildMemoryTree,
       // 会话作用域展示名:取会话 id 前 16 位(前 8 位恒为 `session-`)
       sessionShortId: sessionShortId,
-      sessionScopeLabel: sessionScopeLabel,
+      scopeDisplayName: scopeDisplayName,
+      scopeTypePrefix: scopeTypePrefix,
       scopeLabel: scopeLabel,
       KIND_META: KIND_META,
       CSS: CSS,

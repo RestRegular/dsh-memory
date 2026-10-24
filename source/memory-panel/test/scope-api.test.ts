@@ -101,7 +101,7 @@ test('面板 /records:scope=all 与不传 scope 都列出全部已发现记录',
   }
 })
 
-test('面板 /status:每项带 label(会话 / 项目 / global / 自定义)', async () => {
+test('面板 /status:每项 label 都带类型前缀(global: / project: / session: / custom:)', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-scope-'))
   const svc = makeService(dir)
   const cwd = process.cwd()
@@ -116,10 +116,10 @@ test('面板 /status:每项带 label(会话 / 项目 / global / 自定义)', asy
     await handleRequest(ctxWith(svc), ROUTE, get(`${ROUTE}/status`), res)
     assert.equal(res.out.status, 200)
     const labels = Object.fromEntries(res.out.body.value.scopes.map((s) => [s.scope, s.label]))
-    assert.equal(labels['global'], '全局')
-    assert.equal(labels[`project:${cwd}`], cwd)
-    assert.equal(labels['session:sess-12345678'], '会话 sess-12345678', '拿不到会话标题 → 前 16 位(这里是整个 id)')
-    assert.equal(labels['my notes'], 'my notes', '自定义 scope 用原名')
+    assert.equal(labels['global'], 'global:全局', 'global 的键没有前缀,靠类型补')
+    assert.equal(labels[`project:${cwd}`], `project:${cwd}`)
+    assert.equal(labels['session:sess-12345678'], 'session:sess-12345678', '拿不到会话标题 → 前 16 位(这里是整个 id)')
+    assert.equal(labels['my notes'], 'custom:my notes', '自定义 scope 的键没有前缀,靠类型补 custom:')
   } finally {
     svc.flushSync()
     rmSync(dir, { recursive: true, force: true })
@@ -128,7 +128,7 @@ test('面板 /status:每项带 label(会话 / 项目 / global / 自定义)', asy
 
 test('面板 /status:会话 id 以 session- 开头时,回退标签取 16 位而不是被前缀占满', async () => {
   // 真机上的会话 id 形如 `session-1a2b3c4d-…`:前 8 位恒为 `session-`。
-  // 只取 8 位会让每个会话作用域都显示成「会话 session-」,0.25.9 起取 16 位。
+  // 只取 8 位会让每个会话作用域都显示成同一个名字,0.25.9 起取 16 位。
   const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-scope-'))
   const svc = makeService(dir)
   svc.setProjectScope('project:/w')
@@ -140,10 +140,10 @@ test('面板 /status:会话 id 以 session- 开头时,回退标签取 16 位而�
     await handleRequest(ctxWith(svc), ROUTE, get(`${ROUTE}/status`), res)
     assert.equal(res.out.status, 200)
     const labels = Object.fromEntries(res.out.body.value.scopes.map((s) => [s.scope, s.label]))
-    assert.equal(labels['session:session-1a2b3c4d-0000-4000-8000-000000000001'], '会话 session-1a2b3c4d')
-    assert.equal(labels['session:session-99887766-0000-4000-8000-000000000002'], '会话 session-99887766')
+    assert.equal(labels['session:session-1a2b3c4d-0000-4000-8000-000000000001'], 'session:session-1a2b3c4d')
+    assert.equal(labels['session:session-99887766-0000-4000-8000-000000000002'], 'session:session-99887766')
     const values = Object.values(labels)
-    assert.equal(new Set(values.filter((label) => label.startsWith('会话 session-'))).size, 2, '两个会话的作用域名不同')
+    assert.equal(new Set(values.filter((label) => label.startsWith('session:session-'))).size, 2, '两个会话的作用域名不同')
   } finally {
     svc.flushSync()
     rmSync(dir, { recursive: true, force: true })
@@ -165,7 +165,7 @@ test('面板 /status:宿主提供 sessionTitle/sessions 时用会话标题', asy
     const res = fakeRes()
     await handleRequest(ctx, ROUTE, get(`${ROUTE}/status`), res)
     const labels = Object.fromEntries(res.out.body.value.scopes.map((s) => [s.scope, s.label]))
-    assert.equal(labels['session:sess-abc12345'], '重构记忆作用域(sess-abc12345)')
+    assert.equal(labels['session:sess-abc12345'], 'session:重构记忆作用域(sess-abc12345)', '标题也带 session: 前缀')
   } finally {
     svc.flushSync()
     rmSync(dir, { recursive: true, force: true })
@@ -186,7 +186,7 @@ test('面板 /status:会话标题服务抛错时回退,不影响响应', async (
     await handleRequest(ctx, ROUTE, get(`${ROUTE}/status`), res)
     assert.equal(res.out.status, 200)
     const labels = Object.fromEntries(res.out.body.value.scopes.map((s) => [s.scope, s.label]))
-    assert.equal(labels['session:sess-zzz99999'], '会话 sess-zzz99999')
+    assert.equal(labels['session:sess-zzz99999'], 'session:sess-zzz99999')
   } finally {
     svc.flushSync()
     rmSync(dir, { recursive: true, force: true })
@@ -231,11 +231,11 @@ test('面板 /status:超过 50 个会话 scope 时列表仍然完整,标题只�
     const labels = Object.fromEntries(scopes.map((s) => [s.scope, s.label]))
     // 前 5 个(最近活跃)拿到标题
     for (let i = 0; i < TITLED; i++) {
-      assert.equal(labels[scopesOf(i)], `标题-${String(i).padStart(2, '0')}(` + shortOf(i) + ')')
+      assert.equal(labels[scopesOf(i)], `session:标题-${String(i).padStart(2, '0')}(` + shortOf(i) + ')')
     }
     // 其余 55 个一律回退标签(一个都不缺)
     for (let i = TITLED; i < TOTAL; i++) {
-      assert.equal(labels[scopesOf(i)], '会话 ' + shortOf(i), `第 ${i} 个会话回退标签`)
+      assert.equal(labels[scopesOf(i)], 'session:' + shortOf(i), `第 ${i} 个会话回退标签`)
     }
     assert.ok(seen.length <= 50, `标题查询次数受 50 上限约束,实际 ${seen.length}`)
     assert.equal(seen.length, 50, '50 个活跃会话都查了标题')

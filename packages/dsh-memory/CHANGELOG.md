@@ -2,6 +2,14 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.25.10 — 作用域名字统一带类型前缀（`global:` / `project:` / `session:` / `custom:`）
+
+- **背景**：作用域名此前是「裸名字」——项目显示成 cwd、会话显示成短 id、global 显示成「全局」、自定义作用域显示成它自己的名字。列表里几种作用域混在一起时看不出种类；尤其 `global:` 与 `custom:` 完全没有前缀可依，因为这两种 scope 的**键本身就不带前缀**（`global` 是个关键字，自定义就是裸名字）。
+- **口径**：展示名一律 `<类型>:<名字>` —— `global:全局`、`project:D:\repositories\dsh-memory`、`session:session-1a2b3c4d`、`custom:handbook`。前缀由**类型**决定（`memory-local` 的 `scopeTypePrefix` / `scopeDisplayName`），不猜键的形状；别名与标题只替换冒号后面那一段：`project:<别名>`、`custom:<别名>`、`session:<标题>(session-1a2b3c4d)`。
+- **覆盖范围**：`/status` 的 label（面板作用域下拉、记录卡作用域徽标、记忆树）、`/visibility` 与 `/grants` 的作用域标签、「记忆权限」浮窗的每一行（本会话那行现在是 `session:当前会话`）、审计页的会话筛选与锁定会话 pill、审批卡上的作用域 pill（精确键退到 `title`）、以及 `memory_save` / `memory_search` / `memory_list` / `memory_get` / `memory_scopes` 的工具输出（`memory_scopes` 目录里自定义作用域此前渲染成 `自定义「handbook」`，现在是 `custom:handbook`）。
+- **保持不变**：注入摘要里的作用域分类标签仍是「全局 / 项目 / 会话」（那是紧凑分类而不是名字）；面向 Agent 的「记忆权限已更新」通知仍用**真实 scope 键**（Agent 要拿它当键用）。
+- 测试：新增 `scopeTypePrefix` / `scopeDisplayName` 的四类型单测（global 与自定义的键没有前缀、别名与标题只换名字段）、客户端 helper 用例；`/status` 的四种 label 断言与浮窗「当前会话」断言改成带前缀；全套 503 tests / 502 pass / 1 skipped。
+
 ## 0.25.9 — 会话作用域的短 id 改成前 16 位（以前全显示成「会话 session-」）
 
 - **问题**：真机会话 id 以 `session-` 开头，那正好是 8 个字符。以前展示会话作用域时取「id 前 8 位」，于是每个会话作用域都渲染成同一个「会话 session-」——用户无法区分是哪个会话，等于没给 id。

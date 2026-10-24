@@ -10,6 +10,7 @@
  * 0.23.0：绝对限制与「不可读」开关也会被说明（不再假装"不存在"），并提示怎么调整。
  */
                                                                                                                                
+import { scopeDisplayName } from '../provider/scope.js'
 
 /** 把 scope 键渲染成展示文案（宿主能查到会话标题时用它，否则用短 id）。 */
                                                   
@@ -140,7 +141,9 @@ export function renderScopesResult(value                  , label            )  
   }
   if (value.scopes.length === 0) return '当前没有可列出的作用域。'
   const body = value.scopes.map((item) => {
-    const name = item.name !== undefined && item.name !== '' ? item.name : label(item.scope)
+    // 别名(项目 / 自定义作用域)也带类型前缀:自定义作用域的键本身没有前缀,
+    // 直接吐裸名字会和 global / project 混在一起分不清种类。
+    const name = item.name !== undefined && item.name !== '' ? scopeDisplayName(item.scope, item.name) : label(item.scope)
     const description = item.description !== undefined && item.description.trim() !== ''
       ? item.description.trim()
       : '（未填写用途）'

@@ -197,9 +197,41 @@ export function sessionShortId(sessionId        )         {
   return String(sessionId ?? '').slice(0, SESSION_SHORT_ID_CHARS)
 }
 
-/** 会话 scope 键(`session:<id>`)→ 「会话 + 前 16 位 id」的展示名。 */
-export function sessionScopeLabel(scope          )         {
-  return `会话 ${sessionShortId(scope.slice('session:'.length))}`
+/**
+ * scope 键 → 展示用的**类型前缀**。
+ *
+ *   global      → `global:`
+ *   project:*   → `project:`
+ *   session:*   → `session:`
+ *   其余(自定义) → `custom:`  —— 自定义 scope 的键**本身没有前缀**(就是一个名字),
+ *                 所以这个前缀只能在这里补上;别拿 `scopeKind` 之外的规则去猜。
+ */
+export function scopeTypePrefix(scope          )         {
+  if (scope === 'global') return 'global:'
+  if (scope.startsWith('project:')) return 'project:'
+  if (scope.startsWith('session:')) return 'session:'
+  return 'custom:'
+}
+
+/** 没有别名 / 标题时,各类型自己的名字(前缀之后那一段)。 */
+export function scopeDefaultName(scope          )         {
+  if (scope === 'global') return '全局'
+  if (scope.startsWith('project:')) return scope.slice('project:'.length)
+  if (scope.startsWith('session:')) return sessionShortId(scope.slice('session:'.length))
+  return String(scope)
+}
+
+/**
+ * scope 键 → 展示名,形如 `global:全局` / `project:<cwd>` / `session:session-1a2b3c4d` /
+ * `custom:<名字>`。`humanName` 是服务端能拿到的人类可读名(会话标题、项目别名、自定义
+ * 作用域的用途名),省略或空串时用类型默认名。
+ *
+ * 前缀必须由**类型**决定而不是由名字猜:自定义作用域的键天生没有前缀,老代码直接吐
+ * 裸名字,在列表里会和 global / project 混在一起分不清种类。
+ */
+export function scopeDisplayName(scope          , humanName         )         {
+  const name = typeof humanName === 'string' && humanName.length > 0 ? humanName : scopeDefaultName(scope)
+  return `${scopeTypePrefix(scope)}${name}`
 }
 
 /** 写路径遇到只读 scope 时的错误码('all' 不能写)。 */

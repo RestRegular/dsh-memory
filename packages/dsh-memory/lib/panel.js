@@ -27,7 +27,7 @@
 // scope 规范化与 provider 共用同一份实现。路径按**源码树位置**写:构建脚本的改写表
 // 会把它落成产物里的 `../provider/scope.js`(`lib/panel.js` → `lib/provider/scope.js`),
 // 在源码树里同一路径直接命中 source/memory-local/src —— 测试与真实加载都能解析。
-import { normalizeScopeInput, resolveCurrentScopes, sessionScopeLabel, sessionShortId } from './provider/scope.js'
+import { normalizeScopeInput, resolveCurrentScopes, scopeDisplayName, sessionShortId } from './provider/scope.js'
 
 
 function writeJson(res, body, status = 200) {
@@ -141,39 +141,39 @@ async function readJsonBody(req) {
 }
 
 /**
- * scope 键 → **不需要查宿主服务**的展示标签。
- *   global        → 「全局」
- *   project:<cwd> → cwd
- *   session:<id>  → 「会话 <id 前 16 位>」(如 `会话 session-1a2b3c4d`)
- *   其他           → 原名(自定义 scope)
+ * scope 键 → **不需要查宿主服务**的展示名(带类型前缀)。
+ *   global        → `global:全局`
+ *   project:<cwd> → `project:<cwd>`
+ *   session:<id>  → `session:session-1a2b3c4d`(会话 id 前 16 位)
+ *   自定义         → `custom:<名字>`(自定义 scope 的键本身没有前缀,靠类型补)
  *
- * 16 位而不是 8 位:会话 id 以 `session-` 开头(正好 8 个字符),取 8 位会让所有会话
- * 作用域都显示成「会话 session-」。规则集中在 provider 的 sessionScopeLabel。
+ * 细节都有两处坑:①会话 id 以 `session-` 开头(正好 8 个字符),取 8 位会让所有会话
+ * 作用域都显示成同一个名字,所以取 16 位;②自定义作用域与 global 的键天然不带前缀,
+ * 必须按类型补 —— 规则集中在 provider 的 scopeDisplayName。
  */
 function fallbackScopeLabel(scope) {
-  if (scope === 'global') return '全局'
-  if (scope.startsWith('project:')) return scope.slice('project:'.length)
-  if (scope.startsWith('session:')) return sessionScopeLabel(scope)
-  return scope
+  return scopeDisplayName(scope)
 }
 
 /**
- * scope 键 → 展示标签。在 fallback 之上多一步:会话 scope 尽力取会话标题
+ * scope 键 → 展示名。在 fallback 之上多一步:会话 scope 尽力取会话标题
  * (宿主 `sessionTitle` 服务的 `get(session)` → `{ title }`,见 @deepseek-ai/dsh-session-title)。
  * 所有宿主服务访问都在 try/catch 里:面板绝不能因为拿不到标题而失败。
+ *
+ * 带标题时形如 `session:修层级(1a2b3c4d)` —— 类型前缀仍在最前面,名字部分换成标题。
  */
 function scopeLabel(ctx, scope) {
-  if (!scope.startsWith('session:')) return fallbackScopeLabel(scope)
+  if (!scope.startsWith('session:')) return scopeDisplayName(scope)
   const id = scope.slice('session:'.length)
   const short = sessionShortId(id)
   try {
     const session = ctx?.get?.('sessions')?.get?.(id)
     if (session !== undefined) {
       const title = ctx.get('sessionTitle')?.get?.(session)?.title
-      if (typeof title === 'string' && title.length > 0) return `${title}(${short})`
+      if (typeof title === 'string' && title.length > 0) return scopeDisplayName(scope, `${title}(${short})`)
     }
   } catch { /* 标题是尽力而为 */ }
-  return sessionScopeLabel(scope)
+  return scopeDisplayName(scope)
 }
 
 /** 会话 scope 查标题的上限:标题要读会话事件日志,scope 多了它就成了 /status 的大头。 */
@@ -569,7 +569,10 @@ function visibilityPayload(ctx, memory, sessionId) {
       const rule = rules.get(item.scope)
       return {
         ...item,
-        label: item.name ?? scopeLabel(ctx, item.scope),
+        // 别名也带类型前缀:项目别名 → `project:<别名>`,自定义 → `custom:<别名>`。
+        label: typeof item.name === 'string' && item.name !== ''
+          ? scopeDisplayName(item.scope, item.name)
+          : scopeLabel(ctx, item.scope),
         read: rule === undefined ? true : rule.read !== false,
         write: rule === undefined ? true : rule.write !== false,
         // bound = 显式绑定或默认范围自带;defaultBound 告诉客户端这一项不能取消。
@@ -841,7 +844,10 @@ async function handle(ctx, routePath, req, res) {
       // 其余直接用「会话 <id 前 16 位>」。列表本身**始终**完整(不受这个上限影响)。
       const scopes = stats.map((s, index) => ({
         ...s,
-        label: s.name ?? (index < TITLE_LOOKUP_LIMIT ? scopeLabel(ctx, s.scope) : fallbackScopeLabel(s.scope)),
+        // 别名(项目 / 自定义作用域)也要带类型前缀;没有别名时退回按类型算的展示名。
+        label: typeof s.name === 'string' && s.name !== ''
+          ? scopeDisplayName(s.scope, s.name)
+          : (index < TITLE_LOOKUP_LIMIT ? scopeLabel(ctx, s.scope) : fallbackScopeLabel(s.scope)),
       }))
       let embedServer = null
       // older providers have no lifecycle API — the panel simply omits the card

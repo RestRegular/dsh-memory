@@ -21,7 +21,7 @@ import {
                 
 } from './index.js'
 import { renderGetResult, renderListResult, renderScopesResult, renderSearchResult } from './render.js'
-import { resolveCurrentScopes, scopeKind, sessionScopeLabel, sessionShortId,               } from '../provider/scope.js'
+import { resolveCurrentScopes, scopeDisplayName, sessionShortId,               } from '../provider/scope.js'
 
 export const name = 'dsh-tool-memory'
 export const inject = ['tools', 'memory']
@@ -89,32 +89,30 @@ export function apply(ctx     , config                   = {}) {
   const tools = memoryTools(opts)
 
   /**
-   * scope 键 → 展示标签。会话标题只有宿主服务能给:`ctx.get('sessionTitle')` 的 `get(session)`
-   * 返回 `{ title }`(见 @deepseek-ai/dsh-session-title)。整套访问都在 try/catch 里 ——
-   * 旧宿主没有这个服务、会话已经不在内存里,都不能影响工具结果,回退成"会话 <id 前 16 位>"。
+   * scope 键 → 展示名(带类型前缀:`global:全局` / `project:<cwd>` / `session:xxx` /
+   * `custom:<名字>`)。会话标题只有宿主服务能给:`ctx.get('sessionTitle')` 的
+   * `get(session)` 返回 `{ title }`(见 @deepseek-ai/dsh-session-title);整套访问都在
+   * try/catch 里 —— 旧宿主没有这个服务、会话已经不在内存里,都不能影响工具结果,
+   * 回退成「会话 id 前 16 位」。
    */
   const labelFor = (scope          , agent         )         => {
-    if (scope === 'global') return '全局'
-    if (scope.startsWith('project:')) return scope.slice('project:'.length)
-    if (scope.startsWith('session:')) {
-      const id = scope.slice('session:'.length)
-      const short = sessionShortId(id)
-      try {
-        const session = (agent                                             )?.session
-        if (session?.id === id) {
-          const titles = ctx.get?.('sessionTitle')
-          const snapshot = titles?.get?.(session)
-          const title = snapshot?.title
-          if (typeof title === 'string' && title.length > 0) return `${title}(${short})`
-        }
-      } catch { /* 拿不到标题就用短 id */ }
-      return sessionScopeLabel(scope)
-    }
-    return scope
+    if (!scope.startsWith('session:')) return scopeDisplayName(scope)
+    const id = scope.slice('session:'.length)
+    const short = sessionShortId(id)
+    try {
+      const session = (agent                                             )?.session
+      if (session?.id === id) {
+        const titles = ctx.get?.('sessionTitle')
+        const snapshot = titles?.get?.(session)
+        const title = snapshot?.title
+        if (typeof title === 'string' && title.length > 0) return scopeDisplayName(scope, `${title}(${short})`)
+      }
+    } catch { /* 拿不到标题就用短 id */ }
+    return scopeDisplayName(scope)
   }
 
-  const renderScope = (scope          , agent         )         =>
-    scopeKind(scope) === 'custom' ? `自定义「${scope}」` : labelFor(scope, agent)
+  // 自定义作用域也一样:`custom:<名字>`(它的键本来没有前缀,由类型补上)。
+  const renderScope = (scope          , agent         )         => labelFor(scope, agent)
 
   /** 作用域清单文案(名字 + 条数);最多 20 个,其余写"…另有 N 个"。 */
   const scopeSummary = (value                                                            , agent         )         => {

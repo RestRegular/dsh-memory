@@ -514,9 +514,9 @@ test('作用域下拉用服务端给的 label(会话标题 / project 的 cwd)', 
   hooks.resetAll()
   const tree = await mountPanel(hooks, {
     scopes: [
-      { scope: 'global', records: 1, pendingEmbeds: 0, label: '全局' },
+      { scope: 'global', records: 1, pendingEmbeds: 0, label: 'global:全局' },
       { scope: 'project:C:/demo', records: 1, pendingEmbeds: 0, label: 'C:/demo' },
-      { scope: 'session:sess-12345678', records: 1, pendingEmbeds: 0, label: '重构记忆作用域(sess-12345678)' },
+      { scope: 'session:sess-12345678', records: 1, pendingEmbeds: 0, label: 'session:重构记忆作用域(sess-12345678)' },
       { scope: 'handbook', records: 1, pendingEmbeds: 0, label: 'handbook' },
     ],
     embedServer: null,
@@ -534,7 +534,7 @@ test('作用域下拉用服务端给的 label(会话标题 / project 的 cwd)', 
   const optionTexts = collect(tree())
     .filter((n) => n.props?.role === 'option')
     .map((n) => textOf(n))
-  assert.ok(optionTexts.includes('重构记忆作用域(sess-12345678)'), `下拉里显示会话标题(实际:${JSON.stringify(optionTexts)})`)
+  assert.ok(optionTexts.includes('session:重构记忆作用域(sess-12345678)'), `下拉里显示会话标题(实际:${JSON.stringify(optionTexts)})`)
   assert.ok(optionTexts.includes('C:/demo'), 'project scope 显示 cwd')
   assert.ok(!optionTexts.includes('session:sess-12345678'), '不再回退成裸 scope 键')
 })
@@ -543,24 +543,32 @@ test('会话作用域展示名:客户端也取会话 id 前 16 位(前 8 位恒�
   const { exports } = await loadBundle()
   const helpers = exports.__test as {
     sessionShortId: (id: string) => string
-    sessionScopeLabel: (scope: string) => string
+    scopeDisplayName: (scope: string, humanName?: string) => string
+    scopeTypePrefix: (scope: string) => string
     scopeLabel: (scope: string, labels?: Record<string, string>) => string
   }
   const real = 'session-1a2b3c4d-0000-4000-8000-000000000001'
-  // 真机 id 以 `session-` 开头(正好 8 个字符):8 位会让所有会话都显示成「会话 session-」。
+  // 真机 id 以 `session-` 开头(正好 8 个字符):8 位会让所有会话都显示成同一个名字。
   assert.equal(helpers.sessionShortId(real), 'session-1a2b3c4d')
-  assert.equal(helpers.sessionScopeLabel(`session:${real}`), '会话 session-1a2b3c4d')
-  assert.equal(helpers.scopeLabel(`session:${real}`, {}), '会话 session-1a2b3c4d', '回退标签同口径')
+  assert.equal(helpers.scopeDisplayName(`session:${real}`), 'session:session-1a2b3c4d')
+  assert.equal(helpers.scopeLabel(`session:${real}`, {}), 'session:session-1a2b3c4d', '回退标签同口径')
   // 服务端给了 label 就用服务端的(服务端能查会话标题)
-  assert.equal(helpers.scopeLabel(`session:${real}`, { [`session:${real}`]: '修层级(1a2b3c4d)' }), '修层级(1a2b3c4d)')
+  assert.equal(helpers.scopeLabel(`session:${real}`, { [`session:${real}`]: 'session:修层级(1a2b3c4d)' }), 'session:修层级(1a2b3c4d)')
   // 两个会话不能显示成同一个名字
   assert.notEqual(
-    helpers.sessionScopeLabel(`session:${real}`),
-    helpers.sessionScopeLabel('session:session-99887766-0000-4000-8000-000000000002'),
+    helpers.scopeDisplayName(`session:${real}`),
+    helpers.scopeDisplayName('session:session-99887766-0000-4000-8000-000000000002'),
   )
   // 短 id 原样返回;异常输入不抛错
   assert.equal(helpers.sessionShortId('sess-abc12345'), 'sess-abc12345')
   assert.doesNotThrow(() => helpers.sessionShortId(undefined as unknown as string))
+  // 四种类型的名字都自带前缀(global 与自定义的键本来没有前缀)
+  assert.equal(helpers.scopeLabel('global', {}), 'global:全局')
+  assert.equal(helpers.scopeLabel('project:/w', {}), 'project:/w')
+  assert.equal(helpers.scopeLabel('handbook', {}), 'custom:handbook')
+  assert.equal(helpers.scopeDisplayName('handbook', '工作笔记'), 'custom:工作笔记')
+  assert.equal(helpers.scopeTypePrefix('global'), 'global:')
+  assert.equal(helpers.scopeTypePrefix('handbook'), 'custom:')
 })
 
 test('未配置的后端:展开「模型与硬件」给出模型列表与安装按钮,而不是一个死开关', async () => {
@@ -1429,7 +1437,7 @@ test('记忆树标签页:从面板能切过去,空数据也有统计、类型图
   const { hooks } = await loadBundle()
   hooks.resetAll()
   const tree = await mountPanel(hooks, {
-    scopes: [{ scope: 'global', records: 0, pendingEmbeds: 0, label: '全局' }],
+    scopes: [{ scope: 'global', records: 0, pendingEmbeds: 0, label: 'global:全局' }],
     embedServer: null,
   }, undefined, 'tree')
 
@@ -1627,7 +1635,7 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
     defaultScopes: ['session:s1', 'global'],
     bindings: [],
     scopes: [
-      { scope: 'global', label: '全局', records: 5, pendingEmbeds: 0, read: true, write: true, bound: true, defaultBound: true, bindable: false },
+      { scope: 'global', label: 'global:全局', records: 5, pendingEmbeds: 0, read: true, write: true, bound: true, defaultBound: true, bindable: false },
       { scope: 'handbook', label: 'handbook', records: 1, pendingEmbeds: 0, read: true, write: true, bound: false, defaultBound: false, bindable: true },
     ],
   }
@@ -1665,7 +1673,7 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
     const text = textOf(current)
     assert.ok(text.includes('记忆权限'))
     // 0.25.8:本会话的 session scope 在列表里显示为「当前会话」,原始 scope 键退到 title 提示里。
-    assert.ok(text.includes('当前会话'), '本会话 session scope 显示为当前会话')
+    assert.ok(text.includes('session:当前会话'), '本会话 session scope 显示为 session:当前会话')
     const sessionLabel = collect(current).find((n) => n.tag === 'button'
       && String(n.props?.className ?? '') === 'mem-scope-label' && String(n.props?.title ?? '') === 'session:s1')
     assert.ok(sessionLabel, '原始 scope 键仍留在 label 的 title 里')
@@ -1741,8 +1749,8 @@ test('记忆权限浮窗:移除 Agent 授权行与解释文本,只留勾选 + �
     defaultScopes: ['session:s1', 'global'],
     bindings: [],
     scopes: [
-      { scope: 'session:s1', label: '当前会话', records: 1 },
-      { scope: 'global', label: '全局', records: 2 },
+      { scope: 'session:s1', label: 'session:当前会话', records: 1 },
+      { scope: 'global', label: 'global:全局', records: 2 },
       { scope: 'handbook', label: 'handbook', records: 1 },
     ],
   }
@@ -1806,8 +1814,8 @@ test('记忆权限浮窗:portal 到 document.body,不再被输入框那层 stick
     defaultScopes: ['session:s1', 'global'],
     bindings: [],
     scopes: [
-      { scope: 'session:s1', label: '当前会话', records: 1 },
-      { scope: 'global', label: '全局', records: 2 },
+      { scope: 'session:s1', label: 'session:当前会话', records: 1 },
+      { scope: 'global', label: 'global:全局', records: 2 },
     ],
   }
   const savedFetch = (globalThis as Record<string, unknown>).fetch
@@ -1872,8 +1880,8 @@ test('记忆权限浮窗:本会话的 session scope 显示为「当前会话」,
     bindings: [],
     scopes: [
       { scope: 'session:s1', label: '修浮窗层级(11111111)', records: 3 },
-      { scope: 'session:s2', label: '会话 22222222', records: 1 },
-      { scope: 'global', label: '全局', records: 2 },
+      { scope: 'session:s2', label: 'session:session-22222222', records: 1 },
+      { scope: 'global', label: 'global:全局', records: 2 },
     ],
   }
   const savedFetch = (globalThis as Record<string, unknown>).fetch
@@ -1900,16 +1908,16 @@ test('记忆权限浮窗:本会话的 session scope 显示为「当前会话」,
     const labels = () => collect(current)
       .filter((n) => n.tag === 'button' && String(n.props?.className ?? '') === 'mem-scope-label')
       .map((n) => textOf(n))
-    assert.ok(labels().includes('当前会话'), '本会话的 session scope 叫当前会话')
+    assert.ok(labels().includes('session:当前会话'), '本会话的 session scope 叫 session:当前会话(带类型前缀)')
     assert.ok(!labels().some((name) => name.includes('11111111')), '不再把会话标题 / 短 id 当名字')
-    assert.ok(labels().includes('会话 22222222'), '别的会话的 scope 仍按原标签显示,不跟着叫当前会话')
+    assert.ok(labels().includes('session:session-22222222'), '别的会话的 scope 仍按原标签显示,不跟着叫当前会话')
 
     // 搜索按显示名走:「当前会话」能命中本会话作用域。
     const search = collect(current).find((n) => n.tag === 'input' && n.props?.type === 'search')
     assert.ok(search, '有搜索框')
     ;(search!.props!.onChange as (event: unknown) => void)({ target: { value: '当前会话' } })
     await new Promise((resolve) => setTimeout(resolve, 0))
-    assert.deepEqual(labels(), ['当前会话'], '搜索当前会话只留本会话作用域')
+    assert.deepEqual(labels(), ['session:当前会话'], '搜索当前会话只留本会话作用域')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch
   }
@@ -2229,7 +2237,7 @@ test('记忆权限浮窗:整张作用域卡片可点选(按钮与勾选框除外
     defaultScopes: ['session:s1'],
     bindings: [],
     scopes: [
-      { scope: 'session:s1', label: '当前会话', records: 1 },
+      { scope: 'session:s1', label: 'session:当前会话', records: 1 },
       { scope: 'handbook', label: 'handbook', records: 1 },
     ],
   }
@@ -2345,7 +2353,7 @@ test('记忆范围按钮:数字展示范围,边框样式展示限制等级(橙�
           source: 'default',
           inherited: false,
           defaults: ['session:s1', 'global'],
-          scopes: [{ scope: 'session:s1', label: '当前会话', records: 1 }, { scope: 'global', label: '全局', records: 2 }],
+          scopes: [{ scope: 'session:s1', label: 'session:当前会话', records: 1 }, { scope: 'global', label: 'global:全局', records: 2 }],
         },
       }),
     })
