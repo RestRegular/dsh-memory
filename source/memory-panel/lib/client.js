@@ -543,6 +543,7 @@ window.__ModuleLoader__.load({
       // 0.25.3：Agent 授权用「勾选 + AI 气泡」呈现，气泡挂在作用域名称右边。
       '.mem-scope-ai{flex:none;font-size:9.5px;line-height:1.7;padding:0 6px;border-radius:999px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-business-primary,#4176e6) 45%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#4176e6) 12%,transparent);color:color-mix(in srgb,var(--dsw-alias-state-business-primary,#4176e6) 78%,var(--dsw-alias-label-primary));white-space:nowrap;cursor:help}',
       '.mem-scope-ai.inherited{border-style:dashed;background:transparent;color:var(--dsw-alias-label-secondary)}',
+      '.mem-scope-ai.pending{opacity:.62;border-style:dashed;text-decoration:line-through}',
       '.mem-scope-foot{display:flex;align-items:center;gap:8px}',
       '.mem-scope-foot .spacer{flex:1}',
       '.mem-scope-reset{padding:6px 13px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer;transition:border-color .12s ease,color .12s ease}',
@@ -4574,6 +4575,8 @@ window.__ModuleLoader__.load({
       const [data, setData] = React.useState(null)
       const [level, setLevel] = React.useState('normal')
       const [entries, setEntries] = React.useState({})
+      const [savedEntries, setSavedEntries] = React.useState({})
+      const [pendingRevoke, setPendingRevoke] = React.useState({})
       const [perms, setPerms] = React.useState({})
       const [bound, setBound] = React.useState({})
       const [defaultBound, setDefaultBound] = React.useState({})
@@ -4679,6 +4682,8 @@ window.__ModuleLoader__.load({
         }
         setCatalog(nextCatalog)
         setEntries(nextEntries)
+        // 保存过的勾选基线:排序与「已选」都以它为准,草稿改动不立刻重排。
+        setSavedEntries({ ...nextEntries })
         setPerms(nextPerms)
         setBound(nextBound)
         setDefaultBound(nextDefaultBound)
@@ -4754,20 +4759,30 @@ window.__ModuleLoader__.load({
           .finally(() => setGrantBusy(''))
       }
 
+      /**
+       * 勾选 / 取消勾选作用域 —— 都是草稿状态，点「保存」才生效。
+       * 取消勾选一条 AI 授权的行 = 标记为「待撤销」，保存时才真正撤销授权。
+       */
       const toggleScope = (scope) => {
         const grant = grantsByScope.get(scope)
         if (!grant) {
           setEntries((prev) => ({ ...prev, [scope]: !prev[scope] }))
           return
         }
-        // 勾选里有 Agent 授权：取消勾选 = 撤销授权（撤销后「AI」气泡一起消失）。
         if (grant.inherited === true) {
           setEntries((prev) => ({ ...prev, [scope]: true }))
           setGrantError('继承自父会话的授权需要到父会话撤销')
           return
         }
-        setEntries((prev) => ({ ...prev, [scope]: false }))
-        revokeGrant(grant)
+        const pending = Boolean(pendingRevoke[scope])
+        setPendingRevoke((prev) => {
+          const next = { ...prev }
+          if (pending) delete next[scope]
+          else next[scope] = true
+          return next
+        })
+        // 取消勾选先清掉草稿里的范围勾选；再勾回来时恢复到保存时的勾选状态。
+        setEntries((prev) => ({ ...prev, [scope]: pending ? Boolean(savedEntries[scope]) : false }))
       }
 
       /** 切换某个作用域的可读 / 可写状态（会话级）。 */
@@ -4789,6 +4804,8 @@ window.__ModuleLoader__.load({
           for (const key of Object.keys(next)) next[key] = true
           return next
         })
+        // 全选 = 不再撤销任何授权（草稿里取消的重新勾回来）。
+        setPendingRevoke({})
       }
 
       const clearAll = () => {
@@ -4797,29 +4814,36 @@ window.__ModuleLoader__.load({
           for (const key of Object.keys(next)) next[key] = false
           return next
         })
-        // 取消全选 = 把这些作用域全部取消勾选，所以 Agent 授权也一并撤销；
+        // 取消全选也是草稿：AI 授权只标记「待撤销」，点保存才真正撤销；
         // 继承自父会话的授权撤销不了，只提示去父会话操作。
+        const next = {}
         let inherited = 0
-        let chain = Promise.resolve()
         for (const grant of Array.isArray(grants) ? grants : []) {
           if (!grant || typeof grant.scope !== 'string' || grant.scope === '') continue
           if (grant.inherited === true) { inherited += 1; continue }
-          chain = chain.then(() => revokeGrant(grant))
+          next[grant.scope] = true
         }
+        setPendingRevoke(next)
         if (inherited > 0) setGrantError('继承自父会话的授权需要到父会话撤销')
-        chain.catch(() => { /* revokeGrant 自己会记录错误 */ })
       }
 
-      const save = (config) => {
+      const save = (config, revokeFirst) => {
         setBusy(true)
         setError('')
         // 只提交**额外**绑定:默认范围自带的会话 / 项目 / global 不需要也不允许写入。
         const bindings = catalog
           .filter((item) => bound[item.scope] && !defaultBound[item.scope] && !String(item.scope).startsWith('session:'))
           .map((item) => item.scope)
-        api('visibility', { session: sessionId, visibility: config, bindings })
+        // 保存时先撤销草稿里取消勾选的 AI 授权，再写可见范围。
+        let chain = Promise.resolve()
+        for (const grant of Array.isArray(revokeFirst) ? revokeFirst : []) {
+          chain = chain.then(() => revokeGrant(grant))
+        }
+        chain
+          .then(() => api('visibility', { session: sessionId, visibility: config, bindings }))
           .then((value) => {
             applyPayload(value)
+            setPendingRevoke({})
             setOpen(false)
           })
           .catch((e) => setError(String((e && e.message) || e)))
@@ -4833,7 +4857,11 @@ window.__ModuleLoader__.load({
           write: perms[item.scope]?.write !== false,
         }))
         if (scopes.length === 0) { setError('至少选择一个可见范围'); return }
-        save({ scopes, level })
+        const pendingGrants = Object.keys(pendingRevoke)
+          .filter((scope) => pendingRevoke[scope])
+          .map((scope) => grantsByScope.get(scope))
+          .filter(Boolean)
+        save({ scopes, level }, pendingGrants)
       }
 
       if (typeof sessionId !== 'string' || sessionId === '') return null
@@ -4849,15 +4877,20 @@ window.__ModuleLoader__.load({
         : (data && Array.isArray(data.defaults) ? data.defaults.length : 0)
       const selectedCount = catalog.filter((item) => entries[item.scope]).length
       const needle = search.trim().toLowerCase()
-      // 0.25.3：Agent 授权的结果也用勾选呈现 —— 勾选 = 本会话可访问，授权来的作用域
-      // 在名称右边挂一个「AI」气泡；取消勾选即撤销，撤销后气泡自动消失。
+      // 0.25.4：Agent 授权的结果用勾选呈现 —— 勾选 = 本会话可访问，授权来的作用域
+      // 在名称右边挂一个「AI」气泡。取消勾选只是草稿（标「待撤销」），点「保存」才撤销；
+      // 列表顺序按**已保存**的勾选排序，保存后才重排。
       const grantList = Array.isArray(grants) ? grants : []
       const grantsByScope = new Map()
       for (const grant of grantList) {
         if (!grant || typeof grant.scope !== 'string' || grant.scope === '') continue
         if (!grantsByScope.has(grant.scope)) grantsByScope.set(grant.scope, grant)
       }
-      const isChecked = (scope) => Boolean(entries[scope]) || grantsByScope.has(scope)
+      /** 当前草稿里的勾选状态（取消勾选的 AI 授权算未勾选）。 */
+      const isChecked = (scope) => Boolean(entries[scope])
+        || (grantsByScope.has(scope) && !pendingRevoke[scope])
+      /** 已保存状态的勾选（排序只看它，草稿改动不立刻重排）。 */
+      const savedChecked = (scope) => Boolean(savedEntries[scope]) || grantsByScope.has(scope)
       const matches = (label, scope) => !needle
         || String(label || scope).toLowerCase().includes(needle) || String(scope).toLowerCase().includes(needle)
       const visibleScopes = catalog.filter((item) => matches(item.label || item.scope, item.scope))
@@ -4865,24 +4898,26 @@ window.__ModuleLoader__.load({
       const catalogScopes = new Set(catalog.map((item) => item.scope))
       const orphanGrants = grantList.filter((grant) => grant && typeof grant.scope === 'string' && grant.scope !== ''
         && !catalogScopes.has(grant.scope) && matches(grant.label || grant.scope, grant.scope))
-      const orphanCount = grantList.filter((grant) => grant && typeof grant.scope === 'string'
-        && grant.scope !== '' && !catalogScopes.has(grant.scope)).length
-      const checkedCount = catalog.filter((item) => isChecked(item.scope)).length + orphanCount
-      // 已勾选的排上面、未勾选的排下面，组内按名称字母排序（授权行同样算已勾选）。
+      // 已勾选的排上面、未勾选的排下面，组内按名称字母排序；顺序以保存过的状态为准。
       const rows = [
         ...visibleScopes.map((item) => ({ scope: item.scope, name: String(item.label || item.scope), item })),
         ...orphanGrants.map((grant) => ({ scope: grant.scope, name: String(grant.label || grant.scope), grant })),
       ]
-      rows.sort((a, b) => (Number(isChecked(b.scope)) - Number(isChecked(a.scope)))
+      rows.sort((a, b) => (Number(savedChecked(b.scope)) - Number(savedChecked(a.scope)))
         || a.name.localeCompare(b.name, 'zh-Hans-CN', { sensitivity: 'base', numeric: true })
         || a.scope.localeCompare(b.scope))
       /** 作用域名称右边的「AI」气泡：表示这条勾选来自 Agent 申请的授权。 */
-      const grantTag = (grant) => h('span', {
-        className: `mem-scope-ai${grant.inherited === true ? ' inherited' : ''}`,
-        title: grant.inherited === true
-          ? `Agent 申请的范围外授权（${grantPermissionText(grant.permissions)}）· 继承自父会话，要到父会话撤销`
-          : `Agent 申请的范围外授权（${grantPermissionText(grant.permissions)}）；取消勾选即撤销`,
-      }, grant.inherited === true ? 'AI·继承' : 'AI')
+      const grantTag = (grant, scope) => {
+        const pending = Boolean(pendingRevoke[scope])
+        return h('span', {
+          className: `mem-scope-ai${grant.inherited === true ? ' inherited' : ''}${pending ? ' pending' : ''}`,
+          title: pending
+            ? `Agent 申请的范围外授权（${grantPermissionText(grant.permissions)}）；点「保存」后撤销`
+            : (grant.inherited === true
+              ? `Agent 申请的范围外授权（${grantPermissionText(grant.permissions)}）· 继承自父会话，要到父会话撤销`
+              : `Agent 申请的范围外授权（${grantPermissionText(grant.permissions)}）；取消勾选后点「保存」即撤销`),
+        }, pending ? 'AI·待撤销' : (grant.inherited === true ? 'AI·继承' : 'AI'))
+      }
       let popStyle = {}
       if (anchor) {
         const width = 340
@@ -4926,7 +4961,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'mem-scope-head' },
             h('h4', null, '记忆权限'),
             h('span', { className: 'spacer' }),
-            h('span', { className: 'mem-scope-count' }, `已选 ${checkedCount}`),
+            h('span', { className: 'mem-scope-count' }, `已选 ${selectedCount}`),
           ),
           data && data.inherited
             ? h('div', { className: 'hint' }, '当前继承自父会话；保存后在本会话独立生效。')
@@ -4977,7 +5012,7 @@ window.__ModuleLoader__.load({
                           title: grant
                             ? (grant.inherited === true
                               ? 'AI 申请的授权（继承自父会话，要到父会话撤销）'
-                              : '取消勾选会撤销 AI 申请的这条授权')
+                              : (pendingRevoke[row.scope] ? '已标记撤销，点「保存」生效' : '取消勾选后点「保存」撤销 AI 申请的这条授权'))
                             : null,
                         }, h('span', { className: 'box' }, checked ? h('svg', { width: 11, height: 11, viewBox: '0 0 12 12', 'aria-hidden': 'true' }, h('path', { d: 'M2 6.2 4.7 9 10 3.4', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' })) : null)),
                         h('button', {
@@ -4986,7 +5021,7 @@ window.__ModuleLoader__.load({
                           title: item ? row.scope : `${row.scope}（目录中已不可见）`,
                           onClick: () => toggleScope(row.scope),
                         }, item ? (item.label || item.scope) : (row.grant.label || row.grant.scope)),
-                        grant ? grantTag(grant) : null,
+                        grant ? grantTag(grant, row.scope) : null,
                         h('span', { className: 'cnt' }, item ? `${item.records ?? 0}` : '目录中已不可见'),
                       ),
                       item

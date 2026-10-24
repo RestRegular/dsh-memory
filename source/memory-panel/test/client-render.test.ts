@@ -1732,7 +1732,7 @@ test('记忆权限浮窗:移除 Agent 授权行与解释文本,只留勾选 + �
   hooks.resetAll()
 })
 
-test('记忆权限浮窗:Agent 授权用勾选 + AI 气泡呈现,取消勾选即撤销', async () => {
+test('记忆权限浮窗:Agent 授权用勾选 + AI 气泡呈现,取消勾选后点保存才撤销', async () => {
   const { exports, hooks } = await loadBundle()
   hooks.resetAll()
   const Button = (exports.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
@@ -1740,7 +1740,7 @@ test('记忆权限浮窗:Agent 授权用勾选 + AI 气泡呈现,取消勾选即
   const payload = {
     sessionId: 's1',
     override: null,
-    effective: { level: 'normal', scopes: [] },
+    effective: { level: 'normal', scopes: [{ scope: 'zulu' }] },
     source: 'default',
     inherited: false,
     defaults: [],
@@ -1793,27 +1793,44 @@ test('记忆权限浮窗:Agent 授权用勾选 + AI 气泡呈现,取消勾选即
     assert.ok(collect(handbook()).some((n) => String(n.props?.className ?? '').includes('mem-scope-ai')), '名称右边有 AI 气泡')
     assert.match(String(collect(handbook()).find((n) => String(n.props?.className ?? '').includes('mem-scope-ai'))?.props?.title ?? ''), /只读/, '气泡 title 写明授权权限')
     assert.ok(!textOf(current).includes('Agent 授权'), '授权不再以独立行 / 文本块出现')
-    // 授权来的勾选排在未勾选的上面。
-    const names = collect(current)
+    // 计数只算你勾选的可见范围，AI 授权不掺进来（已选 1 = zulu）。
+    assert.ok(textOf(current).includes('已选 1'), '已选只统计可见范围，不含 AI 授权')
+    const names = () => collect(current)
       .filter((n) => n.tag === 'div' && String(n.props?.className ?? '').split(' ').includes('mem-scope-item'))
       .map((n) => textOf(collect(n).find((c) => c.tag === 'button' && String(c.props?.className ?? '') === 'mem-scope-label') ?? null))
-    assert.deepEqual(names, ['handbook', 'zulu'], '授权行算已勾选，排在未勾选前面')
+    assert.deepEqual(names(), ['handbook', 'zulu'], '授权行算已勾选，排在未勾选前面')
 
-    // 取消勾选 = 撤销授权：POST /grants，气泡和勾选一起消失。
+    // 取消勾选只是草稿：不撤销、不重排、计数不变，气泡改标「待撤销」。
     ;(check().props!.onClick as () => void)()
     await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.ok(!calls.some((call) => call.url === '/memory/api/grants' && call.init?.method === 'POST'), '取消勾选不立即撤销')
+    assert.equal(String(check().props?.['aria-checked']), 'false', '草稿里立即取消勾选')
+    assert.ok(textOf(handbook()).includes('AI·待撤销'), '气泡改成待撤销标记')
+    assert.deepEqual(names(), ['handbook', 'zulu'], '保存前不重新排序')
+    assert.ok(textOf(current).includes('已选 1'), '计数不受 AI 授权勾选影响')
+
+    // 点保存：先撤销授权，再保存可见范围。
+    const saveButton = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-save'))
+    assert.ok(saveButton, '保存按钮存在')
+    ;(saveButton!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
     const posted = calls.find((call) => call.url === '/memory/api/grants' && call.init?.method === 'POST')
-    assert.ok(posted, '取消勾选走 POST /grants 撤销')
+    assert.ok(posted, '保存时才撤回授权（POST /grants）')
     assert.deepEqual(JSON.parse(String(posted?.init?.body ?? '{}')), { session: 's1', id: 'grant-1', view: 's1' })
-    assert.equal(String(check().props?.['aria-checked']), 'false', '撤销后勾选取消')
-    assert.ok(!collect(handbook()).some((n) => String(n.props?.className ?? '').includes('mem-scope-ai')), '撤销后 AI 气泡自动消失')
+    const visibilityPost = calls.find((call) => call.url === '/memory/api/visibility' && call.init?.method === 'POST')
+    assert.ok(visibilityPost, '保存仍走 POST /visibility')
+    const savedBody = JSON.parse(String(visibilityPost?.init?.body ?? '{}')) as {
+      visibility: { scopes: { scope: string }[]; level: string }
+    }
+    assert.deepEqual(savedBody.visibility.scopes.map((rule) => rule.scope), ['zulu'], 'AI 授权不会混进可见范围')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch
   }
   hooks.resetAll()
 })
 
-test('记忆权限浮窗:已勾选的排在上面、未勾选的排下面,组内按字母排序', async () => {
+test('记忆权限浮窗:已勾选在上、未勾选在下按字母序;取消勾选后点保存才重排', async () => {
   const { exports, hooks } = await loadBundle()
   hooks.resetAll()
   const Button = (exports.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
@@ -1833,8 +1850,14 @@ test('记忆权限浮窗:已勾选的排在上面、未勾选的排下面,组内
       { scope: 'alpha', label: 'alpha', records: 0 },
     ],
   }
+  // 保存后只剩 beta 勾选:重开面板时顺序应当按这个新状态重排。
+  const updated = { ...payload, effective: { level: 'normal', scopes: [{ scope: 'beta' }] } }
+  let saved = false
   const savedFetch = (globalThis as Record<string, unknown>).fetch
-  ;(globalThis as Record<string, unknown>).fetch = async () => ({ status: 200, json: async () => ({ ok: true, value: payload }) })
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string, init?: { method?: string; body?: string }) => {
+    if (url === '/memory/api/visibility' && init?.method === 'POST') saved = true
+    return { status: 200, json: async () => ({ ok: true, value: saved ? updated : payload }) }
+  }
   try {
     let current: RenderNode | null = null
     const element = () => hooks.React.createElement(Button, { sessionId: 's1' })
@@ -1842,8 +1865,8 @@ test('记忆权限浮窗:已勾选的排在上面、未勾选的排下面,组内
     current = render(element(), hooks)
     hooks.runEffects()
     await new Promise((resolve) => setTimeout(resolve, 0))
-    const button = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))
-    ;(button!.props!.onClick as (event: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 40, top: 500 }) } })
+    const button = () => collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))!
+    ;(button().props!.onClick as (event: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 40, top: 500 }) } })
     await new Promise((resolve) => setTimeout(resolve, 0))
     hooks.runEffects()
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -1854,7 +1877,7 @@ test('记忆权限浮窗:已勾选的排在上面、未勾选的排下面,组内
       .map((n) => textOf(collect(n).find((c) => c.tag === 'button' && String(c.props?.className ?? '') === 'mem-scope-label') ?? null))
     assert.deepEqual(labels(), ['Beta', 'gamma', 'alpha', 'delta'], '已勾选的 Beta / gamma 在上面,组内按字母排序')
 
-    // 取消勾选 gamma:它立刻沉到底部,其余顺序不变。
+    // 取消勾选 gamma:草稿里勾选立即消失,但顺序不动(要保存后才重排)。
     const gammaItem = collect(current).find((n) => n.tag === 'div'
       && String(n.props?.className ?? '').split(' ').includes('mem-scope-item')
       && textOf(n).includes('gamma'))
@@ -1864,7 +1887,19 @@ test('记忆权限浮窗:已勾选的排在上面、未勾选的排下面,组内
     assert.ok(gammaCheck, 'gamma 行内有勾选框')
     ;(gammaCheck!.props!.onClick as () => void)()
     await new Promise((resolve) => setTimeout(resolve, 0))
-    assert.deepEqual(labels(), ['Beta', 'alpha', 'delta', 'gamma'], '取消勾选后沉到未勾选区,组内仍按字母排序')
+    assert.deepEqual(labels(), ['Beta', 'gamma', 'alpha', 'delta'], '保存前不重排')
+
+    // 点保存 → 面板关闭；重开时按保存后的勾选重排（gamma 沉到未勾选区）。
+    const saveButton = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-save'))
+    assert.ok(saveButton, '保存按钮存在')
+    ;(saveButton!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    ;(button().props!.onClick as (event: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 40, top: 500 }) } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(labels(), ['Beta', 'alpha', 'delta', 'gamma'], '保存后按新勾选重排,未勾选组内仍按字母序')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch
   }
