@@ -4,6 +4,7 @@ import {
   GET_FIELDS,
   memoryGetTool,
   memoryListTool,
+  memorySaveTool,
   memorySearchTool,
   resolveGetFields,
   summarize,
@@ -375,5 +376,24 @@ test('普通限制:绝对限制 / 无限制下不要求 description', async () =
     const result = await tool.execute({ query: 'pnpm' }, exec)
     assert.equal(result.records.length, 1, `${level}: 不传 description 也能执行`)
   }
+})
+
+/**
+ * 0.25.12：`supersedes` 必须传完整 id。
+ *
+ * 检索 / 列表 / 摘要 / 规则索引给的都是 8 位短 id，`memory_get` 也接受 8 位前缀，
+ * 但 `supersedes` 在 provider 里是按 id 精确查找 —— 说明里不写清楚，模型就会把短 id
+ * 直接传进来，只会换到一个 SUPERSEDES_UNKNOWN。这条守卫锁住说明里的三件事：
+ * 「完整 id」、「不能用 8 位短 id」、「怎么拿到完整 id(memory_get)」。
+ */
+test('memory_save.supersedes 的参数说明要求完整 id，并禁止 8 位短 id', () => {
+  const tool = memorySaveTool({ getService: () => service })
+  const params = tool.parameters as Record<string, { description?: string }>
+  const text = params.supersedes?.description ?? ''
+  assert.ok(text.length > 0, 'supersedes 必须有参数说明')
+  assert.ok(text.includes('完整 id'), '必须写明要传完整 id')
+  assert.ok(text.includes('8 位短 id'), '必须明确禁止 8 位短 id')
+  assert.ok(text.includes('memory_get'), '必须给出拿完整 id 的办法（memory_get）')
+  assert.ok(text.includes('36 位 UUID'), '必须给出完整 id 的形状')
 })
 

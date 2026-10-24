@@ -2,6 +2,13 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.25.12 — `memory_save.supersedes` 明确要求传「完整 id」
+
+- **问题**：`supersedes` 的参数说明只有一句英文 `Record id this corrects/replaces`，没说要传完整 id。而检索 / 列表 / 摘要 / 规则索引里显示的 id 全是 **8 位短 id**（`shortId`），`memory_get` 也接受 8 位前缀 —— 模型很容易把短 id 直接塞给 `supersedes`；provider 那边是按 id **精确查找**目标记录（`records.get(id)`），短 id 必然查不到，只会得到 `SUPERSEDES_UNKNOWN`，报错里也没有提示「你用了短 id」。
+- **口径**：`supersedes` 的 schema 说明改成明确的中文说明 —— 必须传**完整 id（36 位 UUID）**，不能传 `memory_search` / `memory_list` / 摘要 / 规则索引里的 8 位短 id；手头只有短 id 时先用 `memory_get` 取回（它结果里每段首行的 `[id]` 就是完整 id）。同时把语义写清楚：旧记录标记为「已修正」，默认退出检索 / 规则 / 自动召回，`memory_get` 仍可查历史。
+- README 第 2 节「存一条记忆」补同一段说明；`SaveArgs.supersedes` 的注释同步（行为不变，仍是精确 id 查找，不会静默接受短 id）。
+- 测试：`source/tool-memory/test/tools.test.ts` 增加守卫用例 —— `supersedes` 的说明里必须出现「完整 id」「8 位短 id」「memory_get」，防止以后再被改回一句模糊英文。全套 505 tests（新增 1）/ 504 pass / 1 skipped（`memory-local/test/multiprocess.test.ts` 需真起子进程）。
+
 ## 0.25.11 — 「记忆权限」浮窗里能直接看到真实键；摘要里的自定义作用域补 `custom:` 前缀
 
 - **浮窗露出完整键**：显示名与真实键不一致时（项目别名 → 完整路径、会话短 id → 完整 uuid、自定义名 → 裸键），作用域行的名字下面多一行等宽小字，就是完整键。**不做手工截断**——键保持原样，放不下由 CSS 按容器宽度省略（`text-overflow:ellipsis`），窗口变宽就多显示几个字符。名义上相同（例如没有别名的项目作用域 `project:D:\w` 显示名就是键）则不再重复一行。

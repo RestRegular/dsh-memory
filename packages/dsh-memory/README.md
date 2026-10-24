@@ -193,6 +193,11 @@ memory_save({
 })
 ```
 
+**`supersedes` 要传完整 id（0.25.12）**：它是「这条新记忆修正 / 替换掉哪条旧记录」，provider 按 id **精确查找**
+目标记录，所以必须给**完整 id**（36 位 UUID）——不能用 `memory_search` / `memory_list` / 摘要 / 规则索引里显示的
+8 位短 id（那些是短 id，传进去会被 `SUPERSEDES_UNKNOWN` 拒绝）。手头只有短 id 时先 `memory_get`，它结果里每段
+首行的 `[id]` 就是完整 id。旧记录会被标记为「已修正」，默认不再出现在检索、规则和自动召回里，但 `memory_get` 仍能查到。
+
 ### 3. 检索、取全文、列出、忘记
 
 ```jsonc

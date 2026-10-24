@@ -459,6 +459,15 @@ function withheldReasonFor(
   return 'read-disabled'
 }
 
+/**
+ * memory_save 的 supersedes 参数说明(模型可见)。
+ * 检索 / 列表 / 摘要 / 规则索引里给的 id 都是 8 位短 id,而 supersedes 在 provider
+ * 里是**按 id 精确查找**(records.get(id)),传短 id 只会得到 SUPERSEDES_UNKNOWN。
+ * 所以必须明确要求「完整 id」,并给出拿完整 id 的路径(memory_get 首行就是完整 id)。
+ */
+const SUPERSEDES_PARAM_DESCRIPTION =
+  '被这条新记忆修正 / 替换掉的旧记录 id。必须传**完整 id**(36 位 UUID),不能传 memory_search / memory_list / 摘要 / 规则索引里显示的 8 位短 id;手头只有短 id 时先用 memory_get 取回 —— 它结果里每段首行的 [id] 就是完整 id。旧记录会被标记为「已修正」,默认不再出现在检索、规则和自动召回里,但 memory_get 仍能查到。'
+
 /** memory_* 的 description 参数说明(模型可见)。 */
 const DESCRIPTION_PARAM_DESCRIPTION =
   '本次调用要做什么（一句话，给用户看）。本会话「记忆范围」为普通限制时必填：审批范围外记忆时，弹窗会把它展示给用户。'
@@ -730,6 +739,7 @@ export interface SaveArgs {
   kind?: string
   tags?: string[]
   importance?: number
+  /** 被这条新记录修正/替换的旧记录 **完整** id(不接受 8 位短 id)。 */
   supersedes?: string
   /** 过期时间（毫秒时间戳）；kind='state' 不传时按设置里的默认 TTL。 */
   expiresAt?: number
@@ -780,7 +790,7 @@ export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, Sav
       kind: { type: 'string', enum: ['fact', 'decision', 'preference', 'procedure', 'note', 'rule', 'state'] },
       tags: { type: 'array', items: { type: 'string' } },
       importance: { type: 'number', description: '0~1, higher = more important' },
-      supersedes: { type: 'string', description: 'Record id this corrects/replaces' },
+      supersedes: { type: 'string', description: SUPERSEDES_PARAM_DESCRIPTION },
       expiresAt: { type: 'number', description: '过期时间(毫秒时间戳)。kind=state 不传时按设置里的默认 TTL(7 天)' },
       ttlMs: { type: 'number', description: '相对有效期(毫秒)。与 expiresAt 二选一，expiresAt 优先' },
       triggers: { type: 'array', items: { type: 'string' }, description: '流程触发词(kind=procedure)：工具名/关键词/路径；缺省用 tags' },
