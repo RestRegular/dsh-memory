@@ -549,15 +549,6 @@ window.__ModuleLoader__.load({
       '.mem-scope-reset:disabled,.mem-scope-save:disabled{opacity:.5;cursor:default;filter:none}',
       '.mem-scope-save:disabled{color:var(--dsw-alias-label-primary-foreground)}',
       '.mem-scope-err{padding:5px 8px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#d33) 10%,transparent);color:var(--dsw-alias-state-error-primary,#d33);font-size:12px;line-height:1.5}',
-      // 0.25.x：Agent 授权直接标在对应作用域行内，不再单独开一块列表
-      // （与上面的「勾选 + 可读/可写」是同一条作用域记录，分两块会看起来重复）。
-      '.mem-scope-grant-row{display:flex;align-items:center;gap:6px;min-width:0;padding-left:26px;font-size:10.5px;color:var(--dsw-alias-label-secondary)}',
-      '.mem-scope-grant-row .spacer{flex:1}',
-      '.mem-scope-grant{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 78%,var(--dsw-alias-label-primary));border:1px dashed color-mix(in srgb,var(--dsw-alias-state-business-primary) 45%,var(--dsw-alias-border-l1));border-radius:999px;padding:0 7px;line-height:1.8}',
-      '.mem-grant-pill{flex:none;font-size:9.5px;color:var(--dsw-alias-label-secondary);border:1px dashed var(--dsw-alias-border-l1);border-radius:999px;padding:0 6px;line-height:1.7;white-space:nowrap}',
-      '.mem-grant-revoke{flex:none;padding:0 7px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-error-primary,#d33) 45%,var(--dsw-alias-border-l1));border-radius:6px;background:transparent;color:color-mix(in srgb,var(--dsw-alias-state-error-primary,#d33) 78%,var(--dsw-alias-label-primary));font-size:10px;line-height:1.7;cursor:pointer}',
-      '.mem-grant-revoke:hover:not(:disabled){border-color:var(--dsw-alias-state-error-primary,#d33);color:var(--dsw-alias-state-error-primary,#d33)}',
-      '.mem-grant-revoke:disabled{opacity:.45;cursor:default}',
       // 范围外访问审批卡(0.21.0):注册在 conversation.input.dock,只在所属会话里显示。
       // 版式照抄宿主 dsh-client-ui-approval 的审批卡(strip + body + 右对齐动作行),
       // 尺寸/圆角/底色/阴影全走同一批主题 token;缺少 composer 变量时给出同样的回退值。
@@ -627,13 +618,6 @@ window.__ModuleLoader__.load({
       const d = new Date(ts)
       const pad = (n) => String(n).padStart(2, '0')
       return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-    }
-
-    /** Agent 授权里的权限文案（read / write 组合）。 */
-    function grantPermissionText(permissions) {
-      return (Array.isArray(permissions) ? permissions : [])
-        .map((permission) => (permission === 'write' ? '可写' : '只读'))
-        .join(' / ')
     }
 
     /** 过期时间的人话描述:还剩多久 / 已过期多久。 */
@@ -4586,9 +4570,6 @@ window.__ModuleLoader__.load({
       const [catalog, setCatalog] = React.useState([])
       const [search, setSearch] = React.useState('')
       const [anchor, setAnchor] = React.useState(null)
-      const [grants, setGrants] = React.useState([])
-      const [grantBusy, setGrantBusy] = React.useState('')
-      const [grantError, setGrantError] = React.useState('')
       const wrapRef = React.useRef(null)
 
       React.useEffect(() => {
@@ -4699,46 +4680,6 @@ window.__ModuleLoader__.load({
           .finally(() => setLoading(false))
       }
 
-      /**
-       * 0.25.0：本会话的 Agent 授权（grants）。
-       * 工具调用授予 / 面板撤销都会改变它，所以浮窗打开期间按 3 秒轮询，
-       * 用户不重开面板也能看到 Agent 刚申请到的权限。
-       */
-      const loadGrants = () => {
-        if (typeof sessionId !== 'string' || sessionId === '') return
-        api(`grants?session=${encodeURIComponent(sessionId)}`)
-          .then((value) => {
-            setGrants(Array.isArray(value.grants) ? value.grants : [])
-            setGrantError('')
-          })
-          .catch((e) => setGrantError(String((e && e.message) || e)))
-      }
-
-      React.useEffect(() => {
-        if (!open) return undefined
-        loadGrants()
-        if (typeof setInterval !== 'function') return undefined
-        const timer = setInterval(() => {
-          if (typeof document !== 'undefined' && document.hidden) return
-          loadGrants()
-        }, 3000)
-        return () => clearInterval(timer)
-      }, [open, sessionId])
-
-      /** 撤销一条本会话授权（继承自父会话的授权只能到父会话撤销）。 */
-      const revokeGrant = (grant) => {
-        if (!grant || grant.inherited === true) return
-        const id = typeof grant.id === 'string' ? grant.id : ''
-        if (id === '') return
-        const owner = typeof grant.ownerSession === 'string' && grant.ownerSession !== '' ? grant.ownerSession : sessionId
-        setGrantBusy(id)
-        setGrantError('')
-        api('grants', { session: owner, id, view: sessionId })
-          .then((value) => setGrants(Array.isArray(value.grants) ? value.grants : []))
-          .catch((e) => setGrantError(String((e && e.message) || e)))
-          .finally(() => setGrantBusy(''))
-      }
-
       // 打开会话就加载一次:按钮上的数字来自这个会话的设置,不需要用户先点按钮。
       React.useEffect(() => {
         if (typeof sessionId !== 'string' || sessionId === '') return
@@ -4836,19 +4777,12 @@ window.__ModuleLoader__.load({
         if (!needle) return true
         return String(item.label || item.scope).toLowerCase().includes(needle) || String(item.scope).toLowerCase().includes(needle)
       })
-      // 0.25.x：授权按 scope 合并到作用域行内（同一作用域只有一条 grant）。
-      const grantsByScope = new Map()
-      for (const grant of Array.isArray(grants) ? grants : []) {
-        if (!grant || typeof grant.scope !== 'string' || grant.scope === '') continue
-        if (!grantsByScope.has(grant.scope)) grantsByScope.set(grant.scope, grant)
-      }
-      // 目录里已经看不到的作用域（比如记录被删光且没有元数据）也要能撤销授权。
-      const catalogScopes = new Set(catalog.map((item) => item.scope))
-      const orphanGrants = (Array.isArray(grants) ? grants : []).filter((grant) => {
-        if (!grant || typeof grant.scope !== 'string' || catalogScopes.has(grant.scope)) return false
-        if (!needle) return true
-        return String(grant.label || grant.scope).toLowerCase().includes(needle) || String(grant.scope).toLowerCase().includes(needle)
-      })
+      // 0.25.2：已勾选的排在上面、未勾选的排在下面，组内按名称字母排序
+      // （中英文混排也走同一份 key，勾选状态一变列表就重排）。
+      const nameOf = (item) => String(item.label || item.scope)
+      visibleScopes.sort((a, b) => (Number(Boolean(b.scope && entries[b.scope])) - Number(Boolean(a.scope && entries[a.scope])))
+        || nameOf(a).localeCompare(nameOf(b), 'zh-Hans-CN', { sensitivity: 'base', numeric: true })
+        || String(a.scope).localeCompare(String(b.scope)))
       let popStyle = {}
       if (anchor) {
         const width = 340
@@ -4875,25 +4809,6 @@ window.__ModuleLoader__.load({
         ? '继承自父会话'
         : hasOverride ? '本会话已设置' : '本会话使用默认'
       const scopeCountText = `${effectiveCount} 个作用域`
-      /** 作用域行内的「Agent 授权」：只读 / 可写 + 撤销（继承的只能到父会话撤销）。 */
-      const grantRow = (grant) => h('div', { className: 'mem-scope-grant-row' },
-        h('span', {
-          className: 'mem-scope-grant',
-          title: `${grant.scope}${grant.grantedAt ? ` · 授予于 ${fmtTime(grant.grantedAt)}` : ''}（范围外例外，不影响上面的勾选）`,
-        }, `Agent 授权：${grantPermissionText(grant.permissions)}`),
-        grant.inherited === true ? h('span', { className: 'mem-grant-pill' }, '继承') : null,
-        h('span', { className: 'spacer' }),
-        grant.inherited === true
-          ? h('span', { className: 'muted' }, '到父会话撤销')
-          : h('button', {
-              type: 'button',
-              className: 'mem-grant-revoke',
-              disabled: grantBusy === grant.id,
-              title: '撤销这条授权（不影响上面的勾选；Agent 需要重新申请）',
-              onClick: () => revokeGrant(grant),
-            }, grantBusy === grant.id ? '撤销中…' : '撤销'),
-      )
-
       return h('span', { className: 'mem-scope-wrap', ref: wrapRef },
         h('button', {
           type: 'button',
@@ -4913,8 +4828,6 @@ window.__ModuleLoader__.load({
             h('span', { className: 'spacer' }),
             h('span', { className: 'mem-scope-count' }, `已选 ${selectedCount}`),
           ),
-          h('div', { className: 'hint' },
-            '勾选作用域 +「可读 / 可写」= 你为本会话设置的可见范围；行内「Agent 授权」= Agent 主动申请、你审批过的范围外例外（仅本会话，可单独撤销，不影响勾选）。限制等级决定范围外怎么处理。'),
           data && data.inherited
             ? h('div', { className: 'hint' }, '当前继承自父会话；保存后在本会话独立生效。')
             : null,
@@ -4946,10 +4859,9 @@ window.__ModuleLoader__.load({
           loading && data === null
             ? h('div', { className: 'hint' }, '读取中…')
             : h('div', { className: 'mem-scope-list' },
-                visibleScopes.length === 0 && orphanGrants.length === 0
+                visibleScopes.length === 0
                   ? h('div', { className: 'hint' }, needle ? '没有匹配的作用域。' : '还没有可选的范围。')
-                  : [
-                      ...visibleScopes.map((item) => h('div', { className: `mem-scope-item${entries[item.scope] ? ' on' : ''}`, key: item.scope },
+                  : visibleScopes.map((item) => h('div', { className: `mem-scope-item${entries[item.scope] ? ' on' : ''}`, key: item.scope },
                       h('div', { className: 'mem-scope-row' },
                         h('button', {
                           type: 'button',
@@ -5003,18 +4915,8 @@ window.__ModuleLoader__.load({
                           onClick: () => togglePerm(item.scope, 'write'),
                         }, '可写'),
                       ),
-                      grantsByScope.has(item.scope) ? grantRow(grantsByScope.get(item.scope)) : null,
                     )),
-                      ...orphanGrants.map((grant) => h('div', { className: 'mem-scope-item', key: grant.id || `${grant.scope}:${grant.grantedAt}` },
-                        h('div', { className: 'mem-scope-row' },
-                          h('span', { className: 'mem-scope-label', title: grant.scope }, grant.label || grant.scope),
-                          h('span', { className: 'cnt' }, '目录中已不可见'),
-                        ),
-                        grantRow(grant),
-                      )),
-                    ],
               ),
-          grantError ? h('div', { className: 'mem-scope-err' }, grantError) : null,
           error ? h('div', { className: 'mem-scope-err' }, error) : null,
           h('div', { className: 'mem-scope-foot' },
             h('button', {

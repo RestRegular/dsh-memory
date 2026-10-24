@@ -1666,7 +1666,7 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
 })
 
 
-test('记忆权限浮窗:展示 Agent 授权、实时轮询并支持撤销', async () => {
+test('记忆权限浮窗:只有勾选作用域 + 可读/可写,不再展示 Agent 授权与解释文本', async () => {
   const { exports, hooks } = await loadBundle()
   hooks.resetAll()
   const Button = (exports.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
@@ -1686,25 +1686,9 @@ test('记忆权限浮窗:展示 Agent 授权、实时轮询并支持撤销', asy
       { scope: 'handbook', label: 'handbook', records: 1 },
     ],
   }
-  let grants = [{
-    id: 'grant-1',
-    scope: 'handbook',
-    label: 'handbook',
-    permissions: ['read'],
-    grantedAt: 1792844000000,
-    ownerSession: 's1',
-    inherited: false,
-  }]
   const savedFetch = (globalThis as Record<string, unknown>).fetch
   ;(globalThis as Record<string, unknown>).fetch = async (url: string, init?: { method?: string; body?: string }) => {
     calls.push({ url, init })
-    if (url.startsWith('/memory/api/grants?')) {
-      return { status: 200, json: async () => ({ ok: true, value: { sessionId: 's1', grants } }) }
-    }
-    if (url === '/memory/api/grants' && init?.method === 'POST') {
-      grants = []
-      return { status: 200, json: async () => ({ ok: true, value: { sessionId: 's1', grants } }) }
-    }
     return { status: 200, json: async () => ({ ok: true, value: payload }) }
   }
   try {
@@ -1725,32 +1709,77 @@ test('记忆权限浮窗:展示 Agent 授权、实时轮询并支持撤销', asy
 
     const opened = textOf(current)
     assert.ok(opened.includes('记忆权限'), '浮窗标题是记忆权限')
-    assert.ok(opened.includes('勾选作用域'), '提示里说明了勾选与授权的区别')
-    assert.ok(opened.includes('Agent 授权：只读'), '授权直接标在作用域行内')
-    assert.ok(opened.includes('handbook'), '展示授权作用域')
-    assert.ok(calls.some((call) => call.url.startsWith('/memory/api/grants?session=s1')), '打开即拉取授权')
-    // 同一行里既有「勾选 + 可读/可写」又有「Agent 授权」,不再单独开一块列表。
-    const grantItem = collect(current).find((n) => n.tag === 'div' && String(n.props?.className ?? '').includes('mem-scope-item')
-      && textOf(n).includes('handbook') && textOf(n).includes('Agent 授权：只读'))
-    assert.ok(grantItem, '授权与可见范围在同一作用域行内展示')
-    assert.ok(collect(grantItem).some((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-state')), '同一行仍有可读 / 可写状态按钮')
+    assert.ok(!opened.includes('Agent 授权'), '不再展示 Agent 授权(只留勾选 + 可读 / 可写)')
+    assert.ok(!opened.includes('范围外例外'), '不再展示授权与可见范围区别的解释文本')
+    assert.ok(!opened.includes('勾选作用域 +'), '移除浮窗上方多余的解释文本')
+    assert.ok(!calls.some((call) => call.url.startsWith('/memory/api/grants')), '不再为授权单独请求 / grants')
 
-    // 实时轮询：3 秒内至少再拉一次。
-    const before = calls.filter((call) => call.url.startsWith('/memory/api/grants?')).length
-    await new Promise((resolve) => setTimeout(resolve, 3100))
-    const after = calls.filter((call) => call.url.startsWith('/memory/api/grants?')).length
-    assert.ok(after > before, '打开期间轮询授权变化')
+    const item = collect(current).find((n) => n.tag === 'div' && String(n.props?.className ?? '').includes('mem-scope-item')
+      && textOf(n).includes('handbook'))
+    assert.ok(item, '作用域行存在')
+    assert.ok(collect(item).some((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-check')), '行内有勾选框')
+    const states = collect(item).filter((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-state'))
+    assert.equal(states.length, 3, '行内只有绑定 / 可读 / 可写三个状态按钮')
+    assert.ok(textOf(item).includes('可读') && textOf(item).includes('可写'), '保留可读 / 可写操作权限')
+    assert.ok(!textOf(item).includes('撤销'), '作用域行内不再有撤销授权的动作')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
+})
 
-    const revoke = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-grant-revoke'))
-    assert.ok(revoke, '授权条目有撤销按钮')
-    ;(revoke!.props!.onClick as () => void)()
+test('记忆权限浮窗:已勾选的排在上面、未勾选的排下面,组内按字母排序', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const Button = (exports.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
+  const payload = {
+    sessionId: 's1',
+    override: null,
+    effective: { level: 'normal', scopes: [{ scope: 'beta' }, { scope: 'gamma' }] },
+    source: 'default',
+    inherited: false,
+    defaults: [],
+    defaultScopes: [],
+    bindings: [],
+    scopes: [
+      { scope: 'delta', label: 'delta', records: 0 },
+      { scope: 'gamma', label: 'gamma', records: 0 },
+      { scope: 'beta', label: 'Beta', records: 0 },
+      { scope: 'alpha', label: 'alpha', records: 0 },
+    ],
+  }
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async () => ({ status: 200, json: async () => ({ ok: true, value: payload }) })
+  try {
+    let current: RenderNode | null = null
+    const element = () => hooks.React.createElement(Button, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const button = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))
+    ;(button!.props!.onClick as (event: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 40, top: 500 }) } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    hooks.runEffects()
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    const posted = calls.find((call) => call.url === '/memory/api/grants' && call.init?.method === 'POST')
-    assert.ok(posted, '撤销走 POST /grants')
-    const body = JSON.parse(String(posted?.init?.body ?? '{}')) as { session: string; id: string; view: string }
-    assert.deepEqual(body, { session: 's1', id: 'grant-1', view: 's1' })
-    assert.ok(!textOf(current).includes('Agent 授权：'), '撤销后行内授权实时消失')
+    /** 列表里的作用域名称,按渲染顺序(DOM 顺序)。 */
+    const labels = () => collect(current)
+      .filter((n) => n.tag === 'div' && String(n.props?.className ?? '').split(' ').includes('mem-scope-item'))
+      .map((n) => textOf(collect(n).find((c) => c.tag === 'button' && String(c.props?.className ?? '') === 'mem-scope-label') ?? null))
+    assert.deepEqual(labels(), ['Beta', 'gamma', 'alpha', 'delta'], '已勾选的 Beta / gamma 在上面,组内按字母排序')
+
+    // 取消勾选 gamma:它立刻沉到底部,其余顺序不变。
+    const gammaItem = collect(current).find((n) => n.tag === 'div'
+      && String(n.props?.className ?? '').split(' ').includes('mem-scope-item')
+      && textOf(n).includes('gamma'))
+    assert.ok(gammaItem, 'gamma 作用域行存在')
+    const gammaCheck = collect(gammaItem).find((n) => n.tag === 'button'
+      && String(n.props?.className ?? '').split(' ').includes('mem-scope-check'))
+    assert.ok(gammaCheck, 'gamma 行内有勾选框')
+    ;(gammaCheck!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(labels(), ['Beta', 'alpha', 'delta', 'gamma'], '取消勾选后沉到未勾选区,组内仍按字母排序')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch
   }
