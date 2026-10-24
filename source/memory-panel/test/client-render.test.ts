@@ -1833,6 +1833,128 @@ test('记忆权限浮窗:Agent 授权用勾选 + AI 气泡呈现,取消勾选后
   hooks.resetAll()
 })
 
+test('记忆权限按钮:浮窗没打开时数字也随 Agent 授权实时变(挂载即轮询 grants)', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const Button = (exports.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
+  const payload = {
+    sessionId: 's1',
+    override: null,
+    effective: { level: 'normal', scopes: [{ scope: 'zulu' }] },
+    source: 'default',
+    inherited: false,
+    defaults: [],
+    defaultScopes: [],
+    bindings: [],
+    scopes: [
+      { scope: 'zulu', label: 'zulu', records: 1 },
+      { scope: 'handbook', label: 'handbook', records: 1 },
+    ],
+  }
+  let grants: Array<Record<string, unknown>> = []
+  let grantPolls = 0
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string) => {
+    if (url.startsWith('/memory/api/grants?')) {
+      grantPolls += 1
+      return { status: 200, json: async () => ({ ok: true, value: { sessionId: 's1', grants } }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, value: payload }) }
+  }
+  try {
+    let current: RenderNode | null = null
+    const element = () => hooks.React.createElement(Button, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const button = () => collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))!
+    assert.equal(textOf(button()).trim(), '1', '没有授权时按钮数字只算可见范围')
+    assert.ok(grantPolls >= 1, '浮窗没打开也要拉本会话授权')
+    assert.ok(!textOf(current).includes('已选'), '浮窗从头到尾没有打开')
+
+    // 模拟下一轮 3 秒轮询:Agent 刚拿到 handbook 的只读授权。
+    grants = [{ id: 'grant-1', scope: 'handbook', label: 'handbook', permissions: ['read'], grantedAt: 1792844000000, ownerSession: 's1', inherited: false }]
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.equal(textOf(button()).trim(), '2', 'Agent 拿到授权后按钮数字自己变,不用开浮窗')
+    assert.match(String(button().props!.title), /2 个作用域/, '按钮 title 与数字同口径')
+    assert.ok(!textOf(current).includes('已选'), '全程没打开过浮窗')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
+})
+
+test('记忆权限浮窗:没保存就关掉,再打开草稿还原(不记住待撤销)', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const Button = (exports.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
+  const payload = {
+    sessionId: 's1',
+    override: null,
+    effective: { level: 'normal', scopes: [{ scope: 'zulu' }] },
+    source: 'default',
+    inherited: false,
+    defaults: [],
+    defaultScopes: [],
+    bindings: [],
+    scopes: [
+      { scope: 'zulu', label: 'zulu', records: 1 },
+      { scope: 'handbook', label: 'handbook', records: 1 },
+    ],
+  }
+  const grants = [{ id: 'grant-1', scope: 'handbook', label: 'handbook', permissions: ['read'], grantedAt: 1792844000000, ownerSession: 's1', inherited: false }]
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string) => {
+    if (url.startsWith('/memory/api/grants?')) {
+      return { status: 200, json: async () => ({ ok: true, value: { sessionId: 's1', grants } }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, value: payload }) }
+  }
+  try {
+    let current: RenderNode | null = null
+    const element = () => hooks.React.createElement(Button, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const button = () => collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))!
+    const togglePanel = async () => {
+      ;(button().props!.onClick as (event: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 40, top: 500 }) } })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      hooks.runEffects()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    const handbook = () => collect(current).find((n) => n.tag === 'div'
+      && String(n.props?.className ?? '').includes('mem-scope-item') && textOf(n).includes('handbook'))!
+    const check = () => collect(handbook()).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-check'))!
+
+    await togglePanel()
+    assert.equal(String(check().props?.['aria-checked']), 'true', 'AI 授权的行默认勾选')
+    // 取消勾选 = 草稿「待撤销」，然后直接关掉浮窗（不保存）。
+    ;(check().props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.ok(textOf(handbook()).includes('AI·待撤销'), '草稿里标成待撤销')
+    await togglePanel()
+    assert.ok(!textOf(current).includes('已选'), '浮窗已关闭')
+
+    // 重开：草稿不能记住，勾选与气泡回到服务端真值。
+    await togglePanel()
+    assert.equal(String(check().props?.['aria-checked']), 'true', '没保存就关掉，重开时勾选还原')
+    assert.ok(textOf(handbook()).includes('AI'), '气泡还在')
+    assert.ok(!textOf(handbook()).includes('待撤销'), '「待撤销」草稿不跨关闭')
+    assert.ok(textOf(current).includes('已选 2'), '计数也回到真值')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
+})
+
 test('记忆权限浮窗:已勾选在上、未勾选在下按字母序;取消勾选后点保存才重排', async () => {
   const { exports, hooks } = await loadBundle()
   hooks.resetAll()

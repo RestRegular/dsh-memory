@@ -4740,8 +4740,16 @@ window.__ModuleLoader__.load({
           .catch((e) => setGrantError(String((e && e.message) || e)))
       }
 
+      /**
+       * 0.25.6：轮询不再限定「浮窗打开」。
+       * 输入框按钮上的数字是「可见范围 ∪ 本会话 AI 授权」，浮窗关着的时候也得跟着
+       * 授权变 —— 否则 Agent 刚审批到的权限，用户要手动开一次浮窗数字才更新
+       * （表现为「数字没有实时变化」）。浮窗打开的实时性与 0.25.3 一致。
+       */
       React.useEffect(() => {
-        if (!open) return undefined
+        if (typeof sessionId !== 'string' || sessionId === '') return undefined
+        // 换会话 = 换一份授权清单：先清掉上一个会话的，避免按钮数字短暂串台。
+        setGrants([])
         loadGrants()
         if (typeof setInterval !== 'function') return undefined
         const timer = setInterval(() => {
@@ -4749,7 +4757,29 @@ window.__ModuleLoader__.load({
           loadGrants()
         }, 3000)
         return () => clearInterval(timer)
-      }, [open, sessionId])
+      }, [sessionId])
+
+      /**
+       * 0.25.6：草稿不跨「关闭浮窗」。
+       * 点外面 / Esc / 再点按钮把浮窗关掉时，取消勾选留下的「AI·待撤销」标记与勾选
+       * 草稿一律丢弃：重开时只显示服务端真值（没保存就还原，不要记住草稿）。
+       */
+      React.useEffect(() => {
+        if (open) return
+        setPendingRevoke((prev) => (Object.keys(prev).length === 0 ? prev : {}))
+        setGrantError((prev) => (prev === '' ? prev : ''))
+        // 勾选草稿回到「保存过的状态」；正常路径 load() 会再拉一次真值，这里兜住拉取失败。
+        setEntries((prev) => {
+          const keys = Object.keys(prev)
+          const next = {}
+          let changed = false
+          for (const scope of keys) {
+            next[scope] = Boolean(savedEntries[scope])
+            if (next[scope] !== prev[scope]) changed = true
+          }
+          return changed ? next : prev
+        })
+      }, [open, savedEntries])
 
       /** 撤销一条本会话授权（继承自父会话的授权只能到父会话撤销）。 */
       const revokeGrant = (grant) => {
