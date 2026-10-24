@@ -70,6 +70,23 @@ import {
 import { probeHardware,                                       } from './hardware.js'
 import { pickFlavor, recommendModel } from './recommend.js'
 
+/**
+ * 一条权限变更（授予 / 撤销）。面板改名「记忆权限」后，工具授予与面板撤销
+ * 都通过它进入注入链路，Agent 下一轮就能看到自己的权限边界变了。
+ */
+                                         
+                              
+               
+                                
+                      
+ 
+
+/** 注入半边要的权限快照：本次变更 + 当前有效授权。 */
+                                       
+                                   
+                      
+ 
+
 /** Recursive byte count; 0 for anything unreadable. */
 function pathSize(path        )         {
   try {
@@ -689,6 +706,8 @@ export class LocalMemoryService                             {
                    approvalAudit                    
   /** 可见域变更通知:下一次 pre-step 注入给 Agent 后删除(按会话)。 */
                    visibilityNotices = new Map                                                                ()
+  /** 权限变更通知(0.25.0):授予 / 撤销；下一次 pre-step 注入给 Agent 后删除。 */
+                   permissionNotices = new Map                                                           ()
   /** 普通限制下等待用户审批的范围外访问(按审批 id)。 */
                    pendingApprovals = new Map                                   ()
           approvalSeq = 0
@@ -2158,6 +2177,12 @@ export class LocalMemoryService                             {
         ...(meta !== undefined ? { scopeGeneration: meta.generation } : {}),
       })
       granted.push(grant)
+      this.recordPermissionNotice(sessionId, {
+        event: 'granted',
+        scope: item.scope,
+        permissions: [item.permission],
+        by: 'agent',
+      })
       this.approvalAudit.append({
         at: Date.now(),
         event: 'granted',
@@ -2180,10 +2205,67 @@ export class LocalMemoryService                             {
     return this.validGrants(agent)
   }
 
-  /** 面板：撤销某会话的一条授权。 */
+  /**
+   * 面板「记忆权限」：某会话当前有效授权（含父会话继承）。
+   * grant.sessionId 标明授权来自哪个会话；与入参不同 = 继承自父会话，面板不可直接撤销。
+   */
+  sessionGrants(sessionId        )               {
+    if (typeof sessionId !== 'string' || sessionId.trim() === '') return []
+    const agentLike = { session: { header: { id: sessionId.trim() } } }
+    try {
+      return this.validGrants(agentLike)
+    } catch {
+      return []
+    }
+  }
+
+  /**
+   * 取出并删除待注入的「权限变更」通知（0.25.0），同时附上当前有效授权快照。
+   * 沿 parentSession 链找：子 Agent 继承父会话的授权，也应当收到父会话的授权变化。
+   */
+  takePermissionNotice(agent         )                                   {
+    let id = this.rawSessionIdOf(agent) ?? ''
+    const seen = new Set        ()
+    while (id !== '' && !seen.has(id)) {
+      seen.add(id)
+      const found = this.permissionNotices.get(id)
+      if (found !== undefined) {
+        this.permissionNotices.delete(id)
+        let grants               = []
+        try { grants = this.validGrants(agent) } catch { grants = [] }
+        return { changes: [...found.changes], grants }
+      }
+      let parent                    
+      try {
+        const session = this.sessionLookup?.(id)                                                        
+        parent = typeof session?.header?.parentSession === 'string' && session.header.parentSession !== ''
+          ? session.header.parentSession
+          : undefined
+      } catch { parent = undefined }
+      id = parent ?? ''
+    }
+    return undefined
+  }
+
+  /** 记一条待注入的权限变更（同一会话合并，pre-step 一次性取走）。 */
+          recordPermissionNotice(sessionId        , change                        )       {
+    if (typeof sessionId !== 'string' || sessionId === '') return
+    const existing = this.permissionNotices.get(sessionId)
+    if (existing === undefined) {
+      this.permissionNotices.set(sessionId, { at: Date.now(), changes: [change] })
+      return
+    }
+    existing.changes.push(change)
+    existing.at = Date.now()
+  }
+
+  /** 面板：撤销某会话的一条授权。已撤销 / 已过期的 id 返回 false（幂等语义下也算未找到）。 */
   revokeGrant(sessionId        , id        )          {
     if (typeof sessionId !== 'string' || sessionId === '') return false
+    // list() 已过滤撤销 / 过期：拿不到 before 说明这条授权已经不在生效集合里，
+    // 不能再让 store.revoke() 对历史条目再写一次撤销（否则面板会 404 之外还误报成功）。
     const before = this.grants.list(sessionId).find((grant) => grant.id === id)
+    if (before === undefined) return false
     const ok = this.grants.revoke(sessionId, id)
     if (ok) {
       this.approvalAudit.append({
@@ -2194,8 +2276,15 @@ export class LocalMemoryService                             {
         tool: 'memory_scopes',
         action: 'revoke',
         mode: 'grant',
-        ...(before !== undefined ? { scopes: [before.scope], permissions: before.permissions } : {}),
+        scopes: [before.scope],
+        permissions: before.permissions,
         outcome: 'revoked',
+      })
+      this.recordPermissionNotice(sessionId, {
+        event: 'revoked',
+        scope: before.scope,
+        permissions: [...before.permissions],
+        by: 'user',
       })
     }
     return ok

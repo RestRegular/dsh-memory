@@ -262,3 +262,66 @@ test('审批审计：requested / approved / granted / revoked，且不写正文'
     done()
   }
 })
+
+test('面板：sessionGrants 返回自身 + 继承授权，撤销后注入撤销通知', async () => {
+  const { svc, done } = makeService()
+  try {
+    await seedScope(svc)
+    svc.requestOutOfScope = async () => ({ outcome: 'allowed-once' })
+    const result = await svc.requestScopeGrants(agent('s1'), {
+      requests: [{ scope: 'handbook', permissions: ['read'] }],
+      reason: '需要团队约定',
+    })
+    const grantId = result.grants[0]!.id
+
+    // 父会话自己的授权
+    const own = svc.sessionGrants('s1')
+    assert.equal(own.length, 1)
+    assert.equal(own[0]!.sessionId, 's1')
+    assert.deepEqual(own[0]!.permissions, ['read'])
+
+    // 子 Agent 继承父会话授权，但 owner 仍是 s1（面板据此显示「继承」且不可撤销）
+    svc.setSessionLookup((id) => (id === 'child'
+      ? { header: { id: 'child', parentSession: 's1', origin: 'subagent' } }
+      : undefined))
+    const inherited = svc.sessionGrants('child')
+    assert.equal(inherited.length, 1)
+    assert.equal(inherited[0]!.sessionId, 's1')
+
+    // 授予时已经排了一条通知：取走后再取为空。
+    const grantedNotice = svc.takePermissionNotice(agent('s1'))
+    assert.deepEqual(grantedNotice?.changes, [{ event: 'granted', scope: 'handbook', permissions: ['read'], by: 'agent' }])
+    assert.equal(grantedNotice?.grants.length, 1)
+    assert.equal(svc.takePermissionNotice(agent('s1')), undefined)
+
+    assert.equal(svc.revokeGrant('s1', grantId), true)
+    const revokedNotice = svc.takePermissionNotice(agent('s1'))
+    assert.deepEqual(revokedNotice?.changes, [{ event: 'revoked', scope: 'handbook', permissions: ['read'], by: 'user' }])
+    assert.equal(revokedNotice?.grants.length, 0)
+    assert.equal(svc.sessionGrants('s1').length, 0)
+  } finally {
+    done()
+  }
+})
+
+test('子 Agent 也能收到父会话的权限变更通知', async () => {
+  const { svc, done } = makeService()
+  try {
+    await seedScope(svc)
+    svc.requestOutOfScope = async () => ({ outcome: 'allowed-once' })
+    svc.setSessionLookup((id) => (id === 'child'
+      ? { header: { id: 'child', parentSession: 's1', origin: 'subagent' } }
+      : undefined))
+    await svc.requestScopeGrants(agent('s1'), {
+      requests: [{ scope: 'handbook', permissions: ['read'] }],
+      reason: '需要团队约定',
+    })
+    const child = agent('child', { parentSession: 's1', origin: 'subagent' })
+    const notice = svc.takePermissionNotice(child)
+    assert.equal(notice?.changes[0]?.event, 'granted')
+    assert.equal(notice?.grants.length, 1, '子会话看到的是继承后的有效授权')
+    assert.equal(svc.takePermissionNotice(agent('s1')), undefined, '通知被取走一次')
+  } finally {
+    done()
+  }
+})

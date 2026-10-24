@@ -589,6 +589,39 @@ function visibilityPayload(ctx, memory, sessionId) {
   }
 }
 
+/**
+ * 面板「记忆权限」的授权快照（0.25.0）。
+ *
+ * grants 由 Agent 通过 memory_scopes request 申请、用户批准产生；这里只暴露
+ * scope / 权限 / 授予时间，不返回任何记忆正文。`inherited` 表示这条授权属于父会话。
+ */
+function grantsPayload(ctx, memory, sessionId) {
+  const list = []
+  let grants = []
+  try {
+    grants = typeof memory.sessionGrants === 'function' ? memory.sessionGrants(sessionId) : []
+  } catch { grants = [] }
+  for (const grant of Array.isArray(grants) ? grants : []) {
+    if (!grant || typeof grant.scope !== 'string' || grant.scope === '') continue
+    const permissions = Array.isArray(grant.permissions)
+      ? grant.permissions.filter((permission) => permission === 'read' || permission === 'write')
+      : []
+    if (permissions.length === 0) continue
+    const ownerSession = typeof grant.sessionId === 'string' && grant.sessionId !== '' ? grant.sessionId : sessionId
+    list.push({
+      id: typeof grant.id === 'string' ? grant.id : '',
+      scope: grant.scope,
+      label: scopeLabel(ctx, grant.scope),
+      permissions,
+      grantedAt: typeof grant.grantedAt === 'number' ? grant.grantedAt : 0,
+      ownerSession,
+      inherited: ownerSession !== sessionId,
+    })
+  }
+  list.sort((a, b) => a.grantedAt - b.grantedAt || a.scope.localeCompare(b.scope))
+  return { sessionId, grants: list }
+}
+
 async function handle(ctx, routePath, req, res) {
   const url = new URL(req.url ?? '/', 'http://dsh.local')
   const path = url.pathname.slice(routePath.length) || '/'
@@ -768,6 +801,32 @@ async function handle(ctx, routePath, req, res) {
         ? memory.answerVisibilityApproval(id, outcome)
         : memory.answerVisibilityApproval(id, outcome, allowedIds)
       writeJson(res, { ok: true, value: { answered } })
+      return
+    }
+
+    // 面板「记忆权限」：Agent 申请到的会话授权 + 撤销（0.25.0）。
+    if (method === 'GET' && path === '/grants') {
+      if (typeof memory.sessionGrants !== 'function') {
+        throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供会话授权接口（请升级 @restregular/dsh-memory）')
+      }
+      const sessionId = (url.searchParams.get('session') ?? '').trim()
+      if (sessionId === '') throw new ApiError(400, 'SESSION_REQUIRED', 'session 参数不能为空')
+      writeJson(res, { ok: true, value: grantsPayload(ctx, memory, sessionId) })
+      return
+    }
+    if (method === 'POST' && path === '/grants') {
+      if (typeof memory.revokeGrant !== 'function') {
+        throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供授权撤销接口（请升级 @restregular/dsh-memory）')
+      }
+      const body = await readJsonBody(req)
+      const sessionId = typeof body?.session === 'string' ? body.session.trim() : ''
+      const id = typeof body?.id === 'string' ? body.id.trim() : ''
+      if (sessionId === '') throw new ApiError(400, 'SESSION_REQUIRED', 'session 不能为空')
+      if (id === '') throw new ApiError(400, 'GRANT_ID_REQUIRED', 'id 不能为空')
+      const revoked = memory.revokeGrant(sessionId, id)
+      if (!revoked) throw new ApiError(404, 'GRANT_NOT_FOUND', '没有找到这条授权（可能已撤销或已过期）')
+      const view = typeof body?.view === 'string' && body.view.trim() !== '' ? body.view.trim() : sessionId
+      writeJson(res, { ok: true, value: grantsPayload(ctx, memory, view) })
       return
     }
 

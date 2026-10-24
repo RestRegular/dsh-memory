@@ -35,7 +35,7 @@ registerHooks({
   },
 })
 
-const { apply } = await import('../src/apply.ts')
+const { apply, renderPermissionNotice } = await import('../src/apply.ts')
 
 function record(id: string, content: string, tags: string[] = []): Record<string, unknown> {
   return {
@@ -52,6 +52,12 @@ function setup(options: {
   listSync?: (input: unknown) => unknown[]
   getByIds?: (ids: string[]) => unknown[]
   sessionState?: Record<string, unknown>
+  visibilityNotice?: { config: { level: 'absolute' | 'normal' | 'none'; scopes: Array<{ scope: string }> } | null }
+  permissionNotice?: {
+    changes?: Array<{ event?: string; scope?: string; permissions?: string[] }>
+    grants?: Array<{ scope?: string; permissions?: string[] }>
+  }
+  visibilityPolicy?: { level: string; scopes: Array<{ scope: string }> }
 } = {}) {
   const handlers = new Map<string, (...args: any[]) => unknown>()
   const settings = options.settings ?? defaultInjectSettings
@@ -64,6 +70,12 @@ function setup(options: {
     list: options.list ?? (async () => []),
     listSync: options.listSync ?? (() => []),
     attachInjectAudit: (_value: unknown) => {},
+    takeVisibilityNotice: options.visibilityNotice !== undefined ? () => options.visibilityNotice : undefined,
+    takePermissionNotice: options.permissionNotice !== undefined ? () => options.permissionNotice : undefined,
+    visibilityPolicy: () => options.visibilityPolicy ?? {
+      level: 'normal',
+      scopes: [{ scope: 'session:s1' }, { scope: 'project:D:/repo' }, { scope: 'global' }],
+    },
   }
   // attachInjectAudit 的真实语义是 provider 保存 sink；这里直接把 sink 暴露给断言。
   const attached = { current: null as InjectAuditStore | null }
@@ -94,6 +106,42 @@ async function runPreStep(handlers: Map<string, (...args: any[]) => unknown>, de
   assert.ok(handler)
   return handler!(input(overrides), async () => decision ?? { kind: 'continue', messages: [] })
 }
+
+test('pre-step: 可见范围变更 → 统一「记忆权限已更新」通知', async () => {
+  const { handlers } = setup({ visibilityNotice: { config: { level: 'normal', scopes: [{ scope: 'session:s1' }, { scope: 'global' }] } } })
+  const decision = await runPreStep(handlers) as { messages: any[] }
+  assert.equal(decision.messages.length, 1)
+  const text = decision.messages[0]?.content?.[0]?.text ?? ''
+  assert.ok(text.includes('【记忆权限已更新】'))
+  assert.ok(text.includes('session:s1'))
+  assert.ok(text.includes('普通限制'))
+})
+
+test('pre-step: 授权变更（授予 + 撤销）→ 注入变更与当前授权', async () => {
+  const { handlers } = setup({
+    permissionNotice: {
+      changes: [
+        { event: 'granted', scope: 'handbook', permissions: ['read'] },
+        { event: 'revoked', scope: 'dsh-pocket', permissions: ['write'] },
+      ],
+      grants: [{ scope: 'handbook', permissions: ['read'] }],
+    },
+  })
+  const decision = await runPreStep(handlers) as { messages: any[] }
+  assert.equal(decision.messages.length, 1)
+  const text = decision.messages[0]?.content?.[0]?.text ?? ''
+  assert.ok(text.includes('本次授权变更'))
+  assert.ok(text.includes('已授予：handbook（只读）'))
+  assert.ok(text.includes('已撤销：dsh-pocket（写入 / 删除）'))
+  assert.ok(text.includes('当前会话授权：handbook（只读）'))
+  assert.ok(text.includes('memory_scopes request'))
+})
+
+test('renderPermissionNotice: 恢复默认 + 无授权时文案完整', () => {
+  const text = renderPermissionNotice({ visibilityChanged: true, visibility: null, grants: [] })
+  assert.ok(text.includes('已恢复默认'))
+  assert.ok(text.includes('当前会话授权：（无）'))
+})
 
 test('pre-step: 评估事件与 delivery 事件分离，未拿到宿主回执记 unknown', async () => {
   const hit = { record: record('mem-1', '发布前先检查 devcred 凭据', ['release']), score: 0.9 }

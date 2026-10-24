@@ -2,6 +2,14 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.25.0 — 记忆范围面板改名「记忆权限」：Agent 授权实时可见、可撤销、统一注入
+
+- **改名**：输入框按钮、浮窗标题、`title` / `aria-label` 与注册 label 统一从「记忆范围」改为「记忆权限」。
+- **面板实时显示 Agent 授权**：浮窗新增「Agent 会话授权」区块，列出本会话由 `memory_scopes request` 审批得到的授权（作用域 / 只读或可写 / 授予时间 / 是否继承）。新增 `GET /memory/api/grants?session=`；浮窗打开期间每 3 秒轮询，Agent 刚申请到的权限无需重开面板即可看到。
+- **支持撤销**：新增 `POST /memory/api/grants { session, id }` → `provider.revokeGrant()`，撤销后列表实时刷新；继承自父会话的授权标「继承」且在本会话不可撤销，避免误伤父会话。重复撤销返回 `GRANT_NOT_FOUND`（404），不会对历史条目重复写审计。
+- **统一权限变更注入**：provider 新增 `takePermissionNotice()`（沿 `parentSession` 链取走，附当前有效授权快照）；`memory_scopes request` 授予与面板撤销各记一条变更，注入半边用 `renderPermissionNotice()` 把「可见范围变化 + 本次授权变更 + 当前会话授权」合并成一条「【记忆权限已更新】」user 消息（含撤销后需重新申请的说明，只描述权限、不含记忆正文）。原来的「记忆可见域已更新」通知并入这条消息。
+- 测试：provider 的 `sessionGrants` / `takePermissionNotice` / 撤销幂等与父链继承；面板 `/grants` GET/POST 与 inherited；client 浮窗授权区块、3 秒轮询与撤销请求载荷；注入文案与 pre-step 渲染。全套 492 tests / 491 pass / 1 skipped。
+
 ## 0.24.1 — 修复 memory_scopes 注册失败导致 memory_get 一起消失
 
 - **现象**：升级到 0.24.0 后，模型侧看不到 `memory_scopes`，连原本正常的 `memory_get` 也变成 `unknown tool`；`memory_search` / `memory_list` / `memory_save` / `memory_forget` 仍在。

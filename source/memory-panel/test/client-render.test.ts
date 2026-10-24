@@ -1617,7 +1617,7 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     const text = textOf(current)
-    assert.ok(text.includes('记忆范围'))
+    assert.ok(text.includes('记忆权限'))
     assert.ok(text.includes('session:s1'), '默认范围里客户端补齐的 scope 也会渲染')
     assert.ok(text.includes('全局'))
     assert.ok(text.includes('绝对限制') && text.includes('普通限制') && text.includes('无限制'), '三档限制等级')
@@ -1665,13 +1665,96 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
   hooks.resetAll()
 })
 
+
+test('记忆权限浮窗:展示 Agent 授权、实时轮询并支持撤销', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const Button = (exports.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
+  const calls: Array<{ url: string; init?: { method?: string; body?: string } }> = []
+  const payload = {
+    sessionId: 's1',
+    override: null,
+    effective: { level: 'normal', scopes: [{ scope: 'session:s1' }, { scope: 'global' }] },
+    source: 'default',
+    inherited: false,
+    defaults: ['session:s1', 'global'],
+    defaultScopes: ['session:s1', 'global'],
+    bindings: [],
+    scopes: [{ scope: 'session:s1', label: '当前会话', records: 1 }, { scope: 'global', label: '全局', records: 2 }],
+  }
+  let grants = [{
+    id: 'grant-1',
+    scope: 'handbook',
+    label: 'handbook',
+    permissions: ['read'],
+    grantedAt: 1792844000000,
+    ownerSession: 's1',
+    inherited: false,
+  }]
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string, init?: { method?: string; body?: string }) => {
+    calls.push({ url, init })
+    if (url.startsWith('/memory/api/grants?')) {
+      return { status: 200, json: async () => ({ ok: true, value: { sessionId: 's1', grants } }) }
+    }
+    if (url === '/memory/api/grants' && init?.method === 'POST') {
+      grants = []
+      return { status: 200, json: async () => ({ ok: true, value: { sessionId: 's1', grants } }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, value: payload }) }
+  }
+  try {
+    let current: RenderNode | null = null
+    const element = () => hooks.React.createElement(Button, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const button = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))
+    assert.ok(button, '记忆权限按钮存在')
+    assert.match(String(button!.props!.title), /记忆权限/, '按钮 title 已改名记忆权限')
+    ;(button!.props!.onClick as (event: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 40, top: 500 }) } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const opened = textOf(current)
+    assert.ok(opened.includes('记忆权限'), '浮窗标题是记忆权限')
+    assert.ok(opened.includes('Agent 会话授权'), '展示 Agent 授权区块')
+    assert.ok(opened.includes('handbook'), '展示授权作用域')
+    assert.ok(opened.includes('只读'), '展示权限')
+    assert.ok(calls.some((call) => call.url.startsWith('/memory/api/grants?session=s1')), '打开即拉取授权')
+
+    // 实时轮询：3 秒内至少再拉一次。
+    const before = calls.filter((call) => call.url.startsWith('/memory/api/grants?')).length
+    await new Promise((resolve) => setTimeout(resolve, 3100))
+    const after = calls.filter((call) => call.url.startsWith('/memory/api/grants?')).length
+    assert.ok(after > before, '打开期间轮询授权变化')
+
+    const revoke = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-grant-revoke'))
+    assert.ok(revoke, '授权条目有撤销按钮')
+    ;(revoke!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const posted = calls.find((call) => call.url === '/memory/api/grants' && call.init?.method === 'POST')
+    assert.ok(posted, '撤销走 POST /grants')
+    const body = JSON.parse(String(posted?.init?.body ?? '{}')) as { session: string; id: string; view: string }
+    assert.deepEqual(body, { session: 's1', id: 'grant-1', view: 's1' })
+    assert.ok(textOf(current).includes('暂无授权。'), '撤销后列表实时清空')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
+})
+
 test('记忆范围浮窗:深色模式用 business-primary + 前景色,列表高度收紧', async () => {
   const { exports } = await loadBundle()
   const css = (exports.__test as { CSS: string }).CSS
   assert.match(css, /\.mem-scope-check\.on \.box\{[^}]*state-business-primary[^}]*label-primary-foreground/, '选中勾选框用主题业务色 + 可翻转前景色')
   assert.match(css, /\.mem-scope-save\{[^}]*state-business-primary[^}]*label-primary-foreground/, '保存按钮不再用近白色的 brand-primary 填充')
   assert.match(css, /\.mem-scope-list\{[^}]*max-height:min\(220px,32vh\)/, '滚动列表高度收紧')
-  assert.match(css, /\.mem-scope-pop\{[^}]*max-height:min\(520px,72vh\)/, '浮窗整体高度收紧')
+  assert.match(css, /\.mem-scope-pop\{[^}]*max-height:min\(640px,84vh\)/, '浮窗高度容纳授权区块')
 })
 
 test('记忆范围按钮:数字展示范围,边框样式展示限制等级(橙黄实线/蓝色实线/灰色虚线)', async () => {

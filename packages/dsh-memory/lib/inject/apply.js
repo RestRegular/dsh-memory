@@ -109,6 +109,13 @@ import { canonicalWorkspacePath } from '../provider/scope.js'
                                           
                             
                                                                                               
+                                   
+                                          
+                                                                               
+                                                              
+               
+                                     
+                                                                                                                         
  
 
 /** 轮末提醒的文案:短、祈使句,不占预算。 */
@@ -128,27 +135,80 @@ const VISIBILITY_LEVEL_TEXT                                                  = {
   none: '无限制：可以读写所有作用域（当前选择仅作为下次切换的偏好保留）。',
 }
 
-/**
- * 可见域变更后的上下文通知(以 user 消息注入)。
- * 只描述规则,不回显任何记忆正文 —— 它要告诉模型"边界变了",不是给它数据。
- */
-export function renderVisibilityNotice(config                               )         {
-  if (config === null) {
-    return '【记忆可见范围已恢复默认】'
-      + '本会话不再有显式可见域，改回默认设置：当前会话 + 当前项目 + global 三个作用域，限制等级 = 普通限制'
-      + '（范围外命中会先向用户审批；写入 / 删除范围外同样需要审批）。'
-  }
-  const scopes = config.scopes.length > 0
-    ? config.scopes.map((rule) => (rule.kinds !== undefined && rule.kinds.length > 0
+const VISIBILITY_LEVEL_SHORT                                                  = {
+  absolute: '绝对限制',
+  normal: '普通限制',
+  none: '无限制',
+}
+
+/** 一条权限变更（与 provider 的 PermissionNoticeChange 同形；注入半边不依赖其实现类型）。 */
+                                         
+                              
+               
+                                      
+ 
+
+                                        
+                     
+                            
+                                     
+                                           
+                                
+                                           
+                         
+                                                 
+                                               
+                                                                                         
+ 
+
+function permissionText(permissions                       )         {
+  const read = permissions.includes('read')
+  const write = permissions.includes('write')
+  if (read && write) return '读 + 写'
+  if (write) return '写入 / 删除'
+  return '只读'
+}
+
+function scopeListText(rules                                                    )         {
+  return rules.length > 0
+    ? rules.map((rule) => (rule.kinds !== undefined && rule.kinds.length > 0
       ? `${rule.scope}（仅 ${rule.kinds.join(' / ')}）`
       : rule.scope)).join('、')
     : '（无）'
-  return [
-    '【记忆可见域已更新】用户修改了本会话（及其子 Agent）的记忆可见范围。',
-    `可见域：${scopes}`,
-    `限制等级：${VISIBILITY_LEVEL_TEXT[config.level]}`,
-    '后续 memory_search / memory_get / memory_list 请按这个边界工作；需要范围外信息时，先向用户说明要查什么，不要绕过限制。',
-  ].join('\n')
+}
+
+/**
+ * 「记忆权限」变更后的上下文通知（0.25.0，统一入口）。
+ *
+ * 0.25.0 起输入框的「记忆范围」改名「记忆权限」：可见范围变化与 Agent / 面板造成的
+ * 授权变化都走这一条 user 消息。只描述边界与权限，不回显任何记忆正文。
+ */
+export function renderPermissionNotice(input                       )         {
+  const lines           = ['【记忆权限已更新】']
+  if (input.visibilityChanged) {
+    if (input.visibility === null) {
+      lines.push('可见范围：已恢复默认（会话 + 项目 + global 及工作区绑定的作用域，限制等级：普通限制）。')
+    } else {
+      lines.push(`可见范围：${scopeListText(input.visibility.scopes)}`)
+      lines.push(`限制等级：${VISIBILITY_LEVEL_TEXT[input.visibility.level]}`)
+    }
+  } else if (input.effective !== undefined && input.effective !== null) {
+    lines.push(`可见范围（未变）：${scopeListText(input.effective.scopes)}，限制等级：${VISIBILITY_LEVEL_SHORT[input.effective.level]}。`)
+  }
+  const changes = input.changes ?? []
+  if (changes.length > 0) {
+    lines.push('本次授权变更：')
+    for (const change of changes) {
+      lines.push(`- ${change.event === 'granted' ? '已授予' : '已撤销'}：${change.scope}（${permissionText(change.permissions)}）`)
+    }
+  }
+  if (input.grants !== undefined) {
+    lines.push(input.grants.length > 0
+      ? `当前会话授权：${input.grants.map((grant) => `${grant.scope}（${permissionText(grant.permissions)}）`).join('、')}`
+      : '当前会话授权：（无）')
+  }
+  lines.push('请按新的权限边界工作：需要范围外信息时用 memory_scopes request 申请后再读取；被撤销的权限必须重新申请，不要绕过限制。')
+  return lines.join('\n')
 }
 
 export const name = 'dsh-memory-inject'
@@ -858,8 +918,25 @@ export function apply(ctx         , config                     = {}) {
     // 可见域的类型白名单:召回/摘要/规则/流程索引都按它收窄,避免"只让看 global
     // 的 rule"之后又从其它类型里召回正文。
     const visibleKinds = visibilityKindsFor(memory, agent)
-    // 面板保存可见域后,下一次 pre-step 用一条 user 消息告知 Agent 边界已变。
+    // 面板保存可见范围 / Agent 申请或用户撤销授权后,下一次 pre-step 用一条 user
+    // 消息告知 Agent 权限边界已变(0.25.0：两种变更统一走 renderPermissionNotice)。
     const visibilityNotice = memory.takeVisibilityNotice?.(agent)
+    const permissionNotice = memory.takePermissionNotice?.(agent)
+    const permissionChanges = (permissionNotice?.changes ?? [])
+      .filter((change) => change !== null && change !== undefined && typeof change.scope === 'string' && change.scope !== '')
+      .map((change) => ({
+        event: change.event === 'revoked' ? 'revoked'          : 'granted'         ,
+        scope: String(change.scope),
+        permissions: (Array.isArray(change.permissions) ? change.permissions : [])
+          .filter((permission)                                 => permission === 'read' || permission === 'write'),
+      }))
+    const permissionGrants = (permissionNotice?.grants ?? [])
+      .filter((grant) => grant !== null && grant !== undefined && typeof grant.scope === 'string' && grant.scope !== '')
+      .map((grant) => ({
+        scope: String(grant.scope),
+        permissions: (Array.isArray(grant.permissions) ? grant.permissions : [])
+          .filter((permission)                                 => permission === 'read' || permission === 'write'),
+      }))
     if (sessionId !== undefined && scopes !== undefined) sessionScopes.set(sessionId, [...scopes])
     let autoScopes                      
     try { autoScopes = autoRecallScopes(memory.resolveReadScopes?.(agent)                        ) } catch { autoScopes = undefined }
@@ -913,13 +990,32 @@ export function apply(ctx         , config                     = {}) {
     const messageChannels = new Set              ()
     const stage = (entry            )       => { staged.push(entry) }
 
-    // 可见域刚被用户改过:先告知边界,再走后续召回/摘要。只注入规则说明,不回显记忆。
-    if (visibilityNotice !== undefined) {
-      const noticeText = renderVisibilityNotice(visibilityNotice.config)
+    // 权限边界刚被改过（可见范围 / 会话授权）:先告知,再走后续召回/摘要。只注入规则说明,不回显记忆。
+    if (visibilityNotice !== undefined || permissionChanges.length > 0) {
+      let effective                                    
+      try {
+        const policy = memory.visibilityPolicy?.(agent)
+        if (policy !== undefined && policy !== null) {
+          const level = policy.level === 'absolute' || policy.level === 'none' ? policy.level : 'normal'
+          const rules = Array.isArray(policy.scopes)
+            ? policy.scopes.flatMap((rule) => (rule !== null && rule !== undefined && typeof rule.scope === 'string' && rule.scope !== ''
+              ? [{ scope: rule.scope, ...(Array.isArray(rule.kinds) && rule.kinds.length > 0 ? { kinds: rule.kinds.map(String) } : {}) }]
+              : []))
+            : []
+          effective = { level, scopes: rules }
+        }
+      } catch { effective = undefined }
+      const noticeText = renderPermissionNotice({
+        visibilityChanged: visibilityNotice !== undefined,
+        visibility: visibilityNotice?.config ?? null,
+        ...(effective !== undefined ? { effective } : {}),
+        ...(permissionChanges.length > 0 ? { changes: permissionChanges } : {}),
+        ...(permissionNotice?.grants !== undefined ? { grants: permissionGrants } : {}),
+      })
       parts.push(noticeText)
       messageChannels.add('policy')
       stage(auditBase('policy', {
-        kind: 'evaluation', stage: 'rendered', outcome: 'success', reasonCode: 'visibility_changed',
+        kind: 'evaluation', stage: 'rendered', outcome: 'success', reasonCode: 'permission_changed',
         delivery: { status: 'unknown', appended: null, textChars: noticeText.length, textHash: hashAuditText(noticeText) },
       }))
     }

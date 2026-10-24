@@ -496,7 +496,7 @@ window.__ModuleLoader__.load({
       '.mem-scope-btn.is-absolute:hover,.mem-scope-btn.is-normal:hover,.mem-scope-btn.is-none:hover{background:var(--dsw-alias-interactive-bg-hover)}',
       '.mem-scope-btn svg{flex:none}',
       // 毛玻璃浮窗:半透明 + backdrop blur;不支持 backdrop-filter 时退回实心底。
-      '.mem-scope-pop{position:fixed;z-index:80;width:340px;max-height:min(520px,72vh);display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l2,var(--dsw-alias-border-l1)) 60%,transparent);border-radius:14px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 78%,transparent);-webkit-backdrop-filter:blur(20px) saturate(1.35);backdrop-filter:blur(20px) saturate(1.35);box-shadow:0 10px 28px rgba(0,0,0,.18);color:var(--dsw-alias-label-primary);font-size:13px;overflow:hidden}',
+      '.mem-scope-pop{position:fixed;z-index:80;width:340px;max-height:min(640px,84vh);display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l2,var(--dsw-alias-border-l1)) 60%,transparent);border-radius:14px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 78%,transparent);-webkit-backdrop-filter:blur(20px) saturate(1.35);backdrop-filter:blur(20px) saturate(1.35);box-shadow:0 10px 28px rgba(0,0,0,.18);color:var(--dsw-alias-label-primary);font-size:13px;overflow:hidden}',
       '@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.mem-scope-pop{background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-1))}}',
       '.mem-scope-head{display:flex;align-items:center;gap:8px}',
       '.mem-scope-head h4{margin:0;font-size:13px;font-weight:600;line-height:1.4}',
@@ -549,6 +549,22 @@ window.__ModuleLoader__.load({
       '.mem-scope-reset:disabled,.mem-scope-save:disabled{opacity:.5;cursor:default;filter:none}',
       '.mem-scope-save:disabled{color:var(--dsw-alias-label-primary-foreground)}',
       '.mem-scope-err{padding:5px 8px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#d33) 10%,transparent);color:var(--dsw-alias-state-error-primary,#d33);font-size:12px;line-height:1.5}',
+      // 0.25.0：面板改名「记忆权限」——展示 Agent 申请到的会话授权，可逐条撤销。
+      '.mem-grant-box{flex:none;display:flex;flex-direction:column;gap:5px;padding:6px 7px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 72%,transparent);max-height:min(150px,22vh);overflow:auto;scrollbar-width:thin}',
+      '.mem-grant-box::-webkit-scrollbar{width:8px}',
+      '.mem-grant-box::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dsw-alias-label-secondary) 32%,transparent);border-radius:999px;border:2px solid transparent;background-clip:padding-box}',
+      '.mem-grant-head{display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;line-height:1.5}',
+      '.mem-grant-head .spacer{flex:1}',
+      '.mem-grant-head .count{font-weight:400;color:var(--dsw-alias-label-secondary);font-size:10.5px}',
+      '.mem-grant-hint{font-size:10.5px;line-height:1.5;color:var(--dsw-alias-label-secondary)}',
+      '.mem-grant-item{display:flex;align-items:center;gap:6px;min-width:0;padding:3px 2px 0;border-top:1px dashed color-mix(in srgb,var(--dsw-alias-border-l1) 70%,transparent)}',
+      '.mem-grant-scope{flex:1;min-width:0;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.mem-grant-perm{flex:none;font-size:10px;color:var(--dsw-alias-label-secondary);padding:0 6px;border:1px solid var(--dsw-alias-border-l1);border-radius:999px;line-height:1.7;white-space:nowrap}',
+      '.mem-grant-pill{flex:none;font-size:9.5px;color:var(--dsw-alias-label-secondary);border:1px dashed var(--dsw-alias-border-l1);border-radius:999px;padding:0 6px;line-height:1.7;white-space:nowrap}',
+      '.mem-grant-revoke{flex:none;padding:1px 8px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-error-primary,#d33) 45%,var(--dsw-alias-border-l1));border-radius:7px;background:transparent;color:color-mix(in srgb,var(--dsw-alias-state-error-primary,#d33) 78%,var(--dsw-alias-label-primary));font-size:10.5px;line-height:1.7;cursor:pointer}',
+      '.mem-grant-revoke:hover:not(:disabled){border-color:var(--dsw-alias-state-error-primary,#d33);color:var(--dsw-alias-state-error-primary,#d33)}',
+      '.mem-grant-revoke:disabled{opacity:.45;cursor:default}',
+      '.mem-grant-empty{font-size:10.5px;color:var(--dsw-alias-label-secondary);line-height:1.55}',
       // 范围外访问审批卡(0.21.0):注册在 conversation.input.dock,只在所属会话里显示。
       // 版式照抄宿主 dsh-client-ui-approval 的审批卡(strip + body + 右对齐动作行),
       // 尺寸/圆角/底色/阴影全走同一批主题 token;缺少 composer 变量时给出同样的回退值。
@@ -4570,6 +4586,9 @@ window.__ModuleLoader__.load({
       const [catalog, setCatalog] = React.useState([])
       const [search, setSearch] = React.useState('')
       const [anchor, setAnchor] = React.useState(null)
+      const [grants, setGrants] = React.useState([])
+      const [grantBusy, setGrantBusy] = React.useState('')
+      const [grantError, setGrantError] = React.useState('')
       const wrapRef = React.useRef(null)
 
       React.useEffect(() => {
@@ -4678,6 +4697,46 @@ window.__ModuleLoader__.load({
           .then(applyPayload)
           .catch((e) => setError(String((e && e.message) || e)))
           .finally(() => setLoading(false))
+      }
+
+      /**
+       * 0.25.0：本会话的 Agent 授权（grants）。
+       * 工具调用授予 / 面板撤销都会改变它，所以浮窗打开期间按 3 秒轮询，
+       * 用户不重开面板也能看到 Agent 刚申请到的权限。
+       */
+      const loadGrants = () => {
+        if (typeof sessionId !== 'string' || sessionId === '') return
+        api(`grants?session=${encodeURIComponent(sessionId)}`)
+          .then((value) => {
+            setGrants(Array.isArray(value.grants) ? value.grants : [])
+            setGrantError('')
+          })
+          .catch((e) => setGrantError(String((e && e.message) || e)))
+      }
+
+      React.useEffect(() => {
+        if (!open) return undefined
+        loadGrants()
+        if (typeof setInterval !== 'function') return undefined
+        const timer = setInterval(() => {
+          if (typeof document !== 'undefined' && document.hidden) return
+          loadGrants()
+        }, 3000)
+        return () => clearInterval(timer)
+      }, [open, sessionId])
+
+      /** 撤销一条本会话授权（继承自父会话的授权只能到父会话撤销）。 */
+      const revokeGrant = (grant) => {
+        if (!grant || grant.inherited === true) return
+        const id = typeof grant.id === 'string' ? grant.id : ''
+        if (id === '') return
+        const owner = typeof grant.ownerSession === 'string' && grant.ownerSession !== '' ? grant.ownerSession : sessionId
+        setGrantBusy(id)
+        setGrantError('')
+        api('grants', { session: owner, id, view: sessionId })
+          .then((value) => setGrants(Array.isArray(value.grants) ? value.grants : []))
+          .catch((e) => setGrantError(String((e && e.message) || e)))
+          .finally(() => setGrantBusy(''))
       }
 
       // 打开会话就加载一次:按钮上的数字来自这个会话的设置,不需要用户先点按钮。
@@ -4808,8 +4867,8 @@ window.__ModuleLoader__.load({
         h('button', {
           type: 'button',
           className: `mem-scope-btn is-${buttonLevel}`,
-          title: `${sourceText}记忆范围：${scopeCountText} · ${buttonLevelLabel}`,
-          'aria-label': `${sourceText}记忆范围，${scopeCountText}，${buttonLevelLabel}`,
+          title: `${sourceText}记忆权限：${scopeCountText} · ${buttonLevelLabel}`,
+          'aria-label': `${sourceText}记忆权限，${scopeCountText}，${buttonLevelLabel}`,
           'aria-expanded': open,
           onMouseDown: (event) => { try { event.preventDefault() } catch { /* keepFocus */ } },
           onClick: toggle,
@@ -4817,14 +4876,14 @@ window.__ModuleLoader__.load({
           h(NavLineIcon, { size: 14 }),
           data === null ? null : h('span', null, String(effectiveCount)),
         ),
-        open ? h('div', { className: 'mem-scope-pop', style: popStyle, role: 'dialog', 'aria-label': '记忆范围' },
+        open ? h('div', { className: 'mem-scope-pop', style: popStyle, role: 'dialog', 'aria-label': '记忆权限' },
           h('div', { className: 'mem-scope-head' },
-            h('h4', null, '记忆范围'),
+            h('h4', null, '记忆权限'),
             h('span', { className: 'spacer' }),
             h('span', { className: 'mem-scope-count' }, `已选 ${selectedCount}`),
           ),
           h('div', { className: 'hint' },
-            'Agent 只能检索、读取、写入和删除勾选的作用域；限制等级决定范围外怎么处理。'),
+            '可见范围内的作用域 Agent 能检索、读取、写入和删除；范围外与 Agent 申请到的会话授权见下方，限制等级决定范围外怎么处理。'),
           data && data.inherited
             ? h('div', { className: 'hint' }, '当前继承自父会话；保存后在本会话独立生效。')
             : null,
@@ -4842,6 +4901,37 @@ window.__ModuleLoader__.load({
           level === 'none'
             ? h('div', { className: 'mem-scope-note' }, '无限制：范围选择会保存，但暂不参与读取限制。')
             : null,
+          // 0.25.0：Agent 申请到的会话授权（实时轮询 + 逐条撤销）。
+          h('div', { className: 'mem-grant-box', 'aria-label': '本会话授权' },
+            h('div', { className: 'mem-grant-head' },
+              h('span', null, 'Agent 会话授权'),
+              h('span', { className: 'spacer' }),
+              h('span', { className: 'count' }, grants.length > 0 ? `${grants.length} 条` : '暂无'),
+            ),
+            h('div', { className: 'mem-grant-hint' }, 'Agent 通过 memory_scopes request 申请后出现在这里；撤销后它需要重新申请。'),
+            grants.length === 0
+              ? h('div', { className: 'mem-grant-empty' }, '暂无授权。')
+              : grants.map((grant) => h('div', { className: 'mem-grant-item', key: grant.id || `${grant.scope}:${grant.grantedAt}` },
+                  h('span', {
+                    className: 'mem-grant-scope',
+                    title: `${grant.scope}${grant.grantedAt ? ` · ${fmtTime(grant.grantedAt)}` : ''}`,
+                  }, grant.label || grant.scope),
+                  h('span', { className: 'mem-grant-perm' },
+                    (Array.isArray(grant.permissions) ? grant.permissions : [])
+                      .map((permission) => (permission === 'write' ? '可写' : '只读')).join(' / ')),
+                  grant.inherited === true ? h('span', { className: 'mem-grant-pill' }, '继承') : null,
+                  h('button', {
+                    type: 'button',
+                    className: 'mem-grant-revoke',
+                    disabled: grant.inherited === true || grantBusy === grant.id,
+                    title: grant.inherited === true
+                      ? '继承自父会话的授权，请到父会话撤销'
+                      : '撤销这条授权（Agent 需要重新申请）',
+                    onClick: () => revokeGrant(grant),
+                  }, grantBusy === grant.id ? '撤销中…' : '撤销'),
+                )),
+            grantError ? h('div', { className: 'mem-scope-err' }, grantError) : null,
+          ),
           h('div', { className: 'mem-scope-search' },
             h('input', {
               type: 'search',
@@ -5338,14 +5428,14 @@ window.__ModuleLoader__.load({
         } catch (error) {
           console.warn('[dsh-memory] 记忆审计视图注册失败:', error?.message)
         }
-        // 输入框工具行右侧:本会话「记忆可见范围」按钮。session 作用域的 list 槽,
+        // 输入框工具行右侧:本会话「记忆权限」按钮。session 作用域的 list 槽,
         // owner 会把 sessionId 作为标准 prop 传进来;旧宿主没有这个槽时只少一个入口。
         try {
           slots.inject('conversation.input.right', () => slots.register({
             name: 'conversation.input.right',
             id: 'memory-visibility',
             order: 30,
-            label: () => '记忆范围',
+            label: () => '记忆权限',
           }, MemoryVisibilityButton))
         } catch (error) {
           console.warn('[dsh-memory] 记忆可见范围按钮注册失败:', error?.message)

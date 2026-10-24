@@ -338,6 +338,16 @@ export class CordisMemoryService extends Service {
     return this.impl.takeVisibilityNotice(agent)
   }
 
+  /** 面板「记忆权限」:某会话当前有效授权(含父会话继承)。 */
+  sessionGrants(sessionId: string): ReturnType<LocalMemoryService['sessionGrants']> {
+    return this.impl.sessionGrants(sessionId)
+  }
+
+  /** 注入半边:下一次 pre-step 要注入的权限变更通知(取走即删)。 */
+  takePermissionNotice(agent: unknown): ReturnType<LocalMemoryService['takePermissionNotice']> {
+    return this.impl.takePermissionNotice(agent)
+  }
+
   /** 面板:每个 scope 下按类型统计条数。 */
   scopeKindStats(): ReturnType<LocalMemoryService['scopeKindStats']> {
     return this.impl.scopeKindStats()

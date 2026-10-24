@@ -336,3 +336,89 @@ test('面板 /update:编辑新建修正版,旧记录保留且指向关系正确'
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('面板 /grants:GET 列出会话授权，POST 撤销并写入撤销通知', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-grants-'))
+  const svc = makeService(dir)
+  const session = { id: 's1', header: { id: 's1', cwd: 'D:/w' } }
+  try {
+    const agent = { session: { header: { id: 's1', cwd: 'D:/w' } } }
+    await svc.save({
+      scope: 'handbook',
+      kind: 'fact',
+      content: '本作用域用于团队约定',
+      scopeDescription: '团队约定与流程',
+      agent,
+      visibilityApproved: true,
+    } as never)
+    svc.requestOutOfScope = async () => ({ outcome: 'allowed-once' })
+    const granted = await svc.requestScopeGrants(agent, {
+      requests: [{ scope: 'handbook', permissions: ['read'] }],
+      reason: '面板授权验收',
+    })
+    const grantId = granted.grants[0]!.id
+
+    const list = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, get(`${ROUTE}/grants?session=s1`), list)
+    assert.equal(list.out.status, 200)
+    const value = list.out.body.value
+    assert.equal(value.sessionId, 's1')
+    assert.equal(value.grants.length, 1)
+    assert.equal(value.grants[0].scope, 'handbook')
+    assert.deepEqual(value.grants[0].permissions, ['read'])
+    assert.equal(value.grants[0].inherited, false)
+    assert.equal(value.grants[0].ownerSession, 's1')
+
+    const revoke = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/grants`, { session: 's1', id: grantId }), revoke)
+    assert.equal(revoke.out.status, 200)
+    assert.equal(revoke.out.body.value.grants.length, 0)
+
+    const notice = svc.takePermissionNotice(agent)
+    assert.ok(notice?.changes.some((change) => change.event === 'revoked' && change.scope === 'handbook'))
+
+    const missing = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/grants`, { session: 's1', id: grantId }), missing)
+    assert.equal(missing.out.status, 404)
+
+    const bad = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, get(`${ROUTE}/grants`), bad)
+    assert.equal(bad.out.status, 400)
+    assert.equal(bad.out.body.error.code, 'SESSION_REQUIRED')
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('面板 /grants:子会话显示父会话授权的 inherited 标记', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-grants-'))
+  const svc = makeService(dir)
+  const parent = { id: 's1', header: { id: 's1', cwd: 'D:/w' } }
+  const child = { id: 'child', header: { id: 'child', parentSession: 's1', cwd: 'D:/w', origin: 'subagent' } }
+  try {
+    const agent = { session: { header: { id: 's1', cwd: 'D:/w' } } }
+    await svc.save({
+      scope: 'handbook',
+      kind: 'fact',
+      content: '本作用域用于团队约定',
+      scopeDescription: '团队约定与流程',
+      agent,
+      visibilityApproved: true,
+    } as never)
+    svc.requestOutOfScope = async () => ({ outcome: 'allowed-once' })
+    await svc.requestScopeGrants(agent, { requests: [{ scope: 'handbook', permissions: ['read'] }], reason: '面板授权验收' })
+    svc.setSessionLookup((id) => (id === 'child' ? child : undefined))
+
+    const res = fakeRes()
+    await handleRequest(ctxWith(svc, child), ROUTE, get(`${ROUTE}/grants?session=child`), res)
+    assert.equal(res.out.status, 200)
+    const value = res.out.body.value
+    assert.equal(value.grants.length, 1)
+    assert.equal(value.grants[0].inherited, true)
+    assert.equal(value.grants[0].ownerSession, 's1')
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
