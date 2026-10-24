@@ -126,6 +126,7 @@ test('面板 /approvals:列待审批并回答一次', async () => {
     const verdict = svc.requestOutOfScope(agent, {
       tool: 'memory_search',
       query: '发布流程',
+      description: '查发布流程是否踩过坑',
       items: [{
         id: 'abc12345deadbeef',
         scope: 'global',
@@ -143,6 +144,7 @@ test('面板 /approvals:列待审批并回答一次', async () => {
     assert.equal(list.out.status, 200)
     assert.equal(list.out.body.value.approvals.length, 1)
     assert.equal(list.out.body.value.approvals[0].query, '发布流程')
+    assert.equal(list.out.body.value.approvals[0].description, '查发布流程是否踩过坑', '审批载荷带上工具调用的说明')
     assert.equal(list.out.body.value.approvals[0].items[0].content, '范围外规则正文')
     const id = list.out.body.value.approvals[0].id
 

@@ -543,6 +543,8 @@ export function resolveConfig(config                    = {})                 {
                           
                                        
                
+                                            
+                      
                                  
                    
                    
@@ -1655,6 +1657,8 @@ export class LocalMemoryService                             {
                                          
                                
                    
+                                           
+                          
                                               
                           
      ,
@@ -1665,6 +1669,7 @@ export class LocalMemoryService                             {
     const id = `vis-${Date.now().toString(36)}-${++this.approvalSeq}`
     const createdAt = Date.now()
     const expiresAt = createdAt + VISIBILITY_APPROVAL_TTL_MS
+    const description = typeof input.description === 'string' ? input.description.replace(/\s+/g, ' ').trim().slice(0, 500) : ''
     return new Promise((resolve) => {
       let timer                                           
       const onAbort = () => finish({ outcome: 'rejected' })
@@ -1684,6 +1689,7 @@ export class LocalMemoryService                             {
         tool: input.tool,
         action: input.action ?? 'read',
         query: input.query,
+        ...(description !== '' ? { description } : {}),
         items: input.items.slice(0, VISIBILITY_APPROVAL_MAX_ITEMS).map((item) => ({
           ...item,
           tags: [...item.tags],
@@ -1708,6 +1714,7 @@ export class LocalMemoryService                             {
         tool: pending.tool,
         action: pending.action,
         query: pending.query,
+        ...(pending.description !== undefined ? { description: pending.description } : {}),
         // 轮询载荷保持轻量:正文截到 1200 字,悬浮需要全文时面板再按 id 取一次。
         items: pending.items.map((item) => ({
           ...item,

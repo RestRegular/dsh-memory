@@ -558,7 +558,14 @@ window.__ModuleLoader__.load({
       '.mem-approval-item.is-off{opacity:.62}',
       '.mem-approval-item-body{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}',
       '.mem-approval-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
-      '.mem-approval-id{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px;color:var(--dsw-alias-label-secondary)}',
+      '.mem-approval-id{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px;color:var(--dsw-alias-label-secondary);padding:0;border:none;background:transparent;text-align:left;line-height:1.4;cursor:pointer;border-radius:4px}',
+      '.mem-approval-id:hover{color:var(--dsw-alias-state-business-primary,#4176e6);text-decoration:underline}',
+      '.mem-approval-id:focus-visible{outline:1px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}',
+      '.mem-approval-desc{color:var(--dsw-alias-label-primary);font-size:12.5px;line-height:1.55;word-break:break-word;white-space:pre-wrap;max-height:90px;overflow:auto}',
+      '.mem-approval-bulk{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--dsw-alias-label-secondary)}',
+      '.mem-approval-bulk button{padding:0;border:none;background:transparent;color:var(--dsw-alias-state-business-primary,#4176e6);font-size:11.5px;cursor:pointer}',
+      '.mem-approval-bulk button:hover:not(:disabled){text-decoration:underline}',
+      '.mem-approval-bulk button:disabled{color:var(--dsw-alias-label-secondary);opacity:.55;cursor:default;text-decoration:none}',
       '.mem-approval-summary{color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:1.5;word-break:break-word}',
       '.mem-approval-check{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-top:1px;padding:0;border:none;background:transparent;flex:none;cursor:pointer}',
       '.mem-approval-check .box{display:flex;align-items:center;justify-content:center;width:16px;height:16px;border:1.5px solid color-mix(in srgb,var(--dsw-alias-label-secondary) 52%,var(--dsw-alias-border-l1));border-radius:5px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 5%,transparent);color:var(--dsw-alias-label-primary-foreground);transition:background .12s ease,border-color .12s ease}',
@@ -4859,6 +4866,8 @@ window.__ModuleLoader__.load({
           ? 'Agent 想删除可见域外的记忆。允许只对本次调用生效；拒绝则不删除。'
           : '以下记忆不在本会话的可见域内。勾选要允许的条目（默认全选）；允许只对本次调用生效，其余条目不会返回。'
       const items = Array.isArray(pending.items) ? pending.items : []
+      // 模型写的用途说明(0.22.0;普通限制下工具层强制提供)。
+      const description = typeof pending.description === 'string' ? pending.description.trim() : ''
       const allIds = items.map((item) => item.id)
       // 只有"读 + 多条"才有逐条勾选的意义:写/删是单条,允许就是允许。
       const selectable = action === 'read' && allIds.length > 1
@@ -4874,6 +4883,10 @@ window.__ModuleLoader__.load({
           return { ...prev, [pending.id]: next }
         })
       }
+
+      // 逐条勾选之外的批量操作:全选 / 取消全选(0.22.0)。
+      const selectAll = () => setPicked((prev) => ({ ...prev, [pending.id]: [...allIds] }))
+      const clearAll = () => setPicked((prev) => ({ ...prev, [pending.id]: [] }))
 
       const answer = (outcome, ids) => {
         if (busy === pending.id) return
@@ -4943,6 +4956,25 @@ window.__ModuleLoader__.load({
             h('div', { className: 'mem-approval-headline' }, `工具 ${pending.tool || 'memory'} 请求${actionLabel}可见域外的记忆`),
             h('div', { className: 'mem-approval-hint' }, actionHint),
             h('div', { className: 'mem-approval-command' }, `Agent 查询：${pending.query || '（未提供）'}`),
+            description !== ''
+              ? h('div', { className: 'mem-approval-desc', title: description }, `Agent 说明：${description}`)
+              : null,
+            selectable
+              ? h('div', { className: 'mem-approval-bulk' },
+                  h('span', null, `已选 ${selectedCount} / ${allIds.length}`),
+                  h('span', { className: 'spacer' }),
+                  h('button', {
+                    type: 'button',
+                    disabled: busy === pending.id || selectedCount === allIds.length,
+                    onClick: selectAll,
+                  }, '全选'),
+                  h('button', {
+                    type: 'button',
+                    disabled: busy === pending.id || selectedCount === 0,
+                    onClick: clearAll,
+                  }, '取消全选'),
+                )
+              : null,
             h('div', { className: 'mem-approval-list' },
               items.map((item) => {
                 const checked = !selectable || selectedSet.has(item.id)
@@ -4959,7 +4991,16 @@ window.__ModuleLoader__.load({
                     : null,
                   h('div', { className: 'mem-approval-item-body' },
                     h('div', { className: 'mem-approval-row' },
-                      h('span', { className: 'mem-approval-id', title: item.id }, String(item.id).length > 12 ? `${item.id.slice(0, 8)}…${item.id.slice(-4)}` : item.id),
+                      action === 'read'
+                        ? h('button', {
+                          type: 'button',
+                          className: 'mem-approval-id',
+                          title: '在记忆面板中查看并展开这条记忆',
+                          'aria-label': `在记忆面板中查看记忆 ${item.id}`,
+                          // 点击 → 主面板「记录」页:切 tab、定位、展开并滚到这条(0.22.0)。
+                          onClick: () => openMemoryRecordPanel(item.id, item.scope, item),
+                        }, String(item.id).length > 12 ? `${item.id.slice(0, 8)}…${item.id.slice(-4)}` : String(item.id))
+                        : h('span', { className: 'mem-approval-id', title: item.id }, String(item.id).length > 12 ? `${item.id.slice(0, 8)}…${item.id.slice(-4)}` : String(item.id)),
                       h('span', { className: 'audit-pill mute' }, item.scope),
                       h('span', { className: 'audit-pill mute' }, item.kind ? kindMeta(item.kind).label : '未知'),
                       item.reason === 'kind'

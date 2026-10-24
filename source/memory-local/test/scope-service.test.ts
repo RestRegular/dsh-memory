@@ -40,7 +40,14 @@ function newService(dir, extra = {}) {
 const agent = (id, extra = {}) => ({ session: { header: { id, ...extra } } })
 
 function toolsFor(svc) {
-  return memoryTools({ getService: () => svc as never, defaultScope: 'session', projectScope: PROJECT })
+  const tools = memoryTools({ getService: () => svc as never, defaultScope: 'session', projectScope: PROJECT })
+  // 0.22.0 起「普通限制」下 memory_* 必须带 description;这组测试只考察作用域解析,
+  // 统一补一条说明(description 的强制行为在 tool-memory 的单测里覆盖)。
+  for (const spec of Object.values(tools)) {
+    const run = spec.execute.bind(spec)
+    spec.execute = (args, exec) => run({ description: '测试调用：作用域解析', ...args }, exec)
+  }
+  return tools
 }
 
 function projectFiles(dir) {

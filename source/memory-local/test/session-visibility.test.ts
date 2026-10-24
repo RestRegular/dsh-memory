@@ -26,6 +26,17 @@ after(() => {
 
 const agent = (header: Record<string, unknown>) => ({ session: { header } })
 
+/**
+ * 0.22.0 起「普通限制」下 memory_* 必须带 description。这组用例只考察可见域
+ * 的解析与审批结论,统一由包装器补一条说明;description 的强制行为本身在
+ * tool-memory/test/tools.test.ts 里单独覆盖。
+ */
+function described(tool) {
+  const run = tool.execute.bind(tool)
+  tool.execute = (args, exec) => run({ description: '测试调用：可见域断言', ...args }, exec)
+  return tool
+}
+
 test('默认没有覆盖:resolveReadScopes 仍是会话 + 项目 + global', () => {
   assert.equal(svc.visibleScopes(agent({ id: 's1', cwd: 'D:/w' })), undefined)
   assert.deepEqual(svc.sessionVisibility('s1'), null)
@@ -110,10 +121,10 @@ test('0.19.1 起记忆类型不再细化:提交的 kinds 被忽略,同 scope 的
   svc.setSessionVisibility('s1', { scopes: [{ scope: 'global', kinds: ['rule'] }], level: 'absolute' })
   assert.deepEqual(svc.sessionVisibility('s1'), { scopes: [{ scope: 'global' }], level: 'absolute' }, 'kinds 不落盘')
   const agentCtx = { agent: agent({ id: 's1', cwd: 'D:/w' }) }
-  const search = memorySearchTool({ getService: () => svc })
+  const search = described(memorySearchTool({ getService: () => svc }))
   const result = await search.execute({ query: 'alpha' }, agentCtx)
   assert.deepEqual(result.records.map((r) => r.kind).sort(), ['fact', 'rule'])
-  const get = memoryGetTool({ getService: () => svc })
+  const get = described(memoryGetTool({ getService: () => svc }))
   const facts = await svc.list({ scope: 'global', kind: 'fact' })
   const got = await get.execute({ ids: [facts[0]!.id] }, agentCtx)
   assert.equal(got.records.length, 1, '同 scope 的事实仍可读')
@@ -124,7 +135,7 @@ test('普通限制:范围外命中会发起一次审批;允许后返回、拒绝
   await svc.save({ scope: PROJECT, kind: 'fact', content: '项目发布流程 beta' })
   svc.setSessionVisibility('s1', { scopes: [{ scope: PROJECT }], level: 'normal' })
   const agentCtx = { agent: agent({ id: 's1', cwd: 'D:/w' }) }
-  const search = memorySearchTool({ getService: () => svc })
+  const search = described(memorySearchTool({ getService: () => svc }))
 
   const calls: unknown[] = []
   svc.requestOutOfScope = async (_agent, input) => {
@@ -152,7 +163,7 @@ test('无限制:不做范围过滤,也不发起审批', async () => {
   const agentCtx = { agent: agent({ id: 's1', cwd: 'D:/w' }) }
   let asked = 0
   svc.requestOutOfScope = async () => { asked++; return 'rejected' }
-  const search = memorySearchTool({ getService: () => svc })
+  const search = described(memorySearchTool({ getService: () => svc }))
   const result = await search.execute({ query: 'gamma', scope: 'all' }, agentCtx)
   assert.deepEqual([...new Set(result.records.map((r) => r.scope))].sort(), ['global', PROJECT].sort())
   assert.equal(asked, 0)
@@ -174,7 +185,7 @@ test('工具层把可见范围当白名单:显式 scope 视为不存在、memory
   svc.setSessionVisibility('s1', [PROJECT])
   const agentCtx = { agent: agent({ id: 's1', cwd: 'D:/w' }) }
 
-  const search = memorySearchTool({ getService: () => svc })
+  const search = described(memorySearchTool({ getService: () => svc }))
   const result = await search.execute({ query: '秘密 结论' }, agentCtx)
   assert.deepEqual(result.records.map((r) => r.scope), [PROJECT], '只搜可见范围')
 
@@ -186,11 +197,11 @@ test('工具层把可见范围当白名单:显式 scope 视为不存在、memory
   const all = await search.execute({ query: '秘密 结论', scope: 'all' }, agentCtx)
   assert.deepEqual(all.records.map((r) => r.scope), [PROJECT], "'all' 只等于所有可见范围")
 
-  const list = memoryListTool({ getService: () => svc })
+  const list = described(memoryListTool({ getService: () => svc }))
   const listed = await list.execute({ scope: 'all' }, agentCtx)
   assert.deepEqual([...new Set(listed.records.map((r) => r.scope))], [PROJECT])
 
-  const get = memoryGetTool({ getService: () => svc })
+  const get = described(memoryGetTool({ getService: () => svc }))
   const globalRecord = (await svc.list({ scope: 'global' }))[0]!
   const got = await get.execute({ ids: [globalRecord.id] }, agentCtx)
   assert.equal(got.records.length, 0, 'memory_get 不能读可见范围之外的正文')
@@ -219,7 +230,7 @@ test('新会话默认可见域:会话 + 项目 + global,普通限制;范围外�
     'visibleScopes 仍只代表"显式覆盖",默认策略不算',
   )
 
-  const search = memorySearchTool({ getService: () => svc })
+  const search = described(memorySearchTool({ getService: () => svc }))
   let asked = 0
   svc.requestOutOfScope = async () => { asked += 1; return 'rejected' }
   // 默认策略下的普通检索只搜默认三路:不会每次都弹审批。
@@ -245,7 +256,7 @@ test('新会话默认可见域:会话 + 项目 + global,普通限制;范围外�
   // memory_get 默认走审批;超时按"超时未答复"而不是"用户拒绝"。
   svc.requestOutOfScope = async () => 'timeout'
   const elsewhere = (await svc.list({ scope: 'other-project', kind: 'fact' })).find((r) => r.content === '默认策略别处 alpha')!
-  const get = memoryGetTool({ getService: () => svc })
+  const get = described(memoryGetTool({ getService: () => svc }))
   const got = await get.execute({ ids: [elsewhere.id] }, agentCtx)
   assert.equal(got.records.length, 0)
   assert.deepEqual(got.missing, [elsewhere.id])
@@ -255,7 +266,7 @@ test('新会话默认可见域:会话 + 项目 + global,普通限制;范围外�
 test('写入护栏:绝对限制下范围外写入/删除按不存在处理', async () => {
   svc.setSessionVisibility('s1', { scopes: [{ scope: PROJECT }], level: 'absolute' })
   const agentCtx = { agent: agent({ id: 's1', cwd: 'D:/w' }) }
-  const save = memorySaveTool({ getService: () => svc })
+  const save = described(memorySaveTool({ getService: () => svc }))
 
   await assert.rejects(
     () => save.execute({ scope: 'global', content: '绝对限制不该写进去' }, agentCtx),
@@ -269,7 +280,7 @@ test('写入护栏:绝对限制下范围外写入/删除按不存在处理', asy
   const ok = await save.execute({ scope: PROJECT, kind: 'fact', content: '绝对限制写进项目' }, agentCtx)
   assert.equal(ok.scope, PROJECT)
 
-  const forget = memoryForgetTool({ getService: () => svc })
+  const forget = described(memoryForgetTool({ getService: () => svc }))
   const record = (await svc.list({ scope: 'global', kind: 'fact' })).find((r) => r.content === '绝对限制不该写进去')
   await svc.save({ scope: 'global', kind: 'fact', content: '绝对限制全局秘密' })
   const secret = (await svc.list({ scope: 'global', kind: 'fact' })).find((r) => r.content === '绝对限制全局秘密')!
@@ -294,7 +305,7 @@ test('写入护栏:绝对限制下范围外写入/删除按不存在处理', asy
 test('写入护栏:普通限制下范围外写入/删除先审批,拒绝与超时都讲真实原因', async () => {
   svc.setSessionVisibility('s1', { scopes: [{ scope: PROJECT }], level: 'normal' })
   const agentCtx = { agent: agent({ id: 's1', cwd: 'D:/w' }) }
-  const save = memorySaveTool({ getService: () => svc })
+  const save = described(memorySaveTool({ getService: () => svc }))
   const calls: Array<{ tool: string; action?: string; query: string }> = []
   svc.requestOutOfScope = async (_agent, input) => {
     calls.push({ tool: input.tool, action: input.action, query: input.query })
@@ -323,7 +334,7 @@ test('写入护栏:普通限制下范围外写入/删除先审批,拒绝与超�
   const record = (await svc.list({ scope: 'global', kind: 'fact' })).find((r) => r.content === '普通限制批准写入')!
   assert.ok(record)
 
-  const forget = memoryForgetTool({ getService: () => svc })
+  const forget = described(memoryForgetTool({ getService: () => svc }))
   svc.requestOutOfScope = async (_agent, input) => {
     calls.push({ tool: input.tool, action: input.action, query: input.query })
     return 'rejected'

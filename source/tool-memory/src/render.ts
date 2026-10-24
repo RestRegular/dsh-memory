@@ -60,17 +60,21 @@ export function renderSearchResult(value: SearchResult, label: ScopeLabel): stri
     return `没有找到可见范围内的相关记忆。\n${note}`
   }
   // 已出现过的条目(上下文去重)只回 id：不带作用域/类型/标签/摘要。
-  let omitted = 0
-  const body = value.records.map((hit) => {
+  // 它们单独成块、与带摘要的条目之间空一行 —— 否则一串裸 id 看起来像上一条的
+  // 续行,模型分不清哪些条目「这次有摘要」哪些「只是占位 id」(0.22.0)。
+  const shown: string[] = []
+  const bare: string[] = []
+  for (const hit of value.records) {
     if (hit.deduped === true) {
-      omitted += 1
-      return shortId(hit.id)
+      bare.push(shortId(hit.id))
+      continue
     }
     const tags = joinList(hit.tags)
     const meta = `${label(hit.scope)}/${hit.kind}${tags === '' ? '' : ` · ${tags}`}`
-    return `[${hit.score.toFixed(3)}] ${shortId(hit.id)} (${meta}) ${hit.summary}`
-  }).join('\n')
-  const tail = [omitted > 0 ? DEDUPE_NOTE : '', note].filter((part) => part !== '').join('\n\n')
+    shown.push(`[${hit.score.toFixed(3)}] ${shortId(hit.id)} (${meta}) ${hit.summary}`)
+  }
+  const body = [shown.join('\n'), bare.join('\n')].filter((part) => part !== '').join('\n\n')
+  const tail = [bare.length > 0 ? DEDUPE_NOTE : '', note].filter((part) => part !== '').join('\n\n')
   return tail === '' ? body : `${body}\n\n${tail}`
 }
 

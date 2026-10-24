@@ -257,7 +257,7 @@ test('memory_search 逐条允许:只返回勾选的条目,其余计入 withheld=
     },
   }
   const tool = memorySearchTool({ getService: () => partialService })
-  const result = await tool.execute({ query: 'x' }, { agent: { session: { id: 's1' } } })
+  const result = await tool.execute({ query: 'x', description: '查范围外的发布规则' }, { agent: { session: { id: 's1' } } })
   assert.deepEqual(asked.sort(), ['outside-1', 'outside-2'], '审批载荷带上全部范围外命中')
   assert.deepEqual(result.records.map((r) => r.id).sort(), ['abcdef12-3456-7890-abcd-ef1234567890', 'outside-1'])
   assert.deepEqual(result.withheld, { count: 1, reason: 'partial' })
@@ -311,3 +311,69 @@ test('被可见域挡住时渲染真实原因:拒绝/超时/无法审批;绝对�
   assert.match(mixed, /\[0\.500\] abcdef12 \(全局\/fact\) 短摘要/)
   assert.match(mixed, /用户拒绝了本次访问/)
 })
+
+test('renderSearchResult:去重 ID 单独成块,与带摘要条目之间空一行', () => {
+  const text = renderSearchResult({
+    records: [
+      { id: 'aaaaaaaa-1111', score: 0.9, scope: 'global', kind: 'fact', tags: [], updatedAt: 1, summary: '摘要 A' },
+      { id: 'bbbbbbbb-2222', score: 0.8, scope: 'global', kind: 'fact', tags: [], updatedAt: 1, summary: '', deduped: true },
+      { id: 'cccccccc-3333', score: 0.7, scope: 'global', kind: 'fact', tags: [], updatedAt: 1, summary: '摘要 C' },
+    ],
+  }, label)
+  assert.equal(
+    text,
+    `[0.900] aaaaaaaa (全局/fact) 摘要 A\n[0.700] cccccccc (全局/fact) 摘要 C\n\nbbbbbbbb\n\n${DEDUPE_NOTE}`,
+    '裸 ID 与含摘要条目之间必须空一行,否则看起来像上一条的续行',
+  )
+})
+
+test('普通限制:memory_* 缺少 description 拒绝执行,提供后随审批载荷传给面板', async () => {
+  const outside = {
+    id: 'outside-1',
+    scope: 'other-project',
+    kind: 'fact',
+    content: '范围外 A',
+    tags: [],
+    importance: 0.5,
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  const scoped = {
+    ...service,
+    search: async () => [{ record: outside, score: 0.8 }],
+    visibilityPolicy: () => ({ level: 'normal' as const, scopes: [{ scope: PROJECT_SCOPE }], source: 'explicit' as const }),
+  }
+  let asked: { description?: string } | undefined
+  const spy = {
+    ...scoped,
+    requestOutOfScope: async (_agent: unknown, input: { description?: string }) => {
+      asked = input
+      return 'allowed-once' as const
+    },
+  }
+  const exec = { agent: { session: { id: 's1' } } }
+  const tool = memorySearchTool({ getService: () => spy })
+  await assert.rejects(
+    () => tool.execute({ query: 'x' }, exec),
+    (error: { code?: string }) => error.code === 'DESCRIPTION_REQUIRED',
+    '普通限制下缺 description 直接拒绝,不发起审批',
+  )
+  const result = await tool.execute({ query: 'x', description: '  查发布流程的坑  ' }, exec)
+  assert.equal(result.records.length, 1)
+  assert.equal(asked?.description, '查发布流程的坑', 'description 折叠空白后随审批载荷传给面板')
+})
+
+test('普通限制:绝对限制 / 无限制下不要求 description', async () => {
+  const exec = { agent: { session: { id: 's1' } } }
+  for (const level of ['absolute', 'none'] as const) {
+    const tool = memorySearchTool({
+      getService: () => ({
+        ...service,
+        visibilityPolicy: () => ({ level, scopes: [{ scope: 'global' }], source: 'explicit' as const }),
+      }),
+    })
+    const result = await tool.execute({ query: 'pnpm' }, exec)
+    assert.equal(result.records.length, 1, `${level}: 不传 description 也能执行`)
+  }
+})
+

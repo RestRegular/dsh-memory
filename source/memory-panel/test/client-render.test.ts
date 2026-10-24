@@ -1801,6 +1801,80 @@ test('审批卡样式对齐系统审批弹窗:警告色 strip + 同一批主题 
   assert.doesNotMatch(css, /\.mem-approval\{[^}]*position:fixed/, '不再是全局 fixed 浮层')
 })
 
+test('审批卡:全选/取消全选、展示 Agent 说明、点记忆 ID 跳到面板记录页', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const Dock = (exports.__test as { MemoryApprovalDock: (p: Record<string, unknown>) => unknown }).MemoryApprovalDock
+  const testApi = exports.__test as {
+    takeRecordFocus: () => { id?: string; scope?: string } | null
+    requestRecordFocus: (target: unknown) => void
+  }
+  const item = (id: string, content: string) => ({
+    id,
+    scope: 'global',
+    kind: 'rule',
+    content,
+    tags: [],
+    importance: 0.5,
+    updatedAt: 1,
+    reason: 'scope',
+  })
+  const approval = {
+    id: 'a1',
+    sessionId: 's1',
+    tool: 'memory_search',
+    action: 'read',
+    query: '发布流程',
+    description: '查发布流程是否踩过坑',
+    items: [item('abcdef1234567890', '范围外规则 A'), item('12345678abcdef00', '范围外规则 B')],
+    createdAt: 1,
+    expiresAt: 2,
+  }
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string, init?: { method?: string }) => {
+    if (init === undefined || init.method === 'GET') {
+      return { status: 200, json: async () => ({ ok: true, value: { approvals: [approval] } }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, value: { answered: true } }) }
+  }
+  const bulk = (label: string) => collect(current).find((n) =>
+    n.tag === 'button' && ['全选', '取消全选'].includes(textOf(n).trim()) && textOf(n).trim() === label)
+  const checks = () => collect(current).filter((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-approval-check'))
+  let current: RenderNode | null = null
+  try {
+    const element = () => hooks.React.createElement(Dock, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    assert.ok(textOf(current).includes('Agent 说明：查发布流程是否踩过坑'), '审批卡展示工具调用的 description')
+    assert.ok(bulk('全选') && bulk('取消全选'), '逐条勾选之外还有全选 / 取消全选')
+
+    ;(bulk('取消全选')!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(checks().map((box) => box.props?.['aria-checked']), [false, false], '取消全选清空所有勾选')
+    const allow = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-approval-allow'))
+    assert.equal(allow?.props?.disabled, true, '一条都没选时允许按钮禁用')
+
+    ;(bulk('全选')!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(checks().map((box) => box.props?.['aria-checked']), [true, true], '全选重新勾上所有条目')
+
+    const idButton = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '') === 'mem-approval-id')
+    assert.ok(idButton, '记忆 ID 是可点击按钮')
+    ;(idButton!.props!.onClick as () => void)()
+    const target = testApi.takeRecordFocus()
+    assert.equal(target?.id, 'abcdef1234567890', '点击 ID 把焦点交给面板记录页')
+    assert.equal(target?.scope, 'global')
+    assert.equal((target as { record?: { content?: string } } | null)?.record?.content, '范围外规则 A', '带上记录快照,列表里没有时也能展开')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+    testApi.takeRecordFocus()
+  }
+  hooks.resetAll()
+})
+
 
 test('记忆视图用 composer overlay 占满高度，滚动只发生在审计列表里', async () => {
   const { exports, hooks } = await loadBundle()

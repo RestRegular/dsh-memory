@@ -139,8 +139,9 @@ export interface MemoryToolService {
    * 普通限制:向用户发起一次范围外访问审批(等待面板回答)。
    * 结局必须区分「拒绝 / 超时 / 不支持审批」—— 模型要看到真实原因。
    * 0.21.0 起可返回 `{ outcome, allowedIds }` 支持逐条允许。
+   * `description` 是模型为这次调用写的用途说明,审批弹窗会展示给用户(0.22.0)。
    */
-  requestOutOfScope?(agent: unknown, input: { tool: string; action?: 'read' | 'write' | 'delete'; query: string; items: VisibilityApprovalItem[]; signal?: AbortSignal }): Promise<ApprovalAnswer>
+  requestOutOfScope?(agent: unknown, input: { tool: string; action?: 'read' | 'write' | 'delete'; query: string; description?: string; items: VisibilityApprovalItem[]; signal?: AbortSignal }): Promise<ApprovalAnswer>
   /** 按 id 批量取记录(召回摘要里带了 id,模型可直接取全文)。 */
   getByIds?(ids: string[]): GetSourceRecord[]
   /** 写路径默认 scope(省略 scope 时落到哪)。 */
@@ -271,6 +272,38 @@ function outsideReason(policy: VisibilityPolicyView | undefined, scope: string):
   return scopeInPolicy(policy, scope) ? 'kind' : 'scope'
 }
 
+/** memory_* 的 description 参数说明(模型可见)。 */
+const DESCRIPTION_PARAM_DESCRIPTION =
+  '本次调用要做什么（一句话，给用户看）。本会话「记忆范围」为普通限制时必填：审批范围外记忆时，弹窗会把它展示给用户。'
+
+/**
+ * 把模型的 description 收拾成一行(审批弹窗里展示)。
+ * 省略/空白 = undefined(是否合法由 requireDescription 按限制等级判断)。
+ */
+function descriptionOf(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined
+  const value = raw.replace(/\s+/g, ' ').trim()
+  return value === '' ? undefined : value.slice(0, 500)
+}
+
+/**
+ * 「记忆范围」为普通限制时,memory_* 必须写 description:审批弹窗要把 Agent 的
+ * 意图展示给用户,只有工具名 + 查询词不够判断该不该放行。
+ *
+ * 拿不到会话(老宿主 / 测试 mock / 面板直调)时不强制 —— 没有会话就没有审批弹窗;
+ * absolute / none 也不强制(前者范围外一律视为不存在,后者不需要审批)。
+ */
+function requireDescription(service: MemoryToolService, agent: unknown, raw: unknown): void {
+  if (agent === undefined) return
+  const policy = visibilityPolicy(service, agent)
+  if (policy === undefined || policy.level !== 'normal') return
+  if (descriptionOf(raw) !== undefined) return
+  throw new MemoryToolError(
+    'DESCRIPTION_REQUIRED',
+    '本会话「记忆范围」为普通限制：调用 memory_* 工具时必须提供 description 字段，用一句话说明这次调用要做什么（审批范围外记忆时弹窗会展示给用户）。',
+  )
+}
+
 function recordsToApprovalItems(
   policy: VisibilityPolicyView | undefined,
   records: readonly { id: string; scope: string; kind: string; content: string; tags?: string[]; importance?: number; updatedAt: number }[],
@@ -311,6 +344,7 @@ async function askOutOfScope(
   records: readonly { id: string; scope: string; kind: string; content: string; tags?: string[]; importance?: number; updatedAt: number }[],
   action: 'read' | 'write' | 'delete',
   signal?: AbortSignal,
+  description?: string,
 ): Promise<ApprovalVerdict> {
   if (records.length === 0) return { outcome: 'allowed-once' }
   if (typeof service.requestOutOfScope !== 'function') return { outcome: 'unavailable' }
@@ -320,6 +354,7 @@ async function askOutOfScope(
       tool,
       action,
       query,
+      ...(description !== undefined ? { description } : {}),
       items: recordsToApprovalItems(policy, records),
       ...(signal !== undefined ? { signal } : {}),
     })
@@ -448,6 +483,8 @@ export interface SaveArgs {
   ttlMs?: number
   /** 流程触发词(kind=procedure)。系统提示里的流程索引按它匹配任务/工具名。 */
   triggers?: string[]
+  /** 本次调用的用途(给用户看);普通限制下必填,审批弹窗展示。 */
+  description?: string
 }
 
 export interface SaveResult {
@@ -486,9 +523,12 @@ export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, Sav
       expiresAt: { type: 'number', description: '过期时间(毫秒时间戳)。kind=state 不传时按设置里的默认 TTL(7 天)' },
       ttlMs: { type: 'number', description: '相对有效期(毫秒)。与 expiresAt 二选一，expiresAt 优先' },
       triggers: { type: 'array', items: { type: 'string' }, description: '流程触发词(kind=procedure)：工具名/关键词/路径；缺省用 tags' },
+      description: { type: 'string', description: DESCRIPTION_PARAM_DESCRIPTION },
     },
     async execute(args: SaveArgs, exec?: unknown): Promise<SaveResult> {
       const service = svc(opts)
+      const agent = agentOf(exec)
+      requireDescription(service, agent, args.description)
       if (typeof args.content !== 'string' || args.content.trim().length === 0) {
         throw new MemoryToolError('CONTENT_EMPTY', 'content must be a non-empty string')
       }
@@ -500,7 +540,6 @@ export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, Sav
       // project)。默认值的最终权威是 provider 的 `save` —— 省略时干脆不带 scope 字段,
       // 但要把会话上下文(exec.agent)带过去,否则它没法知道"当前会话"是谁。
       const requested = args.scope?.trim()
-      const agent = agentOf(exec)
       const pathArg = typeof args.path === 'string' ? args.path.trim() : ''
 
       let explicit: string | undefined
@@ -555,6 +594,7 @@ export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, Sav
           [draft],
           'write',
           (exec as { signal?: AbortSignal } | undefined)?.signal,
+          descriptionOf(args.description),
         )
         if (!verdictAllows(verdict, draft.id)) {
           throw visibilityError(verdict.outcome === 'allowed-once' ? 'rejected' : verdict.outcome, 'write', target)
@@ -634,6 +674,8 @@ export interface SearchArgs {
   includeSuperseded?: boolean
   /** 每条摘要的字数上限；默认 160。 */
   summaryChars?: number
+  /** 本次调用的用途(给用户看);普通限制下必填,审批弹窗展示。 */
+  description?: string
 }
 
 export interface SearchHit {
@@ -671,14 +713,16 @@ export function memorySearchTool(opts: MemoryToolsOptions): ToolSpec<SearchArgs,
       topK: { type: 'number', description: '1~20' },
       includeSuperseded: { type: 'boolean', description: '默认 false；true 时把已被 supersede 的旧版本也返回（历史核对）' },
       summaryChars: { type: 'number', description: `每条摘要的字数上限（默认 ${DEFAULT_SUMMARY_CHARS}，20~2000）` },
+      description: { type: 'string', description: DESCRIPTION_PARAM_DESCRIPTION },
     },
     async execute(args: SearchArgs, exec?: unknown): Promise<SearchResult> {
       const service = svc(opts)
+      const agent = agentOf(exec)
+      requireDescription(service, agent, args.description)
       if (typeof args.query !== 'string' || args.query.trim().length === 0) {
         throw new MemoryToolError('QUERY_EMPTY', 'query must be a non-empty string')
       }
       const resolved = resolveScope(opts, service, exec, args.scope, 'read')
-      const agent = agentOf(exec)
       const policy = visibilityPolicy(service, agent)
       const level = policy?.level ?? 'none'
       // level=none 时策略里的 scopes 只是偏好,不参与限制(等价于没有可见域)。
@@ -725,6 +769,7 @@ export function memorySearchTool(opts: MemoryToolsOptions): ToolSpec<SearchArgs,
             outside.map((hit) => hit.record),
             'read',
             (exec as { signal?: AbortSignal } | undefined)?.signal,
+            descriptionOf(args.description),
           )
         }
         // verdict 为空 = 没有发起审批(绝对限制 / 没有范围外命中):范围外一律不放行。
@@ -769,6 +814,8 @@ export interface ForgetArgs {
   id?: string
   query?: string
   scope?: string
+  /** 本次调用的用途(给用户看);普通限制下必填,审批弹窗展示。 */
+  description?: string
 }
 
 export interface ForgetResult {
@@ -784,12 +831,14 @@ export function memoryForgetTool(opts: MemoryToolsOptions): ToolSpec<ForgetArgs,
       id: { type: 'string', description: 'Exact record id' },
       query: { type: 'string', description: 'Substring match; by default only the current session scope' },
       scope: { type: 'string', description: "省略=当前会话；显式指定只删那一个作用域。'all' 不能与 query 同用(防批量误删)。" },
+      description: { type: 'string', description: DESCRIPTION_PARAM_DESCRIPTION },
     },
     async execute(args: ForgetArgs, exec?: unknown): Promise<ForgetResult> {
       const service = svc(opts)
+      const agent = agentOf(exec)
+      requireDescription(service, agent, args.description)
       if (!args.id && !args.query) throw new MemoryToolError('TARGET_REQUIRED', 'provide id or query')
       if (args.id && args.query) throw new MemoryToolError('TARGET_AMBIGUOUS', 'provide id or query, not both')
-      const agent = agentOf(exec)
       // 没有会话就不判断可见域:护栏只对"本会话的 Agent"生效(与 provider 一致)。
       const policy = agent === undefined ? undefined : visibilityPolicy(service, agent)
       const level = policy?.level ?? 'none'
@@ -814,6 +863,7 @@ export function memoryForgetTool(opts: MemoryToolsOptions): ToolSpec<ForgetArgs,
               blocked,
               'delete',
               signal,
+              descriptionOf(args.description),
             )
             if (!verdictAllows(verdict, args.id)) {
               throw visibilityError(verdict.outcome === 'allowed-once' ? 'rejected' : verdict.outcome, 'delete', blocked[0]!.scope)
@@ -860,6 +910,7 @@ export function memoryForgetTool(opts: MemoryToolsOptions): ToolSpec<ForgetArgs,
           }],
           'delete',
           signal,
+          descriptionOf(args.description),
         )
         if (!verdictAllows(verdict, `query:${scope}`)) {
           throw visibilityError(verdict.outcome === 'allowed-once' ? 'rejected' : verdict.outcome, 'delete', scope)
@@ -884,6 +935,8 @@ export interface ListArgs {
   scope?: string
   kind?: string
   limit?: number
+  /** 本次调用的用途(给用户看);普通限制下必填,审批弹窗展示。 */
+  description?: string
 }
 
 export interface ListResult {
@@ -905,11 +958,13 @@ export function memoryListTool(opts: MemoryToolsOptions): ToolSpec<ListArgs, Lis
       scope: { type: 'string', description: "省略=当前会话；'all'=所有作用域；其他值只列该作用域。" },
       kind: { type: 'string' },
       limit: { type: 'number', description: '1~200' },
+      description: { type: 'string', description: DESCRIPTION_PARAM_DESCRIPTION },
     },
     async execute(args: ListArgs, exec?: unknown): Promise<ListResult> {
       const service = svc(opts)
-      const resolved = resolveScope(opts, service, exec, args.scope, 'read')
       const agent = agentOf(exec)
+      requireDescription(service, agent, args.description)
+      const resolved = resolveScope(opts, service, exec, args.scope, 'read')
       const policy = visibilityPolicy(service, agent)
       const level = policy?.level ?? 'none'
       // level=none 时策略里的 scopes 只是偏好,不参与限制(等价于没有可见域)。
@@ -951,6 +1006,7 @@ export function memoryListTool(opts: MemoryToolsOptions): ToolSpec<ListArgs, Lis
             outside,
             'read',
             (exec as { signal?: AbortSignal } | undefined)?.signal,
+            descriptionOf(args.description),
           )
         }
         const approvedOutside = verdict === undefined
@@ -1033,6 +1089,8 @@ export interface GetArgs {
   fields?: GetField[] | string
   /** summary 字段的字数上限；默认 160。 */
   summaryChars?: number
+  /** 本次调用的用途(给用户看);普通限制下必填,审批弹窗展示。 */
+  description?: string
 }
 
 export type GetRecord = { id: string } & Partial<Record<GetField, unknown>>
@@ -1115,9 +1173,12 @@ export function memoryGetTool(opts: MemoryToolsOptions): ToolSpec<GetArgs, GetRe
         description: `只取这些字段，省略=${DEFAULT_GET_FIELDS.join('+')}；可选：${GET_FIELDS.join(' / ')}（id 始终返回）`,
       },
       summaryChars: { type: 'number', description: `summary 字段的字数上限（默认 ${DEFAULT_SUMMARY_CHARS}，20~2000）` },
+      description: { type: 'string', description: DESCRIPTION_PARAM_DESCRIPTION },
     },
     async execute(args: GetArgs, exec?: unknown): Promise<GetResult> {
       const service = svc(opts)
+      const agent = agentOf(exec)
+      requireDescription(service, agent, args.description)
       const ids = Array.isArray(args.ids)
         ? [...new Set(args.ids.map(String).filter((id) => id.trim() !== ''))].slice(0, 50)
         : []
@@ -1130,7 +1191,6 @@ export function memoryGetTool(opts: MemoryToolsOptions): ToolSpec<GetArgs, GetRe
       try {
         const all = service.getByIds(ids)
         // 可见域是白名单:即使知道 id,也不能直接读别的范围/别的类型的正文。
-        const agent = agentOf(exec)
         const policy = visibilityPolicy(service, agent)
         const level = policy?.level ?? 'none'
         const inside = all.filter((record) => recordAllowed(policy, record.scope, record.kind))
@@ -1147,6 +1207,7 @@ export function memoryGetTool(opts: MemoryToolsOptions): ToolSpec<GetArgs, GetRe
             outside,
             'read',
             (exec as { signal?: AbortSignal } | undefined)?.signal,
+            descriptionOf(args.description),
           )
         }
         // verdict 为空 = 没有发起审批(绝对限制):范围外一律按不存在处理。
