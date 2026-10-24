@@ -2,6 +2,13 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.22.2 — 修复审批卡不显示 Agent 查询 / 说明
+
+- **现象**：审批条目一多（例如 18 条）时，审批卡里只看到标题、提示和条目列表，`Agent 查询` 与 `Agent 说明` 两行完全消失。
+- **根因**：`.mem-approval-command` / `.mem-approval-desc` 带 `overflow:auto`。在 flex 列布局里，非 `visible` 的 `overflow` 会把自动最小尺寸变成 0；条目列表的自然高度很大，把 `.mem-approval-body` 顶到 `max-height` 后，flex 按基准尺寸分配收缩量，这两行被压成 ~1px（headless Chrome 实测 1.06px / 1.02px）。
+- **修复**：给 `.mem-approval-headline` / `-hint` / `-command` / `-desc` / `-bulk` 全部加 `flex:none`，只允许 `.mem-approval-list` 收缩并滚动。headless Chrome 实测修复后两行高度 20px / 19.4px。
+- **测试**：CSS 回归断言锁定五行 `flex:none` 与列表 `min-height:0`；面板渲染用例照旧。全套通过。
+
 ## 0.22.1 — 审批卡可折叠、整行点击选中
 
 - **审批卡可折叠**：strip 右侧新增「折叠 / 展开」按钮。折叠只收起详情（标题、说明、查询、条目列表），strip 与「拒绝 / 允许」动作行保留，折叠状态在 strip 上显示「已选 N/总数」，不必展开就能审批。切换会话或新审批进来时默认展开。

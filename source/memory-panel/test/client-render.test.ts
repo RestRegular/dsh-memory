@@ -1799,6 +1799,12 @@ test('审批卡样式对齐系统审批弹窗:警告色 strip + 同一批主题 
   assert.match(css, /\.mem-approval-card\{[^}]*state-warn-secondary[^}]*dsw-radius-xl[^}]*specific-input-major[^}]*dsw-shadow-lv2/, '卡片边框/圆角/底色/阴影与系统审批卡同一批 token')
   assert.match(css, /\.mem-approval-strip\{[^}]*state-warn-tertiary[^}]*state-warn-primary/, '等待条用警告色')
   assert.doesNotMatch(css, /\.mem-approval\{[^}]*position:fixed/, '不再是全局 fixed 浮层')
+  // 0.22.2 回归:command/desc 带 overflow:auto,flex 自动最小尺寸会变成 0;
+  // 条目一多,列表把整张卡顶到 max-height 时它们会被压成 0 高(查询/说明消失)。
+  for (const cls of ['headline', 'hint', 'command', 'desc', 'bulk']) {
+    assert.match(css, new RegExp(`\\.mem-approval-${cls}\\{[^}]*flex:none`), `详情行 ${cls} 必须锁住,不能被列表压缩`)
+  }
+  assert.match(css, /\.mem-approval-list\{[^}]*min-height:0/, '只有条目列表可以收缩')
 })
 
 test('审批卡:全选/取消全选、展示 Agent 说明、点记忆 ID 跳到面板记录页', async () => {
