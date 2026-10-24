@@ -5,17 +5,21 @@
  * "正文已注入"与"只给了标签"。这里按 sessionId 保存:
  *   - not_seen        → 没有任何记录(默认)
  *   - hint_injected   → 只进过截断标签索引,正文仍未加载
+ *   - summary_injected→ 记忆摘要（memory_search / memory_list 的短摘要）已进入上下文
  *   - content_injected→ 正文已进入当前上下文
  *
  * 版本 = record.updatedAt。内容更新后允许重新注入;上下文重建(压缩/新会话)
  * 由调用方 clear(),绝不用"历史上出现过"代替"当前仍在上下文里"。
+ *
+ * 0.21.0 加 summary_injected：memory_search / memory_list 返回过的摘要也算
+ * "条目已出现"，再次命中同版本时只回 id（见 memoryContextDedup 服务）。
  *
  * 0.17.0 起可挂一个按会话的持久化 store(见 session-state-store.ts):状态在
  * 插件重载 / 宿主重启后仍能恢复;读盘只在第一次接触该会话时发生,写入由 store
  * 自己做合并与阈值 compact。
  */
 
-export type InjectEntryStatus = 'hint_injected' | 'content_injected'
+export type InjectEntryStatus = 'hint_injected' | 'summary_injected' | 'content_injected'
 
 export interface InjectEntrySnapshot {
   id: string
@@ -27,6 +31,7 @@ export interface InjectEntrySnapshot {
 export interface SessionInjectSnapshot {
   sessionId: string
   hintCount: number
+  summaryCount: number
   contentCount: number
   lastText: string
   lastQuery: string
@@ -160,8 +165,29 @@ export class InjectionState {
     const changed: InjectEntrySnapshot[] = []
     for (const record of records) {
       const previous = state.entries.get(record.id)
-      if (previous?.status === 'content_injected') continue
+      // 标签是比摘要/正文更弱的证据:已经进过摘要或正文时不能往回降级。
+      if (previous?.status === 'content_injected' || previous?.status === 'summary_injected') continue
       const entry = { status: 'hint_injected' as const, version: record.updatedAt, at: now }
+      state.entries.set(record.id, entry)
+      changed.push({ id: record.id, ...entry })
+    }
+    if (changed.length > 0) this.storeOf(sessionId)?.append(changed)
+    this.trim(state, sessionId)
+  }
+
+  /**
+   * 记录"摘要已进入上下文"(memory_search / memory_list 返回过的条目)。
+   * 同版本的正文已注入时不降级:正文比摘要更强。
+   */
+  markSummary(sessionId: string | undefined, records: ReadonlyArray<{ id: string; updatedAt: number }>): void {
+    const state = this.stateOf(sessionId)
+    const now = Date.now()
+    const changed: InjectEntrySnapshot[] = []
+    for (const record of records) {
+      const previous = state.entries.get(record.id)
+      if (previous?.status === 'content_injected' && previous.version === record.updatedAt) continue
+      if (previous?.status === 'summary_injected' && previous.version === record.updatedAt) continue
+      const entry = { status: 'summary_injected' as const, version: record.updatedAt, at: now }
       state.entries.set(record.id, entry)
       changed.push({ id: record.id, ...entry })
     }
@@ -205,6 +231,27 @@ export class InjectionState {
       fresh.push(record)
     }
     return { fresh, deduplicated, updated }
+  }
+
+  /**
+   * 从工具结果去重的角度：这批记录里哪些已经以同版本进入过上下文。
+   *
+   * 只认摘要 / 正文（content_injected、summary_injected）——标签索引只给了
+   * id + tags，不包含摘要，所以 hint_injected 不算“摘要已出现”。
+   * 版本（updatedAt）变了等于内容变了，允许重新返回摘要。
+   */
+  seenInContext(
+    sessionId: string | undefined,
+    records: ReadonlyArray<{ id: string; updatedAt: number }>,
+  ): Set<string> {
+    const state = this.stateOf(sessionId)
+    const seen = new Set<string>()
+    for (const record of records) {
+      const entry = state.entries.get(record.id)
+      if (entry === undefined || entry.version !== record.updatedAt) continue
+      if (entry.status === 'content_injected' || entry.status === 'summary_injected') seen.add(record.id)
+    }
+    return seen
   }
 
   /** 同一上下文里是否已经注入过同一段文本(最后一道按内容幂等)。 */
@@ -260,12 +307,13 @@ export class InjectionState {
   snapshot(sessionId: string): SessionInjectSnapshot {
     const state = this.sessions.get(sessionId)
     if (state === undefined) {
-      return { sessionId, hintCount: 0, contentCount: 0, lastText: '', lastQuery: '', entries: [] }
+      return { sessionId, hintCount: 0, summaryCount: 0, contentCount: 0, lastText: '', lastQuery: '', entries: [] }
     }
     const entries = [...state.entries.entries()].map(([id, entry]) => ({ id, ...entry }))
     return {
       sessionId,
       hintCount: entries.filter((entry) => entry.status === 'hint_injected').length,
+      summaryCount: entries.filter((entry) => entry.status === 'summary_injected').length,
       contentCount: entries.filter((entry) => entry.status === 'content_injected').length,
       lastText: state.lastText,
       lastQuery: state.lastQuery,

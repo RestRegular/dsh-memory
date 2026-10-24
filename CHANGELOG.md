@@ -2,6 +2,20 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.21.0 — 审批卡进会话内、逐条允许；memory_search / memory_list 上下文去重
+
+- **范围外审批卡重做（行为 + 样式对齐系统权限审批弹窗）**：
+  - 注册位置从 `shell.overlay`（全局 fixed 浮层）改为 `conversation.input.dock`（会话作用域的输入框上方）。审批**只在发起它的那个会话里显示**：切到别的会话看不到，也不会盖住设置页 / 别的会话；组件按标准 `sessionId` prop 轮询 `/memory/api/approvals?session=…`。
+  - 版式照抄宿主 `dsh-client-ui-approval` 的审批卡：警告色 strip（「等待审批」+ 工具名）、`mem-approval-body` 标题 / 查询语句、右对齐的「拒绝 / 允许」动作行；卡片宽度、圆角、底色、阴影、strip 配色都使用与系统审批卡同一批主题 token（`state-warn-secondary` / `state-warn-tertiary` / `dsw-radius-xl` / `specific-input-major` / `dsw-shadow-lv2`，缺变量时带同色回退）。Enter = 允许、Esc = 拒绝（焦点在卡片内）。
+  - **逐条允许**：读审批默认全选，可以取消其中一条或多条，按钮变成「允许选中的 N 条」；全选时仍是「允许一次」。工具侧按 `{ outcome: 'allowed-once', allowedIds }` 只放行勾选的 id，其余条目计入 `withheld: { count, reason: 'partial' }` 并渲染真实原因；写 / 删审批是单条，不显示勾选框。
+  - provider：`requestOutOfScope()` 返回 `{ outcome, allowedIds? }`（老的字符串返回仍兼容）；`answerVisibilityApproval(id, outcome, allowedIds?)` 会丢弃不属于本次请求的 id；全选退化为不带 `allowedIds`（= 全部允许，包括超过浮层展示上限的条目）；空勾选按拒绝处理。面板 `POST /memory/api/approvals` 接受 `allowedIds`，非数组报 `APPROVAL_IDS_INVALID`。
+- **memory_search / memory_list 的上下文去重**：
+  - 注入半边的会话去重状态新增 `summary_injected`（`memory_search` 返回摘要 / `memory_list` 返回正文分别记 `summary_injected` / `content_injected`），持久化状态 code = 3；`markHint` 不再把摘要 / 正文降级成标签。
+  - 注入半边新增 `memoryContextDedup` 服务（`ctx.provide`）：`seen` / `markSummary` / `markContent`。工具半边在**每次执行时**惰性 `ctx.get`（不在 apply 里取样），拿不到就自然退化为不去重。
+  - 规则：同一条记忆、同一 `updatedAt` 版本已经以摘要或正文进入过上下文 → `memory_search` / `memory_list` 只回记忆 ID；内容更新（版本变化）→ 照常返回摘要 / 正文并记住新版本。
+  - 返回文本在去重发生时追加固定提示：「本次请求部分记忆摘要因上下文去重机制被省略，若要获取完整内容请使用 memory_get」。`memory_get` 不去重（显式取正文）。系统提示策略段同步说明这条口径。
+- **测试**：InjectionState 的 summary/seen/降级保护；工具层 search/list 的二次去重、版本更新重新返回、逐条允许与 `partial`；面板 `allowedIds`（部分 / 全选 / 空）；客户端审批卡按会话过滤 + 逐条勾选 + 提交 `allowedIds` + 样式 token 断言。全套 429 通过 / 1 跳过。
+
 ## 0.20.0 — 写入护栏、真实失败原因、默认记忆范围、按钮边框表达限制等级
 
 - **默认记忆范围（新会话）**：以前没有显式覆盖 = 完全不限制；现在没有显式覆盖时按默认设置生效：**当前会话 + 当前项目 + global** 三个作用域 + **普通限制**。`visibilityPolicy()` 因此永远返回一份策略，并带 `source: 'explicit' | 'inherited' | 'default'`。

@@ -683,7 +683,15 @@ async function handle(ctx, routePath, req, res) {
       if (id === '') throw new ApiError(400, 'APPROVAL_ID_REQUIRED', 'id 不能为空')
       const outcome = body?.outcome === 'allowed-once' ? 'allowed-once' : body?.outcome === 'rejected' ? 'rejected' : ''
       if (outcome === '') throw new ApiError(400, 'APPROVAL_OUTCOME_INVALID', 'outcome 必须是 allowed-once 或 rejected')
-      const answered = memory.answerVisibilityApproval(id, outcome)
+      // 0.21.0:逐条允许。省略 = 全部允许;空数组 = 一条都不允许(按拒绝处理)。
+      const rawIds = body?.allowedIds
+      if (rawIds !== undefined && rawIds !== null && !Array.isArray(rawIds)) {
+        throw new ApiError(400, 'APPROVAL_IDS_INVALID', 'allowedIds 必须是字符串数组')
+      }
+      const allowedIds = Array.isArray(rawIds) ? rawIds.filter((value) => typeof value === 'string' && value !== '') : undefined
+      const answered = allowedIds === undefined
+        ? memory.answerVisibilityApproval(id, outcome)
+        : memory.answerVisibilityApproval(id, outcome, allowedIds)
       writeJson(res, { ok: true, value: { answered } })
       return
     }

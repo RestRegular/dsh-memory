@@ -43,8 +43,26 @@ import { canonicalWorkspacePath, normalizeScopeInput, resolveScopeRef } from '..
 /** 一次范围外审批的结局:允许一次 / 用户拒绝 / 超时未答 / 当前版本不支持审批。 */
                                                                                      
 
-/** 被可见域挡住、没有返回给模型的原因(absolute 模式不会出现:一律视为不存在)。 */
-                                                                     
+/**
+ * 一次范围外审批的结论(0.21.0)。
+ *
+ * `allowed-once` 默认 = 本次请求**全部**允许;用户在审批卡里逐条勾选时，可带
+ * `allowedIds` 只允许其中一部分。老 provider 可能仍直接返回字符串，工具层兼容。
+ */
+                                   
+                          
+                                                  
+                       
+ 
+
+/** provider 的 requestOutOfScope 可以返回裸字符串(旧口径)或带 allowedIds 的对象。 */
+                                                               
+
+/**
+ * 被可见域挡住、没有返回给模型的原因(absolute 模式不会出现:一律视为不存在)。
+ * `partial` = 用户只允许了其中几条，其余按拒绝处理。
+ */
+                                                                               
 
                                      
                
@@ -76,9 +94,25 @@ import { canonicalWorkspacePath, normalizeScopeInput, resolveScopeRef } from '..
                           
  
 
+/**
+ * 一个会话的上下文去重视图(0.21.0)。由入口从注入半边提供的
+ * `memoryContextDedup` 服务接进来；没有时工具保持老行为(每次都带摘要)。
+ *
+ * 为什么要它：memory_search / memory_list 的摘要在同一会话里重复命中时
+ * 会把同样的内容反复塞回上下文。工具层只问“这条是否已经以同版本出现过”，
+ * 具体状态(摘要/正文/版本)由注入半边的 InjectionState 统一维护。
+ */
+                                   
+                             
+                                                                              
+                             
+                                                                              
+                           
+                                                                              
+ 
+
 /** 只有这一层需要的能力子集(provider 在宿主里提供,测试里可以 mock)。 */
-                                    
-                                                              
+                                                                                                  
                                                                                                                                                                                           
                                                                      
                                                                                                                                                               
@@ -103,8 +137,9 @@ import { canonicalWorkspacePath, normalizeScopeInput, resolveScopeRef } from '..
      
                                  
                                          
+                                                  
      
-                                                                                                                                                                                                   
+                                                                                                                                                                                                  
                                          
                                              
                                     
@@ -123,6 +158,12 @@ import { canonicalWorkspacePath, normalizeScopeInput, resolveScopeRef } from '..
                                                  
                                                       
                        
+     
+                                   
+                                                         
+                              
+     
+                                                            
  
 
 const SCOPE_DESCRIPTION =
@@ -250,7 +291,16 @@ function recordsToApprovalItems(
  * 结局必须可区分:允许一次 / 用户拒绝 / 超时 / 旧 provider 不支持审批。
  * `agent` 省略 = 不审批(工具层在拿不到会话时退回 provider 的护栏)。
  * 允许写/删时要带 `approvedItems` 之类的合成条目,浮层才显示得出来。
+ *
+ * 0.21.0:允许的条目可以是"全部"(allowedIds 省略)或用户在审批卡里逐条勾选的
+ * 一部分;后者通过 `allowedIds` 返回,调用方只放行这些 id。
  */
+                           
+                          
+                                              
+                          
+ 
+
 async function askOutOfScope(
   service                   ,
   agent         ,
@@ -261,22 +311,37 @@ async function askOutOfScope(
   action                             ,
   signal              ,
 )                           {
-  if (records.length === 0) return 'allowed-once'
-  if (typeof service.requestOutOfScope !== 'function') return 'unavailable'
-  if (signal?.aborted) return 'rejected'
+  if (records.length === 0) return { outcome: 'allowed-once' }
+  if (typeof service.requestOutOfScope !== 'function') return { outcome: 'unavailable' }
+  if (signal?.aborted) return { outcome: 'rejected' }
   try {
-    const outcome = await service.requestOutOfScope(agent, {
+    const answer = await service.requestOutOfScope(agent, {
       tool,
       action,
       query,
       items: recordsToApprovalItems(policy, records),
       ...(signal !== undefined ? { signal } : {}),
     })
-    if (outcome === 'allowed-once' || outcome === 'timeout' || outcome === 'unavailable') return outcome
-    return 'rejected'
+    // 老 provider 直接返回字符串;新 provider 返回 { outcome, allowedIds }。
+    const decision                   = typeof answer === 'string' ? { outcome: answer } : answer ?? { outcome: 'unavailable' }
+    const outcome                  = decision.outcome === 'allowed-once' || decision.outcome === 'timeout' || decision.outcome === 'unavailable'
+      ? decision.outcome
+      : 'rejected'
+    const ids = outcome === 'allowed-once' && Array.isArray(decision.allowedIds)
+      ? new Set(decision.allowedIds.map(String))
+      : undefined
+    // 逐条勾选但一条都没选中 = 用户拒绝了这次访问。
+    if (ids !== undefined && ids.size === 0) return { outcome: 'rejected' }
+    return { outcome, ...(ids !== undefined ? { allowedIds: ids } : {}) }
   } catch {
-    return 'unavailable'
+    return { outcome: 'unavailable' }
   }
+}
+
+/** 这次审批是否允许这一条(没有 allowedIds = 全部允许)。 */
+function verdictAllows(verdict                 , id        )          {
+  if (verdict.outcome !== 'allowed-once') return false
+  return verdict.allowedIds === undefined || verdict.allowedIds.has(id)
 }
 
 /** 审批没通过时给模型的真实原因(写/删路径直接抛这个错误)。 */
@@ -480,7 +545,7 @@ export function memorySaveTool(opts                    )                        
           importance: typeof args.importance === 'number' ? args.importance : 0,
           updatedAt: Date.now(),
         }
-        const outcome = await askOutOfScope(
+        const verdict = await askOutOfScope(
           service,
           agent,
           policy,
@@ -490,7 +555,9 @@ export function memorySaveTool(opts                    )                        
           'write',
           (exec                                        )?.signal,
         )
-        if (outcome !== 'allowed-once') throw visibilityError(outcome, 'write', target)
+        if (!verdictAllows(verdict, draft.id)) {
+          throw visibilityError(verdict.outcome === 'allowed-once' ? 'rejected' : verdict.outcome, 'write', target)
+        }
         approved = true
       }
 
@@ -534,6 +601,30 @@ export function summarize(content        , chars         = DEFAULT_SUMMARY_CHARS
   return flat.length <= chars ? flat : `${flat.slice(0, chars)}…`
 }
 
+/**
+ * memory_search 的上下文去重(0.21.0):
+ *   - 同一条记忆、同一个 updatedAt 版本已经出现在上下文里 → 摘要置空并标 deduped;
+ *   - 没出现过的（含内容更新后的新版本）→ 照常带摘要，并记为“摘要已出现”。
+ * 注入半边不在时 `contextDedup` 返回 undefined，保持老行为。
+ */
+function applySummaryDedupe(opts                    , exec         , records             )       {
+  if (records.length === 0) return
+  const dedup = opts.contextDedup?.(exec)
+  if (dedup === undefined) return
+  const seen = dedup.seen(records)
+  const newlyShown              = []
+  for (const record of records) {
+    if (seen.has(record.id)) {
+      record.summary = ''
+      record.deduped = true
+    } else {
+      newlyShown.push(record)
+    }
+  }
+  // 只把这次真的带摘要返回的条目记为已出现;被省略的本来就是已出现。
+  if (newlyShown.length > 0) dedup.markSummary(newlyShown)
+}
+
                              
                
                 
@@ -553,6 +644,11 @@ export function summarize(content        , chars         = DEFAULT_SUMMARY_CHARS
                    
                                            
                  
+     
+                                      
+                           
+     
+                   
  
 
                                
@@ -617,9 +713,9 @@ export function memorySearchTool(opts                    )                      
         const inside = hits.filter((hit) => recordAllowed(policy, hit.record.scope, hit.record.kind))
         const outside = hits.filter((hit) => !recordAllowed(policy, hit.record.scope, hit.record.kind))
         // undefined = 没有范围外命中 / 绝对限制(不审批);只有普通限制会真的问一次。
-        let outcome                             
+        let verdict                             
         if (outside.length > 0 && level === 'normal') {
-          outcome = await askOutOfScope(
+          verdict = await askOutOfScope(
             service,
             agent,
             policy,
@@ -630,8 +726,17 @@ export function memorySearchTool(opts                    )                      
             (exec                                        )?.signal,
           )
         }
-        const allowed = outside.length === 0 || outcome === 'allowed-once'
-        const selected = allowed ? hits : inside
+        // verdict 为空 = 没有发起审批(绝对限制 / 没有范围外命中):范围外一律不放行。
+        const approvedOutside = verdict === undefined
+          ? []
+          : verdict.outcome !== 'allowed-once'
+            ? []
+            : verdict.allowedIds === undefined
+              ? outside
+              : outside.filter((hit) => verdict .allowedIds .has(hit.record.id))
+        const insideIds = new Set(inside.map((hit) => hit.record.id))
+        const approvedOutsideIds = new Set(approvedOutside.map((hit) => hit.record.id))
+        const selected = hits.filter((hit) => insideIds.has(hit.record.id) || approvedOutsideIds.has(hit.record.id))
         const result               = {
           records: selected.map((h) => ({
             id: h.record.id,
@@ -644,10 +749,13 @@ export function memorySearchTool(opts                    )                      
           })),
         }
         // absolute:范围外视为不存在,连"被挡住"都不告诉模型。
-        if (!allowed && outcome !== undefined) {
-          result.withheld = { count: outside.length, reason: outcome }
+        if (verdict !== undefined) {
+          const denied = outside.length - approvedOutside.length
+          if (denied > 0) result.withheld = { count: denied, reason: verdict.outcome === 'allowed-once' ? 'partial' : verdict.outcome }
         }
         if (wantedTopK !== undefined) result.records = result.records.slice(0, wantedTopK)
+        // 上下文去重:同一条记忆同版本已经出现过 → 只回 id,摘要让 memory_get 按需取。
+        applySummaryDedupe(opts, exec, result.records)
         return result
       } catch (error) {
         throw toolError(error)
@@ -696,7 +804,7 @@ export function memoryForgetTool(opts                    )                      
             throw new MemoryToolError('RECORD_NOT_FOUND', `id ${args.id} not found`)
           }
           if (level === 'normal') {
-            const outcome = await askOutOfScope(
+            const verdict = await askOutOfScope(
               service,
               agent,
               policy,
@@ -706,7 +814,9 @@ export function memoryForgetTool(opts                    )                      
               'delete',
               signal,
             )
-            if (outcome !== 'allowed-once') throw visibilityError(outcome, 'delete', blocked[0] .scope)
+            if (!verdictAllows(verdict, args.id)) {
+              throw visibilityError(verdict.outcome === 'allowed-once' ? 'rejected' : verdict.outcome, 'delete', blocked[0] .scope)
+            }
             approved = true
           }
         }
@@ -732,7 +842,7 @@ export function memoryForgetTool(opts                    )                      
           // 绝对限制:这个作用域"不存在",按一条都没匹配处理(不删、也不泄露原因)。
           return { removed: 0, ids: [] }
         }
-        const outcome = await askOutOfScope(
+        const verdict = await askOutOfScope(
           service,
           agent,
           policy,
@@ -750,7 +860,9 @@ export function memoryForgetTool(opts                    )                      
           'delete',
           signal,
         )
-        if (outcome !== 'allowed-once') throw visibilityError(outcome, 'delete', scope)
+        if (!verdictAllows(verdict, `query:${scope}`)) {
+          throw visibilityError(verdict.outcome === 'allowed-once' ? 'rejected' : verdict.outcome, 'delete', scope)
+        }
         approved = true
       }
       try {
@@ -774,7 +886,7 @@ export function memoryForgetTool(opts                    )                      
  
 
                              
-                                                                                                 
+                                                                                                                    
                                                     
                                                                                
      
@@ -827,9 +939,9 @@ export function memoryListTool(opts                    )                        
         const inside = raw.filter((record) => recordAllowed(policy, record.scope, record.kind))
         const outside = raw.filter((record) => !recordAllowed(policy, record.scope, record.kind))
         // undefined = 没有范围外命中 / 绝对限制(不审批);只有普通限制会真的问一次。
-        let outcome                             
+        let verdict                             
         if (outside.length > 0 && level === 'normal') {
-          outcome = await askOutOfScope(
+          verdict = await askOutOfScope(
             service,
             agent,
             policy,
@@ -840,8 +952,18 @@ export function memoryListTool(opts                    )                        
             (exec                                        )?.signal,
           )
         }
-        const allowed = outside.length === 0 || outcome === 'allowed-once'
-        const selected = (allowed ? raw : inside).slice(0, limit)
+        const approvedOutside = verdict === undefined
+          ? []
+          : verdict.outcome !== 'allowed-once'
+            ? []
+            : verdict.allowedIds === undefined
+              ? outside
+              : outside.filter((record) => verdict .allowedIds .has(record.id))
+        const insideIds = new Set(inside.map((record) => record.id))
+        const approvedOutsideIds = new Set(approvedOutside.map((record) => record.id))
+        const selected = raw
+          .filter((record) => insideIds.has(record.id) || approvedOutsideIds.has(record.id))
+          .slice(0, limit)
         records = selected.map((r) => ({
           id: r.id,
           scope: r.scope,
@@ -849,8 +971,24 @@ export function memoryListTool(opts                    )                        
           updatedAt: r.updatedAt,
           content: r.content,
         }))
-        if (!allowed && outcome !== undefined) {
-          withheld = { count: outside.length, reason: outcome }
+        if (verdict !== undefined) {
+          const denied = outside.length - approvedOutside.length
+          if (denied > 0) withheld = { count: denied, reason: verdict.outcome === 'allowed-once' ? 'partial' : verdict.outcome }
+        }
+        // 上下文去重:同版本已经出现过 → 只回 id,正文让 memory_get 按需取。
+        const dedup = opts.contextDedup?.(exec)
+        if (dedup !== undefined && records.length > 0) {
+          const seen = dedup.seen(records)
+          const newlyShown                        = []
+          records = records.map((record) => {
+            if (!seen.has(record.id)) {
+              newlyShown.push(record)
+              return record
+            }
+            return { ...record, content: '', deduped: true }
+          })
+          // 这次真的把正文放进上下文的条目,后续检索/召回都按"已出现"处理。
+          if (newlyShown.length > 0) dedup.markContent(newlyShown)
         }
       } catch (error) {
         throw toolError(error)
@@ -997,9 +1135,9 @@ export function memoryGetTool(opts                    )                         
         const inside = all.filter((record) => recordAllowed(policy, record.scope, record.kind))
         const outside = all.filter((record) => !recordAllowed(policy, record.scope, record.kind))
         // undefined = 没有范围外命中 / 绝对限制(不审批);只有普通限制会真的问一次。
-        let outcome                             
+        let verdict                             
         if (outside.length > 0 && level === 'normal') {
-          outcome = await askOutOfScope(
+          verdict = await askOutOfScope(
             service,
             agent,
             policy,
@@ -1010,14 +1148,24 @@ export function memoryGetTool(opts                    )                         
             (exec                                        )?.signal,
           )
         }
-        const allowed = outside.length === 0 || outcome === 'allowed-once'
-        const found = allowed ? all : inside
+        // verdict 为空 = 没有发起审批(绝对限制):范围外一律按不存在处理。
+        const approvedOutside = verdict === undefined
+          ? []
+          : verdict.outcome !== 'allowed-once'
+            ? []
+            : verdict.allowedIds === undefined
+              ? outside
+              : outside.filter((record) => verdict .allowedIds .has(record.id))
+        const insideIds = new Set(inside.map((record) => record.id))
+        const approvedIds = new Set(approvedOutside.map((record) => record.id))
+        const found = all.filter((record) => insideIds.has(record.id) || approvedIds.has(record.id))
+        const denied = outside.length - approvedOutside.length
         return {
           records: found.map((r) => pickGetFields(r, fields, chars)),
           fields,
           missing: ids.filter((token) => !found.some((r) => r.id === token || r.id.startsWith(token))),
-          ...(!allowed && outcome !== undefined
-            ? { withheld: { count: outside.length, reason: outcome } }
+          ...(verdict !== undefined && denied > 0
+            ? { withheld: { count: denied, reason: verdict.outcome === 'allowed-once' ? 'partial' : verdict.outcome } }
             : {}),
         }
       } catch (error) {

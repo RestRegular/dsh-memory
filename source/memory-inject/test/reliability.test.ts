@@ -159,6 +159,27 @@ test('会话级注入状态:区分 hint/content、版本更新与跨会话去重
   assert.equal(state.statusOf('s1', 'a'), 'not_seen')
 })
 
+test('摘要去重:summary 状态参与 seenInContext,不会被 hint 降级,正文仍可继续召回', () => {
+  const state = new InjectionState()
+  state.markSummary('s1', [{ id: 'a', updatedAt: 1 }, { id: 'b', updatedAt: 1 }])
+  assert.equal(state.statusOf('s1', 'a'), 'summary_injected')
+  assert.deepEqual([...state.seenInContext('s1', [{ id: 'a', updatedAt: 1 }])], ['a'], '同版本摘要已出现')
+  assert.equal(state.seenInContext('s1', [{ id: 'a', updatedAt: 2 }]).size, 0, '内容版本变了 → 摘要要重新给')
+
+  // 标签索引比摘要弱:后面再注入 hint 不能把 summary 降级。
+  state.markHint('s1', [{ id: 'a', updatedAt: 1 }])
+  assert.equal(state.statusOf('s1', 'a'), 'summary_injected')
+
+  // 摘要不算正文:自动召回仍可以补一次正文。
+  assert.deepEqual(state.filterNewContent('s1', [{ id: 'a', updatedAt: 1 }]).fresh.map((r) => r.id), ['a'])
+
+  // 正文盖过摘要,summary 也不能把正文降级。
+  state.markContent('s1', [{ id: 'b', updatedAt: 1 }])
+  state.markSummary('s1', [{ id: 'b', updatedAt: 1 }])
+  assert.equal(state.statusOf('s1', 'b'), 'content_injected')
+  assert.equal(state.seenInContext('s1', [{ id: 'b', updatedAt: 1 }]).size, 1)
+})
+
 test('审计环:按会话保留、最新在前、可按会话过滤', () => {
   const audit = new InjectAuditStore()
   for (let i = 0; i < 205; i++) {

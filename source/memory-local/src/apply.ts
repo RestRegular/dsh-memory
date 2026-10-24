@@ -293,9 +293,9 @@ export class CordisMemoryService extends Service {
     return this.impl.pendingVisibilityApprovals(sessionId)
   }
 
-  /** 面板:回答一条待审批。 */
-  answerVisibilityApproval(id: string, outcome: 'allowed-once' | 'rejected'): boolean {
-    return this.impl.answerVisibilityApproval(id, outcome)
+  /** 面板:回答一条待审批(可带逐条勾选的 allowedIds)。 */
+  answerVisibilityApproval(id: string, outcome: 'allowed-once' | 'rejected', allowedIds?: readonly string[]): boolean {
+    return this.impl.answerVisibilityApproval(id, outcome, allowedIds)
   }
 
   /** 写路径默认 scope(省略 scope 时落到哪)。 */

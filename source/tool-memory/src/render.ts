@@ -9,7 +9,7 @@
  * 写进渲染文本。绝对限制下工具根本不会带 withheld（视为不存在），所以这里
  * 不需要也不应该提"被挡住"。
  */
-import type { GetResult, GetField, SearchResult, WithheldReason } from './index.ts'
+import type { GetResult, GetField, ListResult, SearchResult, WithheldReason } from './index.ts'
 
 /** 把 scope 键渲染成展示文案（宿主能查到会话标题时用它，否则用短 id）。 */
 export type ScopeLabel = (scope: string) => string
@@ -17,7 +17,13 @@ export type ScopeLabel = (scope: string) => string
 /** 有内容没返回时的原因（absolute 模式不会走到这里）。 */
 export type WithheldInfo = { count: number; reason: WithheldReason }
 
-const shortId = (id: string): string => id.slice(0, 8)
+/**
+ * 上下文去重的提示语(0.21.0)。memory_search / memory_list 里已经出现过的条目
+ * 只回 id、不再回摘要/正文；这条提示告诉模型为什么少了东西、以及怎么取全文。
+ */
+export const DEDUPE_NOTE = '本次请求部分记忆摘要因上下文去重机制被省略，若要获取完整内容请使用 memory_get'
+
+export const shortId = (id: string): string => id.slice(0, 8)
 
 const day = (value: unknown): string =>
   typeof value === 'number' && Number.isFinite(value) ? new Date(value).toISOString().slice(0, 10) : ''
@@ -39,6 +45,8 @@ export function renderWithheldNote(withheld: WithheldInfo | undefined): string {
       return `另有 ${count} 条记忆在本会话的可见域外，审批在 5 分钟内没有得到答复，已按拒绝处理，未返回。如确实需要，请让用户调整「记忆范围」后重试。`
     case 'unavailable':
       return `另有 ${count} 条记忆在本会话的可见域外，当前环境无法发起审批，未返回。`
+    case 'partial':
+      return `另有 ${count} 条记忆在本会话的可见域外，用户在本次审批中只允许了其余条目（限制等级：普通限制），未返回。如确实需要，请让用户调整「记忆范围」后重试。`
     default:
       return ''
   }
@@ -51,12 +59,39 @@ export function renderSearchResult(value: SearchResult, label: ScopeLabel): stri
     if (note === '') return '没有找到相关记忆。'
     return `没有找到可见范围内的相关记忆。\n${note}`
   }
+  // 已出现过的条目(上下文去重)只回 id：不带作用域/类型/标签/摘要。
+  let omitted = 0
   const body = value.records.map((hit) => {
+    if (hit.deduped === true) {
+      omitted += 1
+      return shortId(hit.id)
+    }
     const tags = joinList(hit.tags)
     const meta = `${label(hit.scope)}/${hit.kind}${tags === '' ? '' : ` · ${tags}`}`
     return `[${hit.score.toFixed(3)}] ${shortId(hit.id)} (${meta}) ${hit.summary}`
   }).join('\n')
-  return note === '' ? body : `${body}\n\n${note}`
+  const tail = [omitted > 0 ? DEDUPE_NOTE : '', note].filter((part) => part !== '').join('\n\n')
+  return tail === '' ? body : `${body}\n\n${tail}`
+}
+
+/**
+ * memory_list 的渲染：每条「(作用域/类型) 正文」；上下文去重过的条目只给 id。
+ * `scopeStats` 的尾部摘要由 apply.ts 追加（那里能查会话标题）。
+ */
+export function renderListResult(value: ListResult, label: ScopeLabel): string {
+  let omitted = 0
+  const body = value.records.length === 0
+    ? '该作用域还没有记忆。'
+    : value.records.map((record) => {
+      if (record.deduped === true) {
+        omitted += 1
+        return shortId(record.id)
+      }
+      return `(${label(record.scope)}/${record.kind}) ${record.content}`
+    }).join('\n')
+  const note = renderWithheldNote(value.withheld)
+  const tail = [omitted > 0 ? DEDUPE_NOTE : '', note].filter((part) => part !== '').join('\n\n')
+  return tail === '' ? body : `${body}\n\n${tail}`
 }
 
 /**

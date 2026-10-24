@@ -3,11 +3,12 @@ import assert from 'node:assert/strict'
 import {
   GET_FIELDS,
   memoryGetTool,
+  memoryListTool,
   memorySearchTool,
   resolveGetFields,
   summarize,
 } from '../src/index.ts'
-import { renderGetResult, renderSearchResult } from '../src/render.ts'
+import { DEDUPE_NOTE, renderGetResult, renderListResult, renderSearchResult } from '../src/render.ts'
 
 const LONG = '长'.repeat(300)
 
@@ -35,6 +36,9 @@ const bare = {
   createdAt: 1_700_000_000_000,
   updatedAt: 1_700_000_000_000,
 }
+
+/** 逐条允许的用例:可见域 = 当前项目,范围外 = 别的项目。 */
+const PROJECT_SCOPE = 'project:D:/w'
 
 const service = {
   save: async () => ({ id: record.id, scope: record.scope }),
@@ -173,6 +177,104 @@ test('renderGetResult：默认正文 + 基本元数据；只取字段时不输�
   const missing = renderGetResult({ records: [], fields: ['content'], missing: ['deadbeef'] }, label)
   assert.equal(missing, '未找到：deadbeef')
   assert.equal(renderGetResult({ records: [], fields: ['content'], missing: [] }, label), '没有找到记忆。')
+})
+
+test('上下文去重:memory_search 第二次只回 id,内容更新后重新给摘要', async () => {
+  // 模拟注入半边的 memoryContextDedup:按 id + updatedAt 版本记“已出现”。
+  const seen = new Map<string, number>()
+  const dedup = {
+    seen: (records: ReadonlyArray<{ id: string; updatedAt: number }>) => new Set(records.filter((r) => seen.get(r.id) === r.updatedAt).map((r) => r.id)),
+    markSummary: (records: ReadonlyArray<{ id: string; updatedAt: number }>) => { for (const r of records) seen.set(r.id, r.updatedAt) },
+    markContent: (records: ReadonlyArray<{ id: string; updatedAt: number }>) => { for (const r of records) seen.set(r.id, r.updatedAt) },
+  }
+  const tool = memorySearchTool({ getService: () => service, contextDedup: () => dedup })
+  const first = await tool.execute({ query: 'pnpm' })
+  assert.equal(first.records[0]!.deduped, undefined, '第一次带摘要')
+  assert.equal(renderSearchResult(first, label), '[0.812] abcdef12 (全局/fact · pnpm, toolchain) ' + summarize(LONG))
+
+  const second = await tool.execute({ query: 'pnpm' })
+  assert.equal(second.records[0]!.deduped, true, '同版本第二次命中只回 id')
+  assert.equal(second.records[0]!.summary, '')
+  assert.equal(renderSearchResult(second, label), `abcdef12\n\n${DEDUPE_NOTE}`)
+
+  // 内容更新(updatedAt 变了) → 摘要重新返回,并记住新版本。
+  const updated = { ...record, updatedAt: record.updatedAt + 1, content: '更新后的内容' }
+  const updatedService = { ...service, search: async () => [{ record: updated, score: 0.7 }] }
+  const bumped = memorySearchTool({ getService: () => updatedService, contextDedup: () => dedup })
+  const third = await bumped.execute({ query: 'pnpm' })
+  assert.equal(third.records[0]!.deduped, undefined, '版本变了 → 摘要要重新给')
+  assert.equal(third.records[0]!.summary, '更新后的内容')
+  const fourth = await bumped.execute({ query: 'pnpm' })
+  assert.equal(fourth.records[0]!.deduped, true, '新版本第二次命中再次省略')
+})
+
+test('上下文去重:memory_list 返回过的正文第二次只回 id', async () => {
+  const seen = new Map<string, number>()
+  const dedup = {
+    seen: (records: ReadonlyArray<{ id: string; updatedAt: number }>) => new Set(records.filter((r) => seen.get(r.id) === r.updatedAt).map((r) => r.id)),
+    markSummary: (records: ReadonlyArray<{ id: string; updatedAt: number }>) => { for (const r of records) seen.set(r.id, r.updatedAt) },
+    markContent: (records: ReadonlyArray<{ id: string; updatedAt: number }>) => { for (const r of records) seen.set(r.id, r.updatedAt) },
+  }
+  const listService = { ...service, list: async () => [{ ...record, content: '列表里的正文' }] }
+  const tool = memoryListTool({ getService: () => listService, contextDedup: () => dedup })
+  const first = await tool.execute({})
+  assert.equal(first.records[0]!.deduped, undefined)
+  assert.ok(renderListResult(first, label).includes('列表里的正文'))
+
+  const second = await tool.execute({})
+  assert.equal(second.records[0]!.deduped, true)
+  assert.equal(second.records[0]!.content, '')
+  assert.equal(renderListResult(second, label), `abcdef12\n\n${DEDUPE_NOTE}`)
+})
+
+test('memory_search 逐条允许:只返回勾选的条目,其余计入 withheld=partial', async () => {
+  const outside = {
+    id: 'outside-1',
+    scope: 'other-project',
+    kind: 'fact',
+    content: '范围外 A',
+    tags: [],
+    importance: 0.5,
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  const outside2 = { ...outside, id: 'outside-2', content: '范围外 B' }
+  const scoped = {
+    ...service,
+    search: async () => [
+      { record: { ...record, scope: PROJECT_SCOPE }, score: 0.9 },
+      { record: outside, score: 0.8 },
+      { record: outside2, score: 0.7 },
+    ],
+    visibilityPolicy: () => ({ level: 'normal' as const, scopes: [{ scope: PROJECT_SCOPE }], source: 'explicit' as const }),
+  }
+  let asked: string[] = []
+  const partialService = {
+    ...scoped,
+    requestOutOfScope: async (_agent: unknown, input: { items: Array<{ id: string }> }) => {
+      asked = input.items.map((item) => item.id)
+      return { outcome: 'allowed-once' as const, allowedIds: ['outside-1'] }
+    },
+  }
+  const tool = memorySearchTool({ getService: () => partialService })
+  const result = await tool.execute({ query: 'x' }, { agent: { session: { id: 's1' } } })
+  assert.deepEqual(asked.sort(), ['outside-1', 'outside-2'], '审批载荷带上全部范围外命中')
+  assert.deepEqual(result.records.map((r) => r.id).sort(), ['abcdef12-3456-7890-abcd-ef1234567890', 'outside-1'])
+  assert.deepEqual(result.withheld, { count: 1, reason: 'partial' })
+  assert.match(renderSearchResult(result, label), /只允许了其余条目/)
+})
+
+test('renderListResult:去重条目只给 id,提示用 memory_get 取全文', () => {
+  const text = renderListResult({
+    records: [
+      { id: record.id, scope: 'global', kind: 'fact', updatedAt: 1, content: '正文一' },
+      { id: bare.id, scope: 'session:s1', kind: 'note', updatedAt: 2, content: '', deduped: true },
+    ],
+  }, label)
+  assert.ok(text.includes(`(全局/fact) 正文一`))
+  assert.ok(text.includes('00000000'), '去重条目只显示短 id')
+  assert.ok(!text.includes('只有基本字段的一条'))
+  assert.ok(text.endsWith(DEDUPE_NOTE))
 })
 
 test('被可见域挡住时渲染真实原因:拒绝/超时/无法审批;绝对限制不出现 withheld', () => {

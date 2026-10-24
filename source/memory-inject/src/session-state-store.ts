@@ -13,7 +13,7 @@
  * 行格式(短键,减小体积):
  *   快照 {"v":1,"d":1,"e":[["id",2,version,at],...]}
  *   增量 {"d":1,"e":[...]}
- *   status: 1=hint_injected, 2=content_injected; d=1 表示本会话摘要已做过
+ *   status: 1=hint_injected, 2=content_injected, 3=summary_injected; d=1 表示本会话摘要已做过
  *
  * 只存记录 id / 状态 / 版本 / 时间戳与摘要标记,不落正文,也不落 lastQuery
  * (查询可能含凭据)。
@@ -29,10 +29,12 @@ import type { InjectEntrySnapshot, InjectionStateStore, SessionStateSnapshot } f
 const STATUS_CODE: Record<InjectEntrySnapshot['status'], number> = {
   hint_injected: 1,
   content_injected: 2,
+  summary_injected: 3,
 }
 const STATUS_BY_CODE: Record<number, InjectEntrySnapshot['status']> = {
   1: 'hint_injected',
   2: 'content_injected',
+  3: 'summary_injected',
 }
 const SNAPSHOT_VERSION = 1
 const DEFAULT_DEBOUNCE_MS = 250

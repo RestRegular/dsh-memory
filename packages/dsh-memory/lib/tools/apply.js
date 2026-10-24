@@ -15,11 +15,12 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import {
   memoryTools,
+                        
                          
                           
                 
 } from './index.js'
-import { renderGetResult, renderSearchResult, renderWithheldNote } from './render.js'
+import { renderGetResult, renderListResult, renderSearchResult } from './render.js'
 import { resolveCurrentScopes, scopeKind,               } from '../provider/scope.js'
 
 export const name = 'dsh-tool-memory'
@@ -30,7 +31,26 @@ export const inject = ['tools', 'memory']
                                                  
                                                      
                        
+     
+                                                     
+                                  
+     
+                        
  
+
+/** 注入半边提供的服务(只在单包里存在;独立安装工具半边时可能没有)。 */
+                               
+                                                                                                 
+                                                                                                 
+                                                                                                 
+ 
+
+/** 工具执行时的会话 id(与注入半边同一口径:agent.session.id)。 */
+function sessionIdOf(exec         )                     {
+  const session = (exec                                                          )?.agent?.session
+  const id = session?.id
+  return typeof id === 'string' && id !== '' ? id : undefined
+}
 
 export function apply(ctx     , config                   = {}) {
   const memory = ctx.memory                     
@@ -39,10 +59,32 @@ export function apply(ctx     , config                   = {}) {
     if (config.projectScope !== undefined) return config.projectScope
     return resolveCurrentScopes((exec                                   )?.agent).project
   }
+  /**
+   * 惰性取注入半边的去重服务:apply 执行时它可能还没 provide(两边不保证顺序),
+   * 所以每次工具执行时再 ctx.get,而不是在 apply 里取样(见记忆里的冷启动丢注册坑)。
+   */
+  const contextDedup = (exec         )                               => {
+    if (config.contextDedup === false) return undefined
+    const sessionId = sessionIdOf(exec)
+    if (sessionId === undefined) return undefined
+    try {
+      const service = ctx.get('memoryContextDedup')                                   
+      if (service === undefined || typeof service.seen !== 'function') return undefined
+      return {
+        seen: (records) => service.seen(sessionId, records),
+        markSummary: (records) => service.markSummary(sessionId, records),
+        markContent: (records) => service.markContent(sessionId, records),
+      }
+    } catch {
+      // 去重是纯优化;服务不可用时照常返回摘要。
+      return undefined
+    }
+  }
   const opts                     = {
     getService: () => memory,
     defaultScope: config.defaultScope ?? 'session',
     projectScope: config.projectScope,
+    contextDedup,
   }
   const tools = memoryTools(opts)
 
@@ -112,12 +154,9 @@ export function apply(ctx     , config                   = {}) {
 
   register(tools.memory_list, (value, _args, exec) => {
     const agent = (exec                                   )?.agent
-    const body = value.records.length === 0
-      ? '该作用域还没有记忆。'
-      : value.records.map((r) => `(${renderScope(r.scope, agent)}/${r.kind}) ${r.content}`).join('\n')
+    const body = renderListResult(value, (scope) => renderScope(scope, agent))
     const summary = scopeSummary(value, agent)
-    const note = renderWithheldNote(value.withheld)
-    return [body, summary, note].filter((part) => part !== '').join('\n')
+    return [body, summary].filter((part) => part !== '').join('\n')
   })
 
   register(tools.memory_get, (value, _args, exec) => {

@@ -182,6 +182,34 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
 
   /** 会话级注入状态(正文/标签/版本)与审计。 */
   const injectionState = new InjectionState()
+  /**
+   * 给工具半边用的会话上下文去重视图(0.21.0)。
+   *
+   * memory_search / memory_list 返回的摘要也属于“条目已进入上下文”：同一条记忆
+   * 同版本再次命中时只回 id，正文仍由 memory_get 显式取。状态只有一份（注入半边
+   * 的 InjectionState），工具侧通过 ctx.get('memoryContextDedup') 惰性读取 ——
+   * 拿不到（注入半边被禁用/旧版本）就自然退化为不去重。
+   *
+   * 用 ctx.provide 而不是把方法挂到 memory 服务上：provider 不需要知道去重实现，
+   * 工具半边也不需要依赖注入半边的内部类。
+   */
+  try {
+    ctx.provide('memoryContextDedup', {
+      /** 这批记录里哪些已经以同版本进过上下文（摘要或正文）。 */
+      seen(sessionId: string, records: ReadonlyArray<{ id: string; updatedAt: number }>): Set<string> {
+        return injectionState.seenInContext(sessionId, records)
+      },
+      /** memory_search 返回了摘要 / memory_list 返回了正文。 */
+      markSummary(sessionId: string, records: ReadonlyArray<{ id: string; updatedAt: number }>): void {
+        injectionState.markSummary(sessionId, records)
+      },
+      markContent(sessionId: string, records: ReadonlyArray<{ id: string; updatedAt: number }>): void {
+        injectionState.markContent(sessionId, records)
+      },
+    })
+  } catch (error) {
+    console.warn(`[dsh-memory] 会话上下文去重服务未能注册(工具将不去重): ${error instanceof Error ? error.message : String(error)}`)
+  }
   const audit = new InjectAuditStore()
   const signals = new BehaviorSignalStore()
   const callMeta = new Map<string, { name: string; description?: string }>()

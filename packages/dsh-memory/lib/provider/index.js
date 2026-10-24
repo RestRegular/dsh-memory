@@ -548,8 +548,20 @@ export function resolveConfig(config                    = {})                 {
                    
  
 
+/** 一次审批的结局:允许(可只允许其中几条) / 拒绝 / 超时。 */
+                                                                               
+
+/**
+ * 审批结论(0.21.0)。`allowedIds` 省略 = 本次请求的所有条目都允许;
+ * 用户在审批卡里逐条勾选时只带被勾选的条目 id。
+ */
+                                           
+                                    
+                       
+ 
+
                                                                     
-                                                                 
+                                                 
                                                   
  
 
@@ -1646,25 +1658,25 @@ export class LocalMemoryService                             {
                                               
                           
      ,
-  )                                                   {
-    if (input.items.length === 0) return Promise.resolve('allowed-once')
-    if (input.signal?.aborted) return Promise.resolve('rejected')
+  )                                    {
+    if (input.items.length === 0) return Promise.resolve({ outcome: 'allowed-once' })
+    if (input.signal?.aborted) return Promise.resolve({ outcome: 'rejected' })
     const sessionId = this.rawSessionIdOf(agent) ?? ''
     const id = `vis-${Date.now().toString(36)}-${++this.approvalSeq}`
     const createdAt = Date.now()
     const expiresAt = createdAt + VISIBILITY_APPROVAL_TTL_MS
     return new Promise((resolve) => {
       let timer                                           
-      const onAbort = () => finish('rejected')
-      const finish = (outcome                                         )       => {
+      const onAbort = () => finish({ outcome: 'rejected' })
+      const finish = (answer                          )       => {
         const pending = this.pendingApprovals.get(id)
         if (pending === undefined) return
         this.pendingApprovals.delete(id)
         if (timer !== undefined) clearTimeout(timer)
         try { input.signal?.removeEventListener('abort', onAbort) } catch { /* 已卸载 */ }
-        pending.resolve(outcome)
+        pending.resolve(answer)
       }
-      timer = setTimeout(() => finish('timeout'), VISIBILITY_APPROVAL_TTL_MS)
+      timer = setTimeout(() => finish({ outcome: 'timeout' }), VISIBILITY_APPROVAL_TTL_MS)
       timer.unref?.()
       this.pendingApprovals.set(id, {
         id,
@@ -1710,12 +1722,27 @@ export class LocalMemoryService                             {
   }
 
   /** 面板:回答一条待审批。返回 false = 已经不存在/已超时。 */
-  answerVisibilityApproval(id        , outcome                             )          {
+  answerVisibilityApproval(id        , outcome                             , allowedIds                    )          {
     const pending = this.pendingApprovals.get(id)
     if (pending === undefined) return false
     this.pendingApprovals.delete(id)
     if (pending.timer !== undefined) clearTimeout(pending.timer)
-    pending.resolve(outcome)
+    let answer                          
+    if (outcome !== 'allowed-once') {
+      answer = { outcome }
+    } else if (Array.isArray(allowedIds)) {
+      const known = new Set(pending.items.map((item) => item.id))
+      const picked = [...new Set(allowedIds.map(String).filter((itemId) => known.has(itemId)))]
+      // 一条都没勾选 = 拒绝;全部勾选退化成老口径(不传 allowedIds = 全部允许)。
+      answer = picked.length === 0
+        ? { outcome: 'rejected' }
+        : picked.length === known.size
+          ? { outcome: 'allowed-once' }
+          : { outcome: 'allowed-once', allowedIds: picked }
+    } else {
+      answer = { outcome: 'allowed-once' }
+    }
+    pending.resolve(answer)
     return true
   }
 

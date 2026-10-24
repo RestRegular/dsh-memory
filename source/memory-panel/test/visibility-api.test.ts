@@ -150,11 +150,71 @@ test('面板 /approvals:列待审批并回答一次', async () => {
     await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/approvals`, { id, outcome: 'allowed-once' }), answer)
     assert.equal(answer.out.status, 200)
     assert.equal(answer.out.body.value.answered, true)
-    assert.equal(await verdict, 'allowed-once')
+    assert.deepEqual(await verdict, { outcome: 'allowed-once' })
 
     const again = fakeRes()
     await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/approvals`, { id, outcome: 'rejected' }), again)
     assert.equal(again.out.body.value.answered, false, '已经回答过的审批不能重复消费')
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('面板 /approvals:allowedIds 逐条允许,只返回勾选的条目', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-visibility-'))
+  const svc = makeService(dir)
+  const session = { id: 's1', header: { id: 's1', cwd: 'D:/w' } }
+  const item = (id: string) => ({
+    id,
+    scope: 'global',
+    kind: 'rule',
+    content: `正文 ${id}`,
+    tags: [],
+    importance: 0.5,
+    updatedAt: Date.now(),
+    reason: 'scope' as const,
+  })
+  try {
+    const agent = { session }
+    const partial = svc.requestOutOfScope(agent, {
+      tool: 'memory_search',
+      query: '发布流程',
+      items: [item('aaaaaaaa1111'), item('bbbbbbbb2222'), item('cccccccc3333')],
+    })
+    const list = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, get(`${ROUTE}/approvals?session=s1`), list)
+    const id = list.out.body.value.approvals[0].id
+    const res = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/approvals`, {
+      id,
+      outcome: 'allowed-once',
+      allowedIds: ['aaaaaaaa1111', 'cccccccc3333', 'unknown-id'],
+    }), res)
+    assert.equal(res.out.status, 200)
+    assert.deepEqual(await partial, { outcome: 'allowed-once', allowedIds: ['aaaaaaaa1111', 'cccccccc3333'] }, '只保留本次请求里存在的条目')
+
+    // 全部勾选 = 老口径(不带 allowedIds,表示本次请求全部允许)。
+    const all = svc.requestOutOfScope(agent, { tool: 'memory_search', query: 'q', items: [item('aaaaaaaa1111'), item('bbbbbbbb2222')] })
+    await handleRequest(ctxWith(svc, session), ROUTE, get(`${ROUTE}/approvals?session=s1`), list)
+    const allId = list.out.body.value.approvals[0].id
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/approvals`, {
+      id: allId,
+      outcome: 'allowed-once',
+      allowedIds: ['aaaaaaaa1111', 'bbbbbbbb2222'],
+    }), fakeRes())
+    assert.deepEqual(await all, { outcome: 'allowed-once' })
+
+    // 一条都没勾 = 拒绝。
+    const none = svc.requestOutOfScope(agent, { tool: 'memory_search', query: 'q', items: [item('aaaaaaaa1111')] })
+    await handleRequest(ctxWith(svc, session), ROUTE, get(`${ROUTE}/approvals?session=s1`), list)
+    const noneId = list.out.body.value.approvals[0].id
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/approvals`, {
+      id: noneId,
+      outcome: 'allowed-once',
+      allowedIds: [],
+    }), fakeRes())
+    assert.deepEqual(await none, { outcome: 'rejected' }, '空 allowedIds 按拒绝处理')
   } finally {
     svc.flushSync()
     rmSync(dir, { recursive: true, force: true })

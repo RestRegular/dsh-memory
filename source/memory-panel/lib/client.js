@@ -539,21 +539,40 @@ window.__ModuleLoader__.load({
       '.mem-scope-reset:disabled,.mem-scope-save:disabled{opacity:.5;cursor:default;filter:none}',
       '.mem-scope-save:disabled{color:var(--dsw-alias-label-primary-foreground)}',
       '.mem-scope-err{padding:5px 8px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#d33) 10%,transparent);color:var(--dsw-alias-state-error-primary,#d33);font-size:12px;line-height:1.5}',
-      // 范围外访问审批浮层(全局 fixed;根节点带 .memp 以复用审计 hover 浮窗样式)
-      '.mem-approval{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:90;width:min(520px,calc(100vw - 24px));max-height:min(70vh,620px);display:flex;flex-direction:column;pointer-events:none;padding:0;font-size:13px;color:var(--dsw-alias-label-primary)}',
-      '.mem-approval-card{pointer-events:auto;display:flex;flex-direction:column;gap:8px;padding:14px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d9a23b) 42%,var(--dsw-alias-border-l1));border-radius:14px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 82%,transparent);-webkit-backdrop-filter:blur(20px) saturate(1.3);backdrop-filter:blur(20px) saturate(1.3);box-shadow:0 10px 26px rgba(0,0,0,.18);overflow:hidden}',
-      '@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.mem-approval-card{background:var(--dsw-alias-bg-layer-1)}}',
-      '.mem-approval-head{display:flex;align-items:center;gap:7px}',
-      '.mem-approval-head b{font-size:13px;font-weight:600}',
-      '.mem-approval-head .spacer{flex:1}',
-      '.mem-approval-dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--dsw-alias-state-warn-primary,#d9a23b);box-shadow:0 0 0 3px color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d9a23b) 18%,transparent)}',
-      '.mem-approval-query{padding:6px 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-2) 55%,transparent);color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;max-height:80px;overflow:auto}',
-      '.mem-approval-list{display:flex;flex-direction:column;gap:6px;overflow:auto;min-height:0;max-height:min(300px,38vh)}',
-      '.mem-approval-item{display:flex;flex-direction:column;gap:4px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 55%,transparent)}',
-      '.mem-approval-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
-      '.mem-approval-summary{color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:1.5;word-break:break-word}',
-      '.mem-approval-foot{display:flex;align-items:center;gap:8px}',
+      // 范围外访问审批卡(0.21.0):注册在 conversation.input.dock,只在所属会话里显示。
+      // 版式照抄宿主 dsh-client-ui-approval 的审批卡(strip + body + 右对齐动作行),
+      // 尺寸/圆角/底色/阴影全走同一批主题 token;缺少 composer 变量时给出同样的回退值。
+      '.mem-approval{box-sizing:border-box;width:100%;padding:8px calc(var(--dsh-composer-side-clearance,0px) + 16px) 12px;display:flex;flex-direction:column;align-items:center;font-size:13px;color:var(--dsw-alias-label-primary)}',
+      '.mem-approval-card{box-sizing:border-box;width:100%;max-width:var(--dsh-chat-content-width,752px);border:1px solid var(--dsw-alias-state-warn-secondary,color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d9a23b) 55%,transparent));border-radius:var(--dsw-radius-xl,16px);background:var(--dsw-specific-input-major,var(--dsw-alias-bg-layer-1));box-shadow:var(--dsw-shadow-lv2,0 6px 20px rgba(0,0,0,.12));overflow:hidden}',
+      '.mem-approval-strip{align-items:center;gap:8px;padding:10px 16px;font-size:13px;line-height:18px;display:flex;background:var(--dsw-alias-state-warn-tertiary,color-mix(in srgb,var(--dsw-alias-state-warn-primary,#d9a23b) 14%,transparent));color:var(--dsw-alias-state-warn-primary,#d9a23b)}',
+      '.mem-approval-dot{width:8px;height:8px;border-radius:50%;flex:none;background:currentColor;box-shadow:0 0 0 3px color-mix(in srgb,currentColor 18%,transparent)}',
+      '.mem-approval-tool{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11.5px;opacity:.8;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.mem-approval .spacer{flex:1}',
+      '.mem-approval .muted{color:var(--dsw-alias-label-secondary);font-size:11.5px}',
+      '.mem-approval-body{box-sizing:border-box;max-height:min(var(--dsh-composer-text-max-height,320px),46vh);display:flex;flex-direction:column;gap:6px;padding:12px 16px 0;overflow-y:auto;--dsh-scrollbar-thumb:var(--dsw-alias-scrollbar-bg-l2,color-mix(in srgb,var(--dsw-alias-label-secondary) 35%,transparent))}',
+      '.mem-approval-headline{color:var(--dsw-alias-label-primary);font-size:15px;font-weight:500;line-height:24px}',
+      '.mem-approval-hint{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.55}',
+      '.mem-approval-command{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:13px;line-height:20px;word-break:break-word;white-space:pre-wrap;max-height:72px;overflow:auto}',
+      '.mem-approval-list{display:flex;flex-direction:column;gap:6px;overflow:auto;min-height:0;padding-bottom:2px}',
+      '.mem-approval-item{display:flex;align-items:flex-start;gap:8px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 55%,transparent)}',
+      '.mem-approval-item.is-off{opacity:.62}',
+      '.mem-approval-item-body{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}',
+      '.mem-approval-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
+      '.mem-approval-id{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px;color:var(--dsw-alias-label-secondary)}',
+      '.mem-approval-summary{color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:1.5;word-break:break-word}',
+      '.mem-approval-check{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;margin-top:1px;padding:0;border:none;background:transparent;flex:none;cursor:pointer}',
+      '.mem-approval-check .box{display:flex;align-items:center;justify-content:center;width:16px;height:16px;border:1.5px solid color-mix(in srgb,var(--dsw-alias-label-secondary) 52%,var(--dsw-alias-border-l1));border-radius:5px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 5%,transparent);color:var(--dsw-alias-label-primary-foreground);transition:background .12s ease,border-color .12s ease}',
+      '.mem-approval-check.on .box{background:var(--dsw-alias-state-business-primary,#4176e6);border-color:var(--dsw-alias-state-business-primary,#4176e6);color:var(--dsw-alias-label-primary-foreground)}',
+      '.mem-approval-check:focus-visible{outline:1px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
+      '.mem-approval-check .tick{font-size:11px;line-height:1}',
+      '.mem-approval-err{padding:5px 8px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#d33) 10%,transparent);color:var(--dsw-alias-state-error-primary,#d33);font-size:12px;line-height:1.5}',
+      '.mem-approval-actionrow{justify-content:flex-end;gap:8px;padding:14px 16px;display:flex}',
+      '.mem-approval-reject{display:inline-flex;align-items:center;justify-content:center;height:32px;padding:0 16px;border:1px solid var(--dsw-alias-border-l2,var(--dsw-alias-border-l1));border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;cursor:pointer;transition:background .12s ease,border-color .12s ease,color .12s ease}',
+      '.mem-approval-reject:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger,color-mix(in srgb,var(--dsw-alias-state-error-primary,#d33) 10%,transparent));color:var(--dsw-alias-state-error-primary,#d33);border-color:transparent}',
+      '.mem-approval-allow{display:inline-flex;align-items:center;justify-content:center;height:32px;padding:0 18px;border:1px solid var(--dsw-alias-state-business-primary,#4176e6);border-radius:8px;background:var(--dsw-alias-state-business-primary,#4176e6);color:var(--dsw-alias-label-primary-foreground);font-size:13px;font-weight:600;cursor:pointer;transition:filter .12s ease}',
+      '.mem-approval-allow:hover:not(:disabled){filter:brightness(1.06)}',
+      '.mem-approval-reject:disabled,.mem-approval-allow:disabled{opacity:.5;cursor:default;filter:none}',
+      '.mem-approval-allow:disabled{color:var(--dsw-alias-label-primary-foreground)}',
     ].join('')
 
     async function api(method, body) {
@@ -4766,47 +4785,59 @@ window.__ModuleLoader__.load({
       )
     }
     /**
-     * 普通限制下的「范围外记忆访问审批」浮层。
+     * 普通限制下的「范围外记忆访问审批」卡片(0.21.0)。
      *
      * 工具在 memory_search / memory_get / memory_list 命中可见域外的记录时会在
      * provider 里挂起一个 Promise,这里轮询 /memory/api/approvals 把它显示给用户。
-     * 用户点「拒绝 / 允许一次」→ POST /memory/api/approvals → 工具拿到结果继续。
+     * 用户点「拒绝 / 允许一次(勾选的 N 条)」→ POST /memory/api/approvals →
+     * 工具拿到结论继续。
      *
-     * 视觉沿用审计详情里的 hover 浮窗(.audit-tip / .audit-id / .audit-pill):
-     * 把根节点标成 .memp,这些样式就会按同一套 token 生效。
+     * 与 0.20 的区别(对齐系统自带的权限审批弹窗):
+     *   - 注册在 conversation.input.dock(会话作用域),不再挂 shell.overlay ——
+     *     审批只在它所属的那个会话里出现,切到别的会话看不到,也不会挡住别人的界面;
+     *   - 视觉照抄宿主 dsh-client-ui-approval 的审批卡:警告色 strip + 卡片 +
+     *     右对齐的「拒绝 / 允许」两个动作,宽高、圆角、底色、阴影都走同一批主题 token;
+     *   - 读审批支持逐条勾选:用户只允许其中一条或多条时,工具只放行这些 id,
+     *     其余按拒绝处理(withheld.reason='partial')。
+     *
+     * 轮询按 sessionId 过滤:宿主在切会话时会用新的 sessionId 重新渲染这个槽,
+     * 上一个会话的待审批不会串到当前会话。
      */
-    function MemoryApprovalOverlay() {
+    function MemoryApprovalDock({ sessionId } = {}) {
       const [approvals, setApprovals] = React.useState([])
       const [busy, setBusy] = React.useState('')
       const [error, setError] = React.useState('')
-      const [tip, setTip] = React.useState(null)
-      const tipTimer = React.useRef(null)
-      const hideTimer = React.useRef(null)
+      // approval id → 勾选的条目 id;没有记录 = 默认全选(与「允许一次」同义)。
+      const [picked, setPicked] = React.useState({})
       const activeRef = React.useRef(true)
-
-      const clearTimers = () => {
-        if (tipTimer.current !== null) { clearTimeout(tipTimer.current); tipTimer.current = null }
-        if (hideTimer.current !== null) { clearTimeout(hideTimer.current); hideTimer.current = null }
-      }
+      const sessionRef = React.useRef(sessionId)
+      sessionRef.current = sessionId
 
       React.useEffect(() => {
         activeRef.current = true
-        return () => {
-          activeRef.current = false
-          clearTimers()
-        }
+        return () => { activeRef.current = false }
       }, [])
 
       const refresh = () => {
-        api('approvals')
+        const session = sessionRef.current
+        if (typeof session !== 'string' || session === '') return
+        api(`approvals?session=${encodeURIComponent(session)}`)
           .then((value) => {
             if (!activeRef.current) return
-            setApprovals(Array.isArray(value.approvals) ? value.approvals : [])
+            const list = Array.isArray(value.approvals) ? value.approvals : []
+            // 服务端已按 session 过滤;客户端再兜一层,老 provider 不带 sessionId 时按本会话处理。
+            setApprovals(list.filter((item) => item && (item.sessionId === undefined || item.sessionId === '' || item.sessionId === session)))
           })
           .catch(() => { /* 轮询失败静默重试 */ })
       }
 
       React.useEffect(() => {
+        // 切换会话 = 换一张审批卡:清掉上一个会话的待审批与勾选状态。
+        setApprovals([])
+        setPicked({})
+        setError('')
+        setBusy('')
+        if (typeof sessionId !== 'string' || sessionId === '') return undefined
         refresh()
         if (typeof setInterval !== 'function') return undefined
         const timer = setInterval(() => {
@@ -4814,139 +4845,149 @@ window.__ModuleLoader__.load({
           refresh()
         }, 1500)
         return () => clearInterval(timer)
-      }, [])
+      }, [sessionId])
 
-      const answer = (id, outcome) => {
-        setBusy(id)
+      const pending = approvals.length > 0 ? approvals[0] : null
+      if (pending === null) return null
+
+      // 0.20 起写/删也会触发审批,文案按 action 走。
+      const action = pending.action === 'write' || pending.action === 'delete' ? pending.action : 'read'
+      const actionLabel = action === 'write' ? '写入' : action === 'delete' ? '删除' : '读取'
+      const actionHint = action === 'write'
+        ? 'Agent 想把一条记忆写入可见域外的作用域。允许只对本次调用生效；拒绝则不写入。'
+        : action === 'delete'
+          ? 'Agent 想删除可见域外的记忆。允许只对本次调用生效；拒绝则不删除。'
+          : '以下记忆不在本会话的可见域内。勾选要允许的条目（默认全选）；允许只对本次调用生效，其余条目不会返回。'
+      const items = Array.isArray(pending.items) ? pending.items : []
+      const allIds = items.map((item) => item.id)
+      // 只有"读 + 多条"才有逐条勾选的意义:写/删是单条,允许就是允许。
+      const selectable = action === 'read' && allIds.length > 1
+      const stored = Array.isArray(picked[pending.id]) ? picked[pending.id].filter((id) => allIds.includes(id)) : null
+      const selectedIds = stored === null ? allIds : stored
+      const selectedSet = new Set(selectedIds)
+      const selectedCount = selectedIds.length
+
+      const toggle = (itemId) => {
+        setPicked((prev) => {
+          const current = Array.isArray(prev[pending.id]) ? prev[pending.id].filter((id) => allIds.includes(id)) : [...allIds]
+          const next = current.includes(itemId) ? current.filter((id) => id !== itemId) : [...current, itemId]
+          return { ...prev, [pending.id]: next }
+        })
+      }
+
+      const answer = (outcome, ids) => {
+        if (busy === pending.id) return
+        setBusy(pending.id)
         setError('')
-        api('approvals', { id, outcome })
+        const body = { id: pending.id, outcome }
+        // 全选 = 老口径(不带 allowedIds,覆盖本次请求全部条目);
+        // 只勾了一部分才把选中集合传回去。
+        if (outcome === 'allowed-once' && selectable && Array.isArray(ids) && ids.length > 0 && ids.length < allIds.length) {
+          body.allowedIds = ids
+        }
+        api('approvals', body)
           .then(() => {
-            setApprovals((prev) => prev.filter((item) => item.id !== id))
-            hideTip()
+            setApprovals((prev) => prev.filter((item) => item.id !== pending.id))
+            setPicked((prev) => {
+              const next = { ...prev }
+              delete next[pending.id]
+              return next
+            })
           })
           .catch((e) => setError(String((e && e.message) || e)))
           .finally(() => setBusy(''))
       }
-
-      const hideTip = () => { clearTimers(); setTip(null) }
-      const cancelHideTip = () => {
-        if (hideTimer.current !== null) { clearTimeout(hideTimer.current); hideTimer.current = null }
-      }
-      const scheduleHideTip = () => {
-        if (tipTimer.current !== null) { clearTimeout(tipTimer.current); tipTimer.current = null }
-        cancelHideTip()
-        hideTimer.current = setTimeout(() => { hideTimer.current = null; setTip(null) }, 220)
-      }
-      const positionFor = (element) => {
-        const width = typeof window !== 'undefined' ? window.innerWidth : 1200
-        const height = typeof window !== 'undefined' ? window.innerHeight : 800
-        const rect = element && typeof element.getBoundingClientRect === 'function' ? element.getBoundingClientRect() : null
-        if (rect === null) return { x: 12, y: 12 }
-        const tipWidth = Math.min(380, width - 24)
-        const tipHeight = 260
-        const x = Math.max(12, Math.min(rect.left, width - tipWidth - 12))
-        let y = rect.bottom + 8
-        if (y + tipHeight > height - 12) y = Math.max(12, rect.top - tipHeight - 8)
-        return { x, y }
-      }
-      const fetchRecord = (id) => {
-        api(`records?id=${encodeURIComponent(id)}`)
-          .then((value) => {
-            const record = Array.isArray(value.records) ? value.records[0] : undefined
-            if (!record || !activeRef.current) return
-            setTip((prev) => prev !== null && prev.item && prev.item.id === id
-              ? { ...prev, item: { ...prev.item, content: record.content, tags: Array.isArray(record.tags) ? record.tags : prev.item.tags, scope: record.scope, kind: record.kind, importance: record.importance } }
-              : prev)
-          })
-          .catch(() => { /* 悬浮详情是增强,失败就展示轮询里的摘要 */ })
-      }
-      const showTip = (item, element) => {
-        clearTimers()
-        tipTimer.current = setTimeout(() => {
-          tipTimer.current = null
-          setTip({ item, ...positionFor(element) })
-          fetchRecord(item.id)
-        }, 350)
+      const allow = () => {
+        if (selectable && selectedCount === 0) return
+        answer('allowed-once', selectable ? allIds.filter((id) => selectedSet.has(id)) : undefined)
       }
 
-      const pending = approvals.length > 0 ? approvals[0] : null
-      const tipNode = tip === null ? null : (() => {
-        const item = tip.item || {}
-        return h('div', { className: 'audit-tip', style: { left: tip.x, top: tip.y }, onMouseEnter: cancelHideTip, onMouseLeave: hideTip, onClick: () => openMemoryRecordPanel(item.id, item.scope, item) },
-          h('div', { className: 'audit-tip-head' }, h('span', null, '记忆'), h('span', { className: 'audit-tip-title' }, item.id || '未知')),
-          h('div', { className: 'audit-tip-meta' },
-            auditPill(item.kind ? kindMeta(item.kind).label : '未知', 'mute'),
-            auditPill(item.scope || '', 'mute'),
-            auditPill(`重要度 ${Number(item.importance ?? 0).toFixed(2)}`, 'mute'),
-          ),
-          item.tags && item.tags.length > 0
-            ? h('div', { className: 'audit-flat' }, item.tags.map((tag) => h('span', { className: 'tag', key: tag }, tag)))
-            : null,
-          h('div', { className: 'audit-tip-content' }, String(item.content || '')),
-          h('div', { className: 'audit-tip-foot' }, '点击跳转到「记录」页并展开'),
-        )
-      })()
+      const keydown = (event) => {
+        if (event.defaultPrevented || busy === pending.id) return
+        const target = event.target
+        if (target && typeof target.closest === 'function') {
+          if (target.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""]') !== null) return
+          if (event.key === 'Enter' && target.closest('button, a[href], [role="button"]') !== null) return
+        }
+        if (event.key !== 'Enter' && event.key !== 'Escape') return
+        if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+        event.preventDefault()
+        event.stopPropagation()
+        if (event.key === 'Escape') {
+          answer('rejected')
+          return
+        }
+        allow()
+      }
 
-      if (pending === null) return null
+      const allowLabel = busy === pending.id
+        ? '处理中…'
+        : selectable && selectedCount !== allIds.length
+          ? `允许选中的 ${selectedCount} 条`
+          : '允许一次'
 
-      // 0.20.0:写/删也会触发审批,文案按 action 走。
-      const action = pending.action === 'write' || pending.action === 'delete' ? pending.action : 'read'
-      const actionLabel = action === 'write' ? '写入' : action === 'delete' ? '删除' : '读取'
-      const actionHint = action === 'write'
-        ? 'Agent 想把一条记忆写入可见域外的作用域。允许一次只对本次调用生效；拒绝则不写入。'
-        : action === 'delete'
-          ? 'Agent 想删除可见域外的记忆。允许一次只对本次调用生效；拒绝则不删除。'
-          : '以下记忆不在本会话的可见域内。允许一次只对本次调用生效；拒绝则工具拿不到这些内容。'
-
-      return h('div', { className: 'memp mem-approval' },
-        h('div', { className: 'mem-approval-card', role: 'dialog', 'aria-label': '记忆访问审批' },
-          h('div', { className: 'mem-approval-head' },
+      return h('div', {
+        className: 'mem-approval',
+        'data-approval-id': pending.id,
+        onKeyDown: keydown,
+      },
+        h('div', { className: 'mem-approval-card', role: 'dialog', 'aria-label': `记忆${actionLabel}审批`, 'aria-busy': busy === pending.id },
+          h('div', { className: 'mem-approval-strip' },
             h('span', { className: 'mem-approval-dot' }),
-            h('b', null, `记忆${actionLabel}审批`),
-            h('span', { className: 'muted' }, pending.tool || 'memory'),
+            h('span', null, busy === pending.id ? '处理中…' : '等待审批'),
+            h('span', { className: 'mem-approval-tool' }, pending.tool || 'memory'),
             h('span', { className: 'spacer' }),
             approvals.length > 1 ? h('span', { className: 'muted' }, `还有 ${approvals.length - 1} 个待审批`) : null,
           ),
-          h('div', { className: 'mem-approval-query' }, `Agent 查询：${pending.query || '（未提供）'}`),
-          h('div', { className: 'hint' }, actionHint),
-          h('div', { className: 'mem-approval-list' },
-            pending.items.map((item) => h('div', { className: 'mem-approval-item', key: item.id },
-              h('div', { className: 'mem-approval-row' },
-                h('button', {
-                  type: 'button',
-                  className: 'audit-id',
-                  'aria-label': item.id,
-                  onMouseEnter: (event) => showTip(item, event.currentTarget),
-                  onMouseLeave: scheduleHideTip,
-                  onClick: () => openMemoryRecordPanel(item.id, item.scope, item),
-                }, String(item.id).length > 12 ? `${item.id.slice(0, 8)}…${item.id.slice(-4)}` : item.id),
-                h('span', { className: 'audit-pill mute' }, item.scope),
-                h('span', { className: 'audit-pill mute' }, item.kind ? kindMeta(item.kind).label : '未知'),
-                item.reason === 'kind'
-                  ? h('span', { className: 'audit-pill warn' }, '类型受限')
-                  : h('span', { className: 'audit-pill warn' }, '范围外'),
-              ),
-              h('div', { className: 'mem-approval-summary' }, String(item.content || '').replace(/\s+/g, ' ').slice(0, 180)),
-            )),
+          h('div', { className: 'mem-approval-body' },
+            h('div', { className: 'mem-approval-headline' }, `工具 ${pending.tool || 'memory'} 请求${actionLabel}可见域外的记忆`),
+            h('div', { className: 'mem-approval-hint' }, actionHint),
+            h('div', { className: 'mem-approval-command' }, `Agent 查询：${pending.query || '（未提供）'}`),
+            h('div', { className: 'mem-approval-list' },
+              items.map((item) => {
+                const checked = !selectable || selectedSet.has(item.id)
+                return h('div', { className: 'mem-approval-item' + (selectable && !checked ? ' is-off' : ''), key: item.id },
+                  selectable
+                    ? h('button', {
+                      type: 'button',
+                      className: 'mem-approval-check' + (checked ? ' on' : ''),
+                      role: 'checkbox',
+                      'aria-checked': checked,
+                      'aria-label': `允许这条记忆 ${item.id}`,
+                      onClick: () => toggle(item.id),
+                    }, h('span', { className: 'box' }, checked ? h('span', { className: 'tick' }, '✓') : null))
+                    : null,
+                  h('div', { className: 'mem-approval-item-body' },
+                    h('div', { className: 'mem-approval-row' },
+                      h('span', { className: 'mem-approval-id', title: item.id }, String(item.id).length > 12 ? `${item.id.slice(0, 8)}…${item.id.slice(-4)}` : item.id),
+                      h('span', { className: 'audit-pill mute' }, item.scope),
+                      h('span', { className: 'audit-pill mute' }, item.kind ? kindMeta(item.kind).label : '未知'),
+                      item.reason === 'kind'
+                        ? h('span', { className: 'audit-pill warn' }, '类型受限')
+                        : h('span', { className: 'audit-pill warn' }, '范围外'),
+                    ),
+                    h('div', { className: 'mem-approval-summary' }, String(item.content || '').replace(/\s+/g, ' ').slice(0, 180)),
+                  ),
+                )
+              }),
+            ),
           ),
-          error ? h('div', { className: 'mem-scope-err' }, error) : null,
-          h('div', { className: 'mem-approval-foot' },
+          error ? h('div', { className: 'mem-approval-err' }, error) : null,
+          h('div', { className: 'mem-approval-actionrow' },
             h('button', {
               type: 'button',
-              className: 'mem-scope-reset',
+              className: 'mem-approval-reject',
               disabled: busy === pending.id,
-              onClick: () => answer(pending.id, 'rejected'),
+              onClick: () => answer('rejected'),
             }, '拒绝'),
-            h('span', { className: 'spacer' }),
             h('button', {
               type: 'button',
-              className: 'mem-scope-save',
-              disabled: busy === pending.id,
-              onClick: () => answer(pending.id, 'allowed-once'),
-            }, busy === pending.id ? '处理中…' : '允许一次'),
+              className: 'mem-approval-allow',
+              disabled: busy === pending.id || (selectable && selectedCount === 0),
+              onClick: allow,
+            }, allowLabel),
           ),
         ),
-        tipNode,
       )
     }
 
@@ -5092,15 +5133,16 @@ window.__ModuleLoader__.load({
         } catch (error) {
           console.warn('[dsh-memory] 轨迹详情记忆页签注册失败:', error?.message)
         }
-        // 普通限制下的范围外访问审批浮层:全局 fixed,自己轮询待审批。
+        // 普通限制下的范围外访问审批卡:会话作用域(conversation.input.dock),
+        // 只在它所属的那个会话里出现;组件按标准 sessionId prop 轮询本会话待审批。
         try {
-          slots.inject('shell.overlay', () => slots.register({
-            name: 'shell.overlay',
+          slots.inject('conversation.input.dock', () => slots.register({
+            name: 'conversation.input.dock',
             id: 'memory-access-approval',
-            order: 62,
-          }, () => React.createElement(MemoryApprovalOverlay)))
+            order: 40,
+          }, MemoryApprovalDock))
         } catch (error) {
-          console.warn('[dsh-memory] 记忆访问审批浮层注册失败:', error?.message)
+          console.warn('[dsh-memory] 记忆访问审批卡注册失败:', error?.message)
         }
       } catch (error) {
         console.error('[dsh-memory] client apply 失败(已吞掉):', error?.message)
@@ -5220,7 +5262,7 @@ window.__ModuleLoader__.load({
       SettingsTab: SettingsTab,
       AuditTab: AuditTab,
       MemoryVisibilityButton: MemoryVisibilityButton,
-      MemoryApprovalOverlay: MemoryApprovalOverlay,
+      MemoryApprovalDock: MemoryApprovalDock,
       openMemoryRecordPanel: openMemoryRecordPanel,
       requestRecordFocus: requestRecordFocus,
       takeRecordFocus: takeRecordFocus,

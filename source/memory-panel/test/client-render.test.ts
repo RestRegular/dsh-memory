@@ -1514,7 +1514,11 @@ test('client apply 注册记忆视图、轨迹徽标与详情页签', async () =
   assert.equal(spec('conversation.view')?.id, 'memory', '会话内「记忆」视图已注册')
   assert.ok(!registered.some((entry) => entry.spec.name === 'conversation.session.header.actions'), '会话头部不再注册记忆按钮')
   const overlays = registered.filter((entry) => entry.spec.name === 'shell.overlay').map((entry) => entry.spec.id)
-  assert.deepEqual(overlays.sort(), ['memory-access-approval', 'memory-audit-badge', 'memory-audit-detail', 'memory-audit-marks'], '轨迹标记/徽标/详情页签/审批浮层已注册')
+  assert.deepEqual(overlays.sort(), ['memory-audit-badge', 'memory-audit-detail', 'memory-audit-marks'], '轨迹标记/徽标/详情页签已注册')
+  // 0.21.0:审批不再是全局浮层,而是会话内的 dock(只在对应会话里出现)。
+  const dock = registered.find((entry) => entry.spec.name === 'conversation.input.dock')
+  assert.equal(dock?.spec.id, 'memory-access-approval', '审批卡注册在会话内的输入框 dock')
+  assert.ok(injected.includes('conversation.input.dock'))
   assert.ok(injected.includes('conversation.view'))
   assert.ok(!injected.includes('conversation.session.header.actions'))
   assert.ok(injected.includes('shell.overlay'))
@@ -1650,26 +1654,105 @@ test('记忆范围按钮:数字展示范围,边框样式展示限制等级(橙�
   ;(globalThis as Record<string, unknown>).fetch = savedFetch
 })
 
-test('审批浮层:展示范围外摘要与拒绝/允许一次,回答一次后消失', async () => {
+test('审批卡:只在所属会话显示,读审批可逐条允许', async () => {
   const { exports, hooks } = await loadBundle()
   hooks.resetAll()
-  const Overlay = (exports.__test as { MemoryApprovalOverlay: () => unknown }).MemoryApprovalOverlay
+  const Dock = (exports.__test as { MemoryApprovalDock: (p: Record<string, unknown>) => unknown }).MemoryApprovalDock
+  const calls: Array<{ url: string; init?: { method?: string; body?: string } }> = []
+  const item = (id: string, content: string) => ({
+    id,
+    scope: 'global',
+    kind: 'rule',
+    content,
+    tags: ['release'],
+    importance: 0.9,
+    updatedAt: 1,
+    reason: 'scope',
+  })
+  const approval = {
+    id: 'a1',
+    sessionId: 's1',
+    tool: 'memory_search',
+    action: 'read',
+    query: '发布流程',
+    items: [item('abcdef1234567890', '范围外规则：发布前必须跑完整测试。'), item('12345678abcdef00', '另一条范围外记忆。')],
+    createdAt: 1,
+    expiresAt: 2,
+  }
+  // 另一个会话的审批不该出现在当前会话里。
+  const other = {
+    id: 'a2',
+    sessionId: 's2',
+    tool: 'memory_get',
+    action: 'read',
+    query: '别的会话',
+    items: [item('ffffffff00000000', '别的会话的内容。')],
+    createdAt: 3,
+    expiresAt: 4,
+  }
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string, init?: { method?: string; body?: string }) => {
+    calls.push({ url, init })
+    if (init === undefined || init.method === 'GET') {
+      return { status: 200, json: async () => ({ ok: true, value: { approvals: [other, approval] } }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, value: { answered: true } }) }
+  }
+  try {
+    let current: RenderNode | null = null
+    const element = () => hooks.React.createElement(Dock, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    assert.equal(calls[0]?.url, '/memory/api/approvals?session=s1', '按会话轮询待审批')
+    const text = textOf(current)
+    assert.ok(text.includes('等待审批'), '与系统审批弹窗一致的等待条')
+    assert.ok(text.includes('工具 memory_search 请求读取可见域外的记忆'), '标题带工具名与动作')
+    assert.ok(text.includes('发布流程'), '展示 Agent 的查询关键词')
+    assert.ok(text.includes('范围外规则：发布前必须跑完整测试。'), '展示范围外记忆摘要')
+    assert.ok(!text.includes('别的会话的内容。'), '别的会话的审批不显示在当前会话')
+    const checks = collect(current).filter((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-approval-check'))
+    assert.equal(checks.length, 2, '读审批每条一个勾选框')
+    assert.deepEqual(checks.map((box) => box.props?.['aria-checked']), [true, true], '默认全选')
+    assert.ok(text.includes('拒绝') && text.includes('允许一次'), '两个审批动作')
+
+    // 全选 = 老口径,不带 allowedIds。
+    const allow = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '允许一次')
+    assert.ok(allow, '允许一次按钮')
+    ;(allow!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.equal(calls[1]?.url, '/memory/api/approvals')
+    const posted = JSON.parse(String(calls[1]?.init?.body ?? '{}')) as { id: string; outcome: string; allowedIds?: string[] }
+    assert.deepEqual(posted, { id: 'a1', outcome: 'allowed-once' })
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
+})
+
+test('审批卡:取消勾选后只允许选中的部分记忆', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const Dock = (exports.__test as { MemoryApprovalDock: (p: Record<string, unknown>) => unknown }).MemoryApprovalDock
   const calls: Array<{ url: string; init?: { method?: string; body?: string } }> = []
   const approval = {
     id: 'a1',
     sessionId: 's1',
     tool: 'memory_search',
+    action: 'read',
     query: '发布流程',
-    items: [{
-      id: 'abcdef1234567890',
+    items: ['abcdef1234567890', '12345678abcdef00'].map((id) => ({
+      id,
       scope: 'global',
       kind: 'rule',
-      content: '范围外规则：发布前必须跑完整测试。',
-      tags: ['release'],
-      importance: 0.9,
+      content: `内容 ${id}`,
+      tags: [],
+      importance: 0.5,
       updatedAt: 1,
       reason: 'scope',
-    }],
+    })),
     createdAt: 1,
     expiresAt: 2,
   }
@@ -1683,30 +1766,41 @@ test('审批浮层:展示范围外摘要与拒绝/允许一次,回答一次后�
   }
   try {
     let current: RenderNode | null = null
-    const element = () => hooks.React.createElement(Overlay)
+    const element = () => hooks.React.createElement(Dock, { sessionId: 's1' })
     hooks.setRerender(() => { current = render(element(), hooks) })
     current = render(element(), hooks)
     hooks.runEffects()
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    const text = textOf(current)
-    assert.ok(text.includes('记忆读取审批'), '审批标题按动作变化(读)')
-    assert.ok(text.includes('发布流程'), '展示 Agent 的查询关键词')
-    assert.ok(text.includes('范围外规则：发布前必须跑完整测试。'), '展示范围外记忆摘要')
-    assert.ok(text.includes('拒绝') && text.includes('允许一次'), '两个审批选项')
+    const checks = collect(current).filter((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-approval-check'))
+    assert.equal(checks.length, 2)
+    ;(checks[0]!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
-    const allow = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '允许一次')
-    assert.ok(allow, '允许一次按钮')
+    const allow = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-approval-allow'))
+    assert.ok(allow, '允许按钮存在')
+    assert.equal(textOf(allow).trim(), '允许选中的 1 条', '按勾选数量换按钮文案')
     ;(allow!.props!.onClick as () => void)()
     await new Promise((resolve) => setTimeout(resolve, 0))
-    assert.equal(calls[1]?.url, '/memory/api/approvals')
-    const posted = JSON.parse(String(calls[1]?.init?.body ?? '{}')) as { id: string; outcome: string }
-    assert.deepEqual(posted, { id: 'a1', outcome: 'allowed-once' })
+
+    const post = calls.find((call) => call.init?.method === 'POST')
+    assert.ok(post, '回答走 POST')
+    const posted = JSON.parse(String(post?.init?.body ?? '{}')) as { id: string; outcome: string; allowedIds?: string[] }
+    assert.deepEqual(posted, { id: 'a1', outcome: 'allowed-once', allowedIds: ['12345678abcdef00'] }, '只把勾选的 id 交给服务端')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch
   }
   hooks.resetAll()
 })
+
+test('审批卡样式对齐系统审批弹窗:警告色 strip + 同一批主题 token', async () => {
+  const { exports } = await loadBundle()
+  const css = (exports.__test as { CSS: string }).CSS
+  assert.match(css, /\.mem-approval-card\{[^}]*state-warn-secondary[^}]*dsw-radius-xl[^}]*specific-input-major[^}]*dsw-shadow-lv2/, '卡片边框/圆角/底色/阴影与系统审批卡同一批 token')
+  assert.match(css, /\.mem-approval-strip\{[^}]*state-warn-tertiary[^}]*state-warn-primary/, '等待条用警告色')
+  assert.doesNotMatch(css, /\.mem-approval\{[^}]*position:fixed/, '不再是全局 fixed 浮层')
+})
+
 
 test('记忆视图用 composer overlay 占满高度，滚动只发生在审计列表里', async () => {
   const { exports, hooks } = await loadBundle()
