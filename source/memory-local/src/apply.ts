@@ -196,6 +196,21 @@ export class CordisMemoryService extends Service {
     return this.impl.scopeName(scope)
   }
 
+  /** 作用域用途等元数据(没有则 undefined)。 */
+  scopeMeta(scope: MemoryScope): ReturnType<LocalMemoryService['scopeMeta']> {
+    return this.impl.scopeMeta(scope)
+  }
+
+  /** 写入 / 更新作用域用途(不创建记录)。 */
+  describeScope(scope: MemoryScope, description: string, by: string): ReturnType<LocalMemoryService['describeScope']> {
+    return this.impl.describeScope(scope, description, by)
+  }
+
+  /** 作用域目录:名字 / 用途 / 当前可读可写状态(工具 memory_scopes 与面板共用)。 */
+  scopeCatalog(agent: unknown): ReturnType<LocalMemoryService['scopeCatalog']> {
+    return this.impl.scopeCatalog(agent)
+  }
+
   /** 注入设置(面板「设置」标签页读它)。 */
   injectSettings(): ReturnType<LocalMemoryService['injectSettings']> {
     return this.impl.injectSettings()
@@ -268,6 +283,16 @@ export class CordisMemoryService extends Service {
     return this.impl.isScopeWritable(agent, scope)
   }
 
+  /** 统一授权判定(0.24.0)：read/write/delete/discover 的唯一规则出口。 */
+  authorize(agent: unknown, request: Parameters<LocalMemoryService['authorize']>[1]): ReturnType<LocalMemoryService['authorize']> {
+    return this.impl.authorize(agent, request)
+  }
+
+  /** 一次解析、多次判定(检索逐条过滤用)。 */
+  accessEvaluator(agent: unknown): ReturnType<LocalMemoryService['accessEvaluator']> {
+    return this.impl.accessEvaluator(agent)
+  }
+
   /** 当前工作区 key(= 会话 cwd 解析出的 project scope)。 */
   workspaceKeyFor(agent: unknown): ReturnType<LocalMemoryService['workspaceKeyFor']> {
     return this.impl.workspaceKeyFor(agent)
@@ -321,6 +346,26 @@ export class CordisMemoryService extends Service {
   /** 普通限制:范围外访问审批(挂起,等面板回答)。 */
   requestOutOfScope(agent: unknown, input: Parameters<LocalMemoryService['requestOutOfScope']>[1]): ReturnType<LocalMemoryService['requestOutOfScope']> {
     return this.impl.requestOutOfScope(agent, input)
+  }
+
+  /** Agent 主动申请范围外作用域的会话权限（0.24.0 / D3）。 */
+  requestScopeGrants(agent: unknown, input: Parameters<LocalMemoryService['requestScopeGrants']>[1]): ReturnType<LocalMemoryService['requestScopeGrants']> {
+    return this.impl.requestScopeGrants(agent, input)
+  }
+
+  /** 当前会话（含父链）的有效授权。 */
+  grantList(agent: unknown): ReturnType<LocalMemoryService['grantList']> {
+    return this.impl.grantList(agent)
+  }
+
+  /** 面板：撤销一条会话授权。 */
+  revokeGrant(sessionId: string, id: string): boolean {
+    return this.impl.revokeGrant(sessionId, id)
+  }
+
+  /** 最近的审批 / 授权生命周期事件（不含正文）。 */
+  approvalAuditList(limit?: number): ReturnType<LocalMemoryService['approvalAuditList']> {
+    return this.impl.approvalAuditList(limit)
   }
 
   /** 面板:当前待审批列表。 */

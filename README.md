@@ -39,8 +39,10 @@ JSONL 落盘 · 本机向量检索 · 五个模型工具 · 自动召回 · 硬�
 
 | 能力 | 说明 |
 | --- | --- |
-| **五个工具** | `memory_save` / `memory_search` / `memory_list` / `memory_get` / `memory_forget`。`memory_search` 只回印象（8 位 id / 作用域 / 类型 / 标签 / 短摘要），正文和元数据用 `memory_get` 的 `fields` 按需取；同一会话里已出现过的条目只回 id。`description` 字段在普通限制下必填，审批卡会展示它 |
-| **四种作用域** | 会话 / 项目 / `global` / 自定义名。默认写进当前会话，读默认合并会话 + 项目 + global；项目作用域可起别名 |
+| **六个工具** | `memory_save` / `memory_search` / `memory_list` / `memory_get` / `memory_forget` / `memory_scopes`。`memory_search` 只回印象（8 位 id / 作用域 / 类型 / 标签 / 短摘要），正文和元数据用 `memory_get` 的 `fields` 按需取；同一会话里已出现过的条目只回 id。`description` 字段在普通限制下必填，审批卡会展示它。`memory_scopes` 只读目录：给作用域名字 / 用途 / 当前可读可写状态，不返回任何正文 |
+| **四种作用域** | 会话 / 项目 / `global` / 自定义名。默认写进当前会话，读默认合并会话 + 项目 + global；项目作用域可起别名。自定义作用域**首次由 Agent 创建时必须带 `scopeDescription`**（一句话用途），可选带 `scopeRule` 写一条初始规则；元数据存在 `<storeDir>/scope-meta/`，删光记录也不会丢 |
+| **作用域目录与绝对隔离** | `memory_scopes` 列出范围内 / 范围外的名字与用途；normal / none 下还带**初始化记录正文**（每个作用域最多 3 条，方便 Agent 直接读到“这个作用域主要放什么”）。绝对限制下范围外作用域**仍可发现**，但正文（含初始记录）永不可读、不可写、不可申请（没有任何审批放行路径）；普通限制下范围外条目可申请，`memory_scopes request` 走审批后写入**本会话**授权（默认只读，写权限必须单独申请），子 Agent 沿父会话继承 |
+| **会话授权（grants）** | Agent 申请、用户批准的例外单独存在 `<storeDir>/grants/<session>.json`，不并入可见域策略；只读 / 可写独立、可撤销、只在本会话（及子 Agent）生效；`absolute` 下授权不生效，作用域被删除重建后按创建代次自动失效 |
 | **双通道检索** | 词法（IDF + 中文 bigram）**+** 向量（本机 llama-server 的 OpenAI 兼容 `/v1/embeddings`）。向量缺席自动降级，不报错、不阻塞 |
 | **自动召回** | 每轮按用户问题召回；新会话第一步注入项目 / global 摘要；发布、部署、工具失败等行为按标签触发定向召回 |
 | **印象形态** | 每轮只给每条记忆的短摘要；模型判断相关但需要细节时再 `memory_get` 取全文，省 token 也不丢信息 |
@@ -214,7 +216,7 @@ memory_forget({ "id": "3f2a9c1d", "description": "删除过期的临时结论" }
 后会重新返回摘要。`memory_search` 里这些裸 ID 单独成块，与带摘要的条目之间**空一行**，不会看起来像
 上一条的续行。状态与召回/摘要共用同一份会话去重记录（`summary_injected` / `content_injected`）。
 
-**`description`（0.22.0）**：五个工具都新增 `description` 参数 —— 一句话说明这次调用要做什么。
+**`description`（0.22.0）**：六个工具都新增 `description` 参数 —— 一句话说明这次调用要做什么。
 本会话「记忆范围」为**普通限制**（默认）时**必填**，漏了会被 `DESCRIPTION_REQUIRED` 拒绝；
 绝对限制 / 无限制下可省略。它只用于范围外访问的审批卡（展示给用户判断是否放行），不写进记忆。
 
@@ -226,13 +228,53 @@ memory_forget({ "id": "3f2a9c1d", "description": "删除过期的临时结论" }
 | `project` | 当前工作区（键是 `project:<cwd>`） |
 | `path` + 可选 `scope` | 指定工作区目录；`scope` 成为这个项目作用域的显示名（别名） |
 | `global` | 所有项目共享 |
-| `handbook`、`项目笔记` … | 自定义作用域，首次 `memory_save` 自动创建 |
+| `handbook`、`项目笔记` … | 自定义作用域，首次 `memory_save` 自动创建（Agent 创建时必须带 `scopeDescription`） |
 | `session:<id>` / `project:<path>` | 显式钉住某个会话 / 工作区 |
 | `all` / `*` | **只在读取时可用**：跨所有已发现作用域 |
 
 项目作用域的身份永远是 `project:<绝对路径>`，别名只影响显示与引用，不迁移数据。
 同一路径重复用同一个名字是幂等的；换名字会覆盖原别名；另一个路径抢同一个名字会被拒绝
 （`SCOPE_NAME_TAKEN`）。
+
+**新建自定义作用域（0.24.0）**：Agent 必须说明用途，可选写一条初始规则；两者在同一次
+`memory_save` 里原子写入（元数据先落 `pending`，记录与规则写完后转 `ready`，中途失败下次保存会续上）：
+
+```js
+memory_save({
+  scope: "handbook",
+  content: "本作用域用于收集团队约定、流程与踩坑记录。",
+  kind: "fact",
+  scopeDescription: "团队约定与流程；只放可复用的结论，不放一次性排错日志。",
+  scopeRule: "只记录与团队协作 / 发布 / 工具链有关的内容；一次性排错过程不进这里。",
+  description: "初始化团队约定作用域"
+})
+```
+
+用途会出现在 `memory_scopes` 的目录里：
+
+```js
+memory_scopes({ action: "list", description: "看看有哪些作用域、各自干什么" })
+```
+
+绝对限制下**目录可见但正文不可读**：范围外作用域仍显示名字与用途（方便判断要不要让用户
+调整范围），但记录数、正文、申请入口都不会返回。
+
+**申请本会话权限（0.24.0 / D3）**：普通限制下，Agent 可以对**范围外**作用域发申请；
+默认只申请只读，写权限必须显式列出：
+
+```js
+memory_scopes({
+  action: "request",
+  requests: [{ scope: "handbook", permissions: ["read"] }],
+  reason: "需要团队约定与发布流程",
+  description: "申请读取 handbook"
+})
+```
+
+审批卡默认只勾只读；用户勾上写权限才会授予写。批准后写入
+`<storeDir>/grants/<session>.json`（本会话 + 子 Agent 继承），不会改可见域策略；
+`absolute` 下所有申请都返回 `not-requestable`，不会弹卡。一次性访问仍走 `memory_*`
+自己的隐式审批，不需要先申请。
 
 ### 5. 导入 / 导出
 
@@ -386,6 +428,9 @@ retrieval:
 | `<storeDir>/projects/<sha1(scope)>.vec` | 向量边车；首行 `#<model>\t<dims>\t<pooling>`，后面每行 `id\t<base64 向量>` |
 | `<storeDir>/settings.json` | 面板设置（覆盖配置文件里的默认值） |
 | `<storeDir>/scopes.json` | 项目作用域别名（显示名 → `project:<路径>`） |
+| `<storeDir>/scope-meta/<sha1(scope)>.json` | 作用域用途 / 来源 / 创建者 / 创建代次 / 初始化状态；每个作用域一个文件，删光记录也不删元数据 |
+| `<storeDir>/grants/<session>.json` | 会话级作用域授权（Agent 申请、用户批准）；只读 / 可写分开、可撤销、带作用域创建代次 |
+| `<storeDir>/approvals.jsonl` | 审批与授权生命周期审计（requested / approved / denied / timeout / granted / revoked）；只记 scope 与权限，不记记忆正文 |
 | `<storeDir>/visibility/<session>.json` | 会话「记忆可见域」覆盖（作用域 + 限制等级）；没有文件 = 使用默认三路集合 |
 | `<storeDir>/*.lock` | 跨进程写锁；陈旧锁（持有者已死或 10s 未动）会被接管 |
 | `<installRoot>/llamacpp/` | llama-server 运行时、依赖 dll、`llama-server.log` |
@@ -394,6 +439,7 @@ retrieval:
 
 `storeDir` 默认 `.dsh-memory`（相对启动目录），**建议显式配一个绝对路径**。文件首次写入才创建；
 作用域被删空后，它的 `.jsonl` 与 `.vec` 会在下一次落盘时一起移除（`global.jsonl` 例外：只清内容、留文件）。
+作用域元数据（`scope-meta/`）独立于记录：删光某个作用域的最后一条记忆，不会删除它的用途说明。
 
 scope 键有三种形态：`global`、`project:<cwd>`、`session:<会话 id>`，其余是自定义名
 （小写折叠、内部空白折成一个空格、最长 64 字符，禁止 `:`、路径分隔符、控制字符、`..`
@@ -414,6 +460,7 @@ scope 键有三种形态：`global`、`project:<cwd>`、`session:<会话 id>`，
   「只认 loopback 权威 + 同源」。原因是注册在裸 `webServer` 上的路由不在宿主 `/api` 围栏之后，
   而这里的接口能读、改、删、清空全部记忆。
 - 记忆内容写入前过凭据扫描（`secrets.mode: refuse | redact`），默认拒绝。
+- **统一授权判定（0.24.0）**：`discover / read / write / delete` 都走 provider 的同一个纯函数 `authorize()`；工具层只决定“要不要发起审批”，不再各自解释绝对 / 普通 / 无限制。`absolute` 下不存在任何审批放行路径；显式关掉「可读 / 可写」的作用域也不通过审批放行。
 - 清空记忆是两步确认 + 接口要求显式 `confirm: "delete"`。
 - 数据默认只在本机：JSONL 不加密，向量端点默认 loopback；请自行保护 store 目录，导出文件也是明文。
 

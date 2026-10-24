@@ -35,6 +35,20 @@ import {
   type VisibilityRule,
 } from './session-visibility.ts'
 import { WorkspaceBindingsStore } from './workspace-bindings.ts'
+import { SessionGrantsStore, type GrantPermission, type ScopeGrant } from './grants.ts'
+import { ApprovalAuditStore, type ApprovalAuditEvent } from './approval-audit.ts'
+import {
+  authorize as authorizeAccess,
+  type AccessContext,
+  type AccessDecision,
+  type AccessRequest,
+} from './authorize.ts'
+import {
+  MAX_SCOPE_DESCRIPTION_CHARS,
+  ScopeMetaStore,
+  type ScopeMeta,
+  type ScopeOrigin,
+} from './scope-meta.ts'
 import { mergeInjectSettings, normalizeInjectSettings, type InjectSettings } from './inject-settings.ts'
 import { buildStats, lexicalScore, recordScore, tokenize, cosine, normalizeInPlace, hasStrongHit } from './scoring.ts'
 import { EmbedClient } from './embed.ts'
@@ -520,6 +534,37 @@ export interface VisibilityPolicyView {
   source: 'explicit' | 'inherited' | 'default'
 }
 
+/**
+ * 目录工具（memory_scopes list）的一行：作用域的“身份证 + 当前访问状态”。
+ *
+ * 0.24.0 起目录可见与正文可读是两件事：
+ *   - `absolute` 下范围外作用域仍列出名字/用途（`accessStatus='restricted'`），
+ *     但 `readable/writable` 恒为 false，`canRequest*` 也恒为 false —— absolute
+ *     没有任何审批放行路径；
+ *   - `normal` 下范围外可申请，`canRequest*` 才是 true；
+ *   - 自定义作用域开关关闭时整个条目不出现（不是 `unavailable`）。
+ */
+export interface ScopeCatalogEntry {
+  scope: MemoryScope
+  name?: string
+  description?: string
+  origin: ScopeOrigin
+  /** 仅范围内返回：范围外的作用域条数会泄露“有没有内容”。 */
+  records?: number
+  inScope: boolean
+  readable: boolean
+  writable: boolean
+  canRequestRead: boolean
+  canRequestWrite: boolean
+  accessStatus: 'default' | 'read-only' | 'read-write' | 'restricted' | 'unavailable'
+  updatedAt: number
+  /**
+   * 初始化记录正文（0.24.0 / D5）。**只在 normal / none 下返回**；absolute 下
+   * 连初始正文也不返回（目录可见、正文不可读的硬边界）。每条最多 3 条、截断。
+   */
+  initialRecords?: Array<{ id: string; kind: string; content: string; truncated?: boolean }>
+}
+
 /** 范围外访问的动作(读取 / 写入 / 删除);审批浮层按它换文案。 */
 export type VisibilityAction = 'read' | 'write' | 'delete'
 
@@ -534,6 +579,8 @@ export interface VisibilityApprovalItem {
   updatedAt: number
   /** 为什么需要审批:整个作用域不在可见域里,还是只是类型不在允许列表里。 */
   reason: 'scope' | 'kind'
+  /** grant 审批模式下，这一条代表的作用域权限（read / write）。 */
+  grantPermission?: GrantPermission
 }
 
 export interface VisibilityApprovalView {
@@ -546,6 +593,11 @@ export interface VisibilityApprovalView {
   query: string
   /** 模型为这次调用写的用途说明(0.22.0;普通限制下工具层强制提供)。 */
   description?: string
+  /**
+   * 审批类型：缺省 / `records` = 记忆条目照常；`grant` = 作用域权限申请
+   * （每条 item 代表一个 scope + 权限，允许后写入会话 grants）。
+   */
+  mode?: 'records' | 'grant'
   items: VisibilityApprovalItem[]
   createdAt: number
   expiresAt: number
@@ -553,6 +605,32 @@ export interface VisibilityApprovalView {
 
 /** 一次审批的结局:允许(可只允许其中几条) / 拒绝 / 超时。 */
 export type VisibilityApprovalOutcome = 'allowed-once' | 'rejected' | 'timeout'
+
+/** 一条作用域权限申请的处理结果（0.24.0 / D3）。 */
+export type ScopeGrantRequestStatus =
+  | 'granted'
+  | 'already-allowed'
+  | 'already-granted'
+  | 'not-requestable'
+  | 'unavailable'
+  | 'denied'
+  | 'timeout'
+  | 'approval-unavailable'
+
+export interface ScopeGrantRequestItemResult {
+  scope: MemoryScope
+  permission: GrantPermission
+  status: ScopeGrantRequestStatus
+  /** not-requestable 时给出授权引擎的原因（absolute / read-disabled / scope-disabled…）。 */
+  reason?: string
+}
+
+export interface ScopeGrantRequestResult {
+  results: ScopeGrantRequestItemResult[]
+  outcome?: VisibilityApprovalOutcome | 'unavailable'
+  /** 本次真正新写入 / 合并的会话授权。 */
+  grants: ScopeGrant[]
+}
 
 /**
  * 审批结论(0.21.0)。`allowedIds` 省略 = 本次请求的所有条目都允许;
@@ -597,12 +675,18 @@ export class LocalMemoryService implements MemoryServiceApi {
   private scopesReconciled = false
   /** 作用域别名(project:<路径> → 显示名),落盘 <storeDir>/scopes.json。 */
   private names: ScopeNames
+  /** 作用域用途等元数据；每作用域一个文件，旧作用域按需懒合成。 */
+  private readonly meta: ScopeMetaStore
   /** 注入设置(面板「设置」标签页可改;落盘在 <storeDir>/settings.json)。 */
   private inject: InjectSettings
   /** 会话级「记忆可见范围」覆盖;没有覆盖时沿用默认集合。 */
   private readonly visibility: SessionVisibilityStore
   /** 工作区级「绑定作用域」:默认范围会额外并入这些作用域。 */
   private readonly bindings: WorkspaceBindingsStore
+  /** 会话级授权（Agent 申请、用户批准）；独立于 visibility 策略。 */
+  private readonly grants: SessionGrantsStore
+  /** 权限申请 / 授权生命周期审计（approvals.jsonl，不含正文）。 */
+  private readonly approvalAudit: ApprovalAuditStore
   /** 可见域变更通知:下一次 pre-step 注入给 Agent 后删除(按会话)。 */
   private readonly visibilityNotices = new Map<string, { config: SessionVisibilityConfig | null; at: number }>()
   /** 普通限制下等待用户审批的范围外访问(按审批 id)。 */
@@ -626,8 +710,11 @@ export class LocalMemoryService implements MemoryServiceApi {
     this.cfg = resolveConfig(config)
     this.inject = this.loadInjectSettings((config as { inject?: unknown }).inject)
     this.names = new ScopeNames(join(this.cfg.storeDir, 'scopes.json'))
+    this.meta = new ScopeMetaStore({ root: this.cfg.storeDir })
     this.visibility = new SessionVisibilityStore({ root: this.cfg.storeDir })
     this.bindings = new WorkspaceBindingsStore({ root: this.cfg.storeDir })
+    this.grants = new SessionGrantsStore({ root: this.cfg.storeDir })
+    this.approvalAudit = new ApprovalAuditStore({ root: this.cfg.storeDir })
     this.rerankBudget = new DailyBudget(this.cfg.llm.dailyBudgetTokens)
     this.store = new MemoryStore(this.cfg.storeDir, { onWarn: (m) => console.warn(`[dsh-memory-local] ${m}`) })
     // Identity BEFORE the eager load (issue #1): ScopeStore skips its sidecar
@@ -1352,7 +1439,8 @@ export class LocalMemoryService implements MemoryServiceApi {
    */
   private assertCustomScopeBudget(scope: MemoryScope): void {
     if (!isCustomScope(scope)) return
-    if (this.store.peek(scope) !== undefined) return // 已存在(内存或磁盘)→ 写入不受限
+    // 已有记录或已有元数据都算“已存在”：删光记录但保留元数据的作用域不该再占一个新名额。
+    if (this.store.peek(scope) !== undefined || this.meta.has(scope)) return
     const loaded = this.store.allScopes().filter((s) => isCustomScope(s.scope)).length
     if (loaded < this.cfg.customMaxScopes && this.store.customScopeCount() < this.cfg.customMaxScopes) return
     throw memoryError(
@@ -1469,6 +1557,52 @@ export class LocalMemoryService implements MemoryServiceApi {
     }
   }
 
+  /**
+   * 沿 parentSession 链收集 grant（当前会话在前、父会话在后）。
+   * 子 Agent 与父会话是同一个任务，应该继承父会话获批的权限。
+   */
+  private resolveGrantChain(sessionId: string): ScopeGrant[] {
+    const out: ScopeGrant[] = []
+    const seen = new Set<string>()
+    let id = sessionId
+    while (id !== '' && !seen.has(id)) {
+      seen.add(id)
+      out.push(...this.grants.list(id))
+      let parent: string | undefined
+      try {
+        const session = this.sessionLookup?.(id) as { header?: { parentSession?: unknown } } | undefined
+        parent = typeof session?.header?.parentSession === 'string' && session.header.parentSession !== ''
+          ? session.header.parentSession
+          : undefined
+      } catch { parent = undefined }
+      id = parent ?? ''
+    }
+    return out
+  }
+
+  /**
+   * 当前 agent 的有效 grant：作用域仍启用、作用域代次一致（同名重建不复用旧授权）。
+   * `grants.list()` 已过滤撤销 / 过期；这里再按 provider 的 canonicalScope 统一键。
+   */
+  private validGrants(agent: unknown): ScopeGrant[] {
+    const sessionId = this.rawSessionIdOf(agent)
+    if (sessionId === undefined) return []
+    const out: ScopeGrant[] = []
+    for (const grant of this.resolveGrantChain(sessionId)) {
+      const scope = this.canonicalScope(grant.scope)
+      if (!this.scopeEnabled(scope)) continue
+      const meta = this.meta.get(scope)
+      if (meta !== undefined && grant.scopeGeneration !== meta.generation) continue
+      out.push({ ...grant, scope })
+    }
+    return out
+  }
+
+  /** 面板/诊断：当前会话（含父链）的有效授权快照。 */
+  activeGrants(agent: unknown): ScopeGrant[] {
+    return this.validGrants(agent)
+  }
+
   /** 没有显式覆盖时的默认可见域范围(会话 + 项目 + global + 工作区绑定的作用域)。 */
   /** 默认三路(会话 + 项目 + global),**不含**工作区绑定;各自开关生效。 */
   private baseDefaultScopes(agent: unknown): MemoryScope[] {
@@ -1566,33 +1700,62 @@ export class LocalMemoryService implements MemoryServiceApi {
     return rule.kinds !== undefined && rule.kinds.length > 0 ? [...rule.kinds] : undefined
   }
 
-  /** 一条记录(scope + kind)是否落在当前可见域内;等级 none 时恒为 true。 */
-  isRecordVisible(agent: unknown, scope: string, kind: string): boolean {
+  /**
+   * 把 agent 解析成一次性授权上下文（可见域只解析一次）。
+   * 纯函数 `authorize()` 是唯一规则出口；这里只负责把配置 / 策略翻译成上下文。
+   */
+  private accessContext(agent: unknown): AccessContext {
     const policy = this.visibilityPolicy(agent)
-    if (policy.level === 'none') return true
-    const key = this.canonicalScope(scope)
-    const rule = policy.scopes.find((item) => this.canonicalScope(item.scope) === key)
-    if (rule === undefined || rule.read === false) return false
-    if (rule.kinds === undefined || rule.kinds.length === 0) return true
-    return rule.kinds.includes(kind)
+    return {
+      level: policy.level,
+      scopes: policy.scopes,
+      enabled: {
+        global: this.cfg.globalEnabled,
+        project: this.cfg.projectEnabled,
+        session: this.cfg.sessionEnabled,
+        custom: this.cfg.customEnabled,
+      },
+      originOf: (scope) => scopeKind(scope),
+      grants: this.validGrants(agent),
+    }
+  }
+
+  /**
+   * 统一授权判定：discover / read / write / delete 全部走这里。
+   * 工具层、检索过滤、目录与注入都应以它为准，不再各自解释 absolute / normal / none。
+   */
+  authorize(agent: unknown, request: AccessRequest): AccessDecision {
+    return authorizeAccess(
+      { ...request, scope: this.canonicalScope(request.scope) },
+      this.accessContext(agent),
+    )
+  }
+
+  /**
+   * 一次解析、多次判定的版本：检索会逐条判定命中，不能每条都重新解析可见域
+   * （那会重复读会话文件、重复走 parentSession 链）。
+   */
+  accessEvaluator(agent: unknown): (request: AccessRequest) => AccessDecision {
+    const context = this.accessContext(agent)
+    return (request) => authorizeAccess(
+      { ...request, scope: this.canonicalScope(request.scope) },
+      context,
+    )
+  }
+
+  /** 一条记录(scope + kind)是否可读。 */
+  isRecordVisible(agent: unknown, scope: string, kind: string): boolean {
+    return this.authorize(agent, { scope, action: 'read', kind }).allowed
   }
 
   /** 某个作用域是否可读(0.23.0:read 开关);等级 none 时恒为 true。 */
   isScopeReadable(agent: unknown, scope: string): boolean {
-    const policy = this.visibilityPolicy(agent)
-    if (policy.level === 'none') return true
-    const key = this.canonicalScope(scope)
-    const rule = policy.scopes.find((item) => this.canonicalScope(item.scope) === key)
-    return rule !== undefined && rule.read !== false
+    return this.authorize(agent, { scope, action: 'read' }).allowed
   }
 
   /** 某个作用域是否可写(0.23.0:write 开关);等级 none 时恒为 true。 */
   isScopeWritable(agent: unknown, scope: string): boolean {
-    const policy = this.visibilityPolicy(agent)
-    if (policy.level === 'none') return true
-    const key = this.canonicalScope(scope)
-    const rule = policy.scopes.find((item) => this.canonicalScope(item.scope) === key)
-    return rule !== undefined && rule.write !== false
+    return this.authorize(agent, { scope, action: 'write' }).allowed
   }
 
   /**
@@ -1608,21 +1771,9 @@ export class LocalMemoryService implements MemoryServiceApi {
    * undefined = 不限制。
    */
   private visibilityFilterFor(agent: unknown): ((scope: string, kind: string) => boolean) | undefined {
-    const policy = this.visibilityPolicy(agent)
-    if (policy.level === 'none') return undefined
-    const byScope = new Map<string, { kinds: string[] | undefined; read: boolean }>()
-    for (const rule of policy.scopes) {
-      byScope.set(this.canonicalScope(rule.scope), {
-        kinds: rule.kinds !== undefined && rule.kinds.length > 0 ? rule.kinds : undefined,
-        read: rule.read !== false,
-      })
-    }
-    return (scope, kind) => {
-      const key = this.canonicalScope(scope)
-      const entry = byScope.get(key)
-      if (entry === undefined || !entry.read) return false
-      return entry.kinds === undefined || entry.kinds.includes(kind)
-    }
+    if (this.visibilityPolicy(agent).level === 'none') return undefined
+    const evaluate = this.accessEvaluator(agent)
+    return (scope, kind) => evaluate({ scope, action: 'read', kind }).allowed
   }
 
   /** 面板:读取某会话自己的覆盖(null = 没有覆盖,继续用默认集合)。 */
@@ -1776,6 +1927,8 @@ export class LocalMemoryService implements MemoryServiceApi {
       query: string
       /** 模型为这次调用写的用途说明(0.22.0);弹窗展示给用户。 */
       description?: string
+      /** 'grant' = 作用域权限申请；缺省 = 记忆条目审批。 */
+      mode?: 'records' | 'grant'
       items: readonly VisibilityApprovalItem[]
       signal?: AbortSignal
     },
@@ -1787,18 +1940,37 @@ export class LocalMemoryService implements MemoryServiceApi {
     const createdAt = Date.now()
     const expiresAt = createdAt + VISIBILITY_APPROVAL_TTL_MS
     const description = typeof input.description === 'string' ? input.description.replace(/\s+/g, ' ').trim().slice(0, 500) : ''
+    const auditBase: ApprovalAuditEvent = {
+      at: createdAt,
+      event: 'requested',
+      id,
+      sessionId,
+      tool: input.tool,
+      action: input.action ?? 'read',
+      mode: input.mode ?? 'records',
+      scopes: [...new Set(input.items.map((item) => item.scope))],
+      count: input.items.length,
+      ...(description !== '' ? { description } : {}),
+    }
+    this.approvalAudit.append(auditBase)
     return new Promise((resolve) => {
       let timer: ReturnType<typeof setTimeout> | undefined
-      const onAbort = () => finish({ outcome: 'rejected' })
-      const finish = (answer: VisibilityApprovalAnswer): void => {
+      const onAbort = () => finish({ outcome: 'rejected' }, 'aborted')
+      const finish = (answer: VisibilityApprovalAnswer, why: 'timeout' | 'aborted'): void => {
         const pending = this.pendingApprovals.get(id)
         if (pending === undefined) return
         this.pendingApprovals.delete(id)
         if (timer !== undefined) clearTimeout(timer)
         try { input.signal?.removeEventListener('abort', onAbort) } catch { /* 已卸载 */ }
+        this.approvalAudit.append({
+          ...auditBase,
+          at: Date.now(),
+          event: why === 'timeout' ? 'timeout' : 'denied',
+          outcome: answer.outcome,
+        })
         pending.resolve(answer)
       }
-      timer = setTimeout(() => finish({ outcome: 'timeout' }), VISIBILITY_APPROVAL_TTL_MS)
+      timer = setTimeout(() => finish({ outcome: 'timeout' }, 'timeout'), VISIBILITY_APPROVAL_TTL_MS)
       timer.unref?.()
       this.pendingApprovals.set(id, {
         id,
@@ -1807,6 +1979,7 @@ export class LocalMemoryService implements MemoryServiceApi {
         action: input.action ?? 'read',
         query: input.query,
         ...(description !== '' ? { description } : {}),
+        ...(input.mode !== undefined ? { mode: input.mode } : {}),
         items: input.items.slice(0, VISIBILITY_APPROVAL_MAX_ITEMS).map((item) => ({
           ...item,
           tags: [...item.tags],
@@ -1832,6 +2005,7 @@ export class LocalMemoryService implements MemoryServiceApi {
         action: pending.action,
         query: pending.query,
         ...(pending.description !== undefined ? { description: pending.description } : {}),
+        ...(pending.mode !== undefined ? { mode: pending.mode } : {}),
         // 轮询载荷保持轻量:正文截到 1200 字,悬浮需要全文时面板再按 id 取一次。
         items: pending.items.map((item) => ({
           ...item,
@@ -1866,8 +2040,170 @@ export class LocalMemoryService implements MemoryServiceApi {
     } else {
       answer = { outcome: 'allowed-once' }
     }
+    this.approvalAudit.append({
+      at: Date.now(),
+      event: answer.outcome === 'allowed-once' ? 'approved' : 'denied',
+      id,
+      sessionId: pending.sessionId,
+      tool: pending.tool,
+      action: pending.action,
+      mode: pending.mode ?? 'records',
+      scopes: [...new Set(pending.items.map((item) => item.scope))],
+      count: pending.items.length,
+      outcome: answer.outcome,
+    })
     pending.resolve(answer)
     return true
+  }
+
+  /**
+   * Agent 主动申请范围外作用域的会话权限（0.24.0 / D3）。
+   *
+   * 流程：先按统一授权判定逐条筛（已允许 / 已授权 / 不可申请都不弹卡），
+   * 只把**可申请**的 scope + 权限合成审批卡（`mode='grant'`），用户批准后
+   * 写入 `grants/<session>.json`（仅本会话，子 Agent 沿 parentSession 继承）。
+   *
+   * 一次性访问**不在**这里：它继续由 memory_* 的隐式审批处理；本工具只申请会话授权。
+   */
+  async requestScopeGrants(
+    agent: unknown,
+    input: {
+      requests: ReadonlyArray<{ scope: string; permissions: readonly GrantPermission[] }>
+      reason?: string
+      description?: string
+      signal?: AbortSignal
+    },
+  ): Promise<ScopeGrantRequestResult> {
+    const sessionId = this.rawSessionIdOf(agent)
+    const results: ScopeGrantRequestItemResult[] = []
+    const describe = (request: { permissions: readonly GrantPermission[] }): GrantPermission[] =>
+      [...new Set(request.permissions.filter((item): item is GrantPermission => item === 'read' || item === 'write'))]
+    if (sessionId === undefined) {
+      for (const request of input.requests) {
+        const scope = this.canonicalScope(request.scope)
+        for (const permission of describe(request)) results.push({ scope, permission, status: 'unavailable' })
+      }
+      return { results, outcome: 'unavailable', grants: [] }
+    }
+
+    const pending: Array<{ id: string; scope: MemoryScope; permission: GrantPermission }> = []
+    const seen = new Set<string>()
+    for (const request of input.requests) {
+      const scope = this.canonicalScope(request.scope)
+      for (const permission of describe(request)) {
+        const key = `${scope}\0${permission}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        const decision = this.authorize(agent, { scope, action: permission === 'read' ? 'read' : 'write' })
+        if (decision.allowed) {
+          results.push({
+            scope,
+            permission,
+            status: decision.source === 'grant' ? 'already-granted' : 'already-allowed',
+          })
+          continue
+        }
+        if (!decision.requestable) {
+          results.push({ scope, permission, status: 'not-requestable', ...(decision.reason !== undefined ? { reason: decision.reason } : {}) })
+          continue
+        }
+        pending.push({ id: `grant:${scope}:${permission}`, scope, permission })
+      }
+    }
+    if (pending.length === 0) return { results, grants: [] }
+
+    const reason = typeof input.reason === 'string' ? input.reason.replace(/\s+/g, ' ').trim().slice(0, 500) : ''
+    const answer = await this.requestOutOfScope(agent, {
+      tool: 'memory_scopes',
+      action: 'read',
+      query: reason === '' ? [...new Set(pending.map((item) => item.scope))].join(' ') : reason,
+      ...(input.description !== undefined ? { description: input.description } : {}),
+      mode: 'grant',
+      items: pending.map((item) => ({
+        id: item.id,
+        scope: item.scope,
+        kind: 'grant',
+        content: item.permission === 'read' ? '只读访问' : '写入 / 删除',
+        tags: [],
+        importance: 0,
+        updatedAt: Date.now(),
+        reason: 'scope' as const,
+        grantPermission: item.permission,
+      })),
+      ...(input.signal !== undefined ? { signal: input.signal } : {}),
+    })
+
+    if (answer.outcome !== 'allowed-once') {
+      const status: ScopeGrantRequestStatus = answer.outcome === 'timeout' ? 'timeout' : answer.outcome === 'unavailable' ? 'approval-unavailable' : 'denied'
+      for (const item of pending) {
+        results.push({ scope: item.scope, permission: item.permission, status })
+      }
+      return { results, outcome: answer.outcome, grants: [] }
+    }
+
+    const approved = answer.allowedIds === undefined
+      ? new Set(pending.map((item) => item.id))
+      : new Set(answer.allowedIds)
+    const granted: ScopeGrant[] = []
+    for (const item of pending) {
+      if (!approved.has(item.id)) {
+        results.push({ scope: item.scope, permission: item.permission, status: 'denied' })
+        continue
+      }
+      const meta = this.meta.get(item.scope)
+      const grant = this.grants.add(sessionId, {
+        scope: item.scope,
+        permissions: [item.permission],
+        grantedBy: 'user',
+        ...(meta !== undefined ? { scopeGeneration: meta.generation } : {}),
+      })
+      granted.push(grant)
+      this.approvalAudit.append({
+        at: Date.now(),
+        event: 'granted',
+        id: grant.id,
+        sessionId,
+        tool: 'memory_scopes',
+        action: 'grant',
+        mode: 'grant',
+        scopes: [item.scope],
+        permissions: [item.permission],
+        outcome: 'granted',
+      })
+      results.push({ scope: item.scope, permission: item.permission, status: 'granted' })
+    }
+    return { results, outcome: 'allowed-once', grants: granted }
+  }
+
+  /** 面板 / 诊断：当前会话的有效授权（含父会话继承）。 */
+  grantList(agent: unknown): ScopeGrant[] {
+    return this.validGrants(agent)
+  }
+
+  /** 面板：撤销某会话的一条授权。 */
+  revokeGrant(sessionId: string, id: string): boolean {
+    if (typeof sessionId !== 'string' || sessionId === '') return false
+    const before = this.grants.list(sessionId).find((grant) => grant.id === id)
+    const ok = this.grants.revoke(sessionId, id)
+    if (ok) {
+      this.approvalAudit.append({
+        at: Date.now(),
+        event: 'revoked',
+        id,
+        sessionId,
+        tool: 'memory_scopes',
+        action: 'revoke',
+        mode: 'grant',
+        ...(before !== undefined ? { scopes: [before.scope], permissions: before.permissions } : {}),
+        outcome: 'revoked',
+      })
+    }
+    return ok
+  }
+
+  /** 面板 / 诊断：最近的审批与授权事件（不含记忆正文）。 */
+  approvalAuditList(limit = 200): ApprovalAuditEvent[] {
+    return this.approvalAudit.list(limit)
   }
 
   /**
@@ -1892,16 +2228,19 @@ export class LocalMemoryService implements MemoryServiceApi {
    * - none：不限制。
    */
   private assertOperable(agent: unknown, scope: MemoryScope): void {
-    if (this.isScopeWritable(agent, scope)) return
-    const policy = this.visibilityPolicy(agent)
-    const rule = policy.scopes.find((item) => this.canonicalScope(item.scope) === this.canonicalScope(scope))
-    if (rule !== undefined) {
-      throw memoryError('SCOPE_READ_ONLY', `作用域 ${scope} 在本会话记忆范围里被标记为「不可写」（可读/可写按钮），本次写入/删除没有执行。如需写入，请让用户打开该作用域的「可写」状态。`)
+    const decision = this.authorize(agent, { scope, action: 'write' })
+    if (decision.allowed) return
+    switch (decision.reason) {
+      case 'WRITE_DISABLED':
+        throw memoryError('SCOPE_READ_ONLY', `作用域 ${scope} 在本会话记忆范围里被标记为「不可写」（可读/可写按钮），本次写入/删除没有执行。如需写入，请让用户打开该作用域的「可写」状态。`)
+      case 'SCOPE_DISABLED':
+        throw memoryError('SCOPE_DISABLED', `作用域 ${scope} 已被配置关闭，本次写入/删除没有执行。`)
+      case 'ABSOLUTE_ISOLATION':
+        throw memoryError('SCOPE_NOT_WRITABLE', `作用域 ${scope} 不在本会话可见范围内（限制等级：绝对限制），本次写入/删除没有执行。如需写入，请让用户调整「记忆范围」后重试。`)
+      default:
+        // normal 且作用域不在范围内：工具层会先审批，批准后带 visibilityApproved 再来。
+        throw memoryError('VISIBILITY_APPROVAL_REQUIRED', `作用域 ${scope} 不在本会话的可操作范围内,需要用户审批`)
     }
-    if (policy.level === 'absolute') {
-      throw memoryError('SCOPE_NOT_WRITABLE', `作用域 ${scope} 不在本会话可见范围内（限制等级：绝对限制），本次写入/删除没有执行。如需写入，请让用户调整「记忆范围」后重试。`)
-    }
-    throw memoryError('VISIBILITY_APPROVAL_REQUIRED', `作用域 ${scope} 不在本会话的可操作范围内,需要用户审批`)
   }
 
   async save(input: MemorySaveInput): Promise<MemoryRecord> {
@@ -1958,10 +2297,64 @@ export class LocalMemoryService implements MemoryServiceApi {
         content = redactSecrets(content)
       }
     }
-    const { record } = this.store.save(
-      { ...saveInput, scope, content },
-      { importance: input.source?.origin === 'auto' ? 0.4 : 0.8, source: { origin: 'explicit' } },
-    ) 
+    // 0.24.0：自定义作用域的“创建”与“普通写入”分开判断。
+    //   - Agent 新建自定义作用域必须带 scopeDescription（面板 / 导入等无 agent 路径不受限）；
+    //   - 元数据存在但 status='pending'（上次初始化半途失败）时继续完成初始化；
+    //   - 已有作用域带 scopeDescription = 更新用途，不写初始记忆。
+    const initInput = input as MemorySaveInput & { scopeDescription?: unknown; scopeRule?: unknown }
+    const description = normalizeScopeDescription(initInput.scopeDescription)
+    const ruleText = typeof initInput.scopeRule === 'string' ? initInput.scopeRule.trim() : ''
+    const metaBefore = this.meta.get(scope)
+    const newCustom = isCustomScope(scope) && this.store.peek(scope) === undefined && metaBefore === undefined
+    const pendingInit = metaBefore?.status === 'pending'
+    const effectiveDescription = description !== '' ? description : (metaBefore?.description ?? '')
+    const agentWrite = saveAgent !== undefined
+    if ((newCustom || pendingInit) && agentWrite && effectiveDescription === '') {
+      throw memoryError(
+        'SCOPE_DESCRIPTION_REQUIRED',
+        `新建自定义作用域 ${scope} 必须提供 scopeDescription（一句话说明这个作用域用来做什么）。`,
+      )
+    }
+    if (effectiveDescription.length > MAX_SCOPE_DESCRIPTION_CHARS) {
+      throw memoryError('SCOPE_DESCRIPTION_TOO_LONG', `作用域用途最多 ${MAX_SCOPE_DESCRIPTION_CHARS} 字`)
+    }
+    if (ruleText !== '' && ruleText.length > this.cfg.maxRecordChars) {
+      throw memoryError('SCOPE_RULE_TOO_LONG', `scopeRule 超过 ${this.cfg.maxRecordChars} 字`)
+    }
+    const createdBy = agentWrite ? (this.rawSessionIdOf(saveAgent) ?? 'agent') : 'user'
+    const carryInitial = (input as MemorySaveInput & { initial?: unknown }).initial === true
+    const initialized = (newCustom || pendingInit) && effectiveDescription !== ''
+    if (initialized) {
+      // 先落 pending 元数据：进程在写记录途中退出时，下一次保存能识别并重试，
+      // 目录工具也能看到“这个作用域正在初始化”。
+      this.meta.put(scope, { description: effectiveDescription, createdBy, status: 'pending' })
+    } else if (description !== '' && (metaBefore === undefined || description !== metaBefore.description)) {
+      this.meta.put(scope, { description, createdBy: metaBefore?.createdBy ?? createdBy, status: 'ready' })
+    }
+
+    let record: MemoryRecord
+    try {
+      const saved = this.store.save(
+        { ...saveInput, scope, content, ...(initialized || carryInitial ? { initial: true } : {}) },
+        { importance: input.source?.origin === 'auto' ? 0.4 : 0.8, source: { origin: 'explicit' } },
+      )
+      record = saved.record
+      // 初始规则：只有初始化流程（新作用域 / 半途重试）才写；普通写入带 scopeRule 不生效。
+      if (initialized && ruleText !== '') {
+        const ruleSaved = this.store.save(
+          { ...saveInput, scope, kind: 'rule', content: ruleText, tags: ['scope-init'], initial: true },
+          { importance: 0.8, source: { origin: 'explicit' } },
+        )
+        void this.embedRecord(ruleSaved.record).catch(() => {})
+      }
+      if (initialized) {
+        this.meta.put(scope, { description: effectiveDescription, createdBy: metaBefore?.createdBy ?? createdBy, status: 'ready' })
+      }
+    } catch (error) {
+      // 保留 pending 元数据（而不是删掉）：下一次保存可以接着完成初始化，
+      // 目录工具也能明确看到这个作用域尚未就绪。
+      throw error
+    }
     void this.embedRecord(record).catch(() => {})
     this.store.scheduleFlush()
     return record
@@ -2523,6 +2916,10 @@ export class LocalMemoryService implements MemoryServiceApi {
       ? input.triggers.map(String)
       : (old as MemoryRecord & { triggers?: string[] }).triggers
     if (Array.isArray(triggers)) (next as MemoryRecord & { triggers?: string[] }).triggers = [...triggers]
+    // 编辑初始记录 = 修正该作用域的“自我介绍”，来源标记要跟着走。
+    if ((old as MemoryRecord & { initial?: unknown }).initial === true) {
+      ;(next as MemoryRecord & { initial?: boolean }).initial = true
+    }
     if (input.expiresAt === null) {
       // 显式清除:不设置 expiredAt。
     } else if (typeof input.expiresAt === 'number' && Number.isFinite(input.expiresAt)) {
@@ -2557,6 +2954,8 @@ export class LocalMemoryService implements MemoryServiceApi {
       triggers?: string[]
       /** 状态记忆的过期时间(0.15.0 起导出)。 */
       expiredAt?: number
+      /** 0.24.0：作用域初始化记录（来源标记，导出/导入后不能丢）。 */
+      initial?: boolean
     }>
   } {
     this.discoverScopes()
@@ -2575,6 +2974,7 @@ export class LocalMemoryService implements MemoryServiceApi {
             ? { triggers: ((rec as MemoryRecord & { triggers?: unknown }).triggers as unknown[]).map(String) }
             : {}),
           ...(rec.expiredAt !== undefined ? { expiredAt: rec.expiredAt } : {}),
+          ...((rec as MemoryRecord & { initial?: unknown }).initial === true ? { initial: true } : {}),
         })
       }
     }
@@ -2603,7 +3003,7 @@ export class LocalMemoryService implements MemoryServiceApi {
       try {
         const rec = raw as {
           scope?: unknown; kind?: unknown; content?: unknown; tags?: unknown; importance?: unknown
-          triggers?: unknown; expiredAt?: unknown
+          triggers?: unknown; expiredAt?: unknown; initial?: unknown
         }
         const content = typeof rec.content === 'string' ? rec.content : ''
         if (content.trim().length === 0) throw new Error('content 为空')
@@ -2623,6 +3023,7 @@ export class LocalMemoryService implements MemoryServiceApi {
           ...(typeof rec.importance === 'number' ? { importance: rec.importance } : {}),
           ...(Array.isArray(rec.triggers) ? { triggers: rec.triggers.map(String) } : {}),
           ...(typeof rec.expiredAt === 'number' && Number.isFinite(rec.expiredAt) ? { expiresAt: rec.expiredAt } : {}),
+          ...(rec.initial === true ? { initial: true } : {}),
         } as MemorySaveInput)
         imported += 1
       } catch (error) {
@@ -2650,6 +3051,27 @@ export class LocalMemoryService implements MemoryServiceApi {
   /** 作用域别名（没有则 undefined，调用方回退到路径/键本身）。 */
   scopeName(scope: MemoryScope): string | undefined {
     return this.names.nameOf(scope)
+  }
+
+  /** 作用域用途等元数据（没有则 undefined；调用方按“未填写用途”处理）。 */
+  scopeMeta(scope: MemoryScope): ScopeMeta | undefined {
+    return this.meta.get(this.canonicalScope(scope))
+  }
+
+  /**
+   * 写入 / 更新作用域用途。**不会**创建记录，也不触发初始化；给面板与
+   * memory_save 的 scopeDescription 补写用。
+   */
+  describeScope(scope: MemoryScope, description: string, by: string): ScopeMeta {
+    const key = this.canonicalScope(scope)
+    this.assertScopeAllowed(key)
+    this.assertCustomScopeBudget(key)
+    const text = typeof description === 'string' ? description.replace(/\s+/g, ' ').trim() : ''
+    if (text === '') throw memoryError('SCOPE_DESCRIPTION_EMPTY', '作用域用途不能为空')
+    if (text.length > MAX_SCOPE_DESCRIPTION_CHARS) {
+      throw memoryError('SCOPE_DESCRIPTION_TOO_LONG', `作用域用途最多 ${MAX_SCOPE_DESCRIPTION_CHARS} 字`)
+    }
+    return this.meta.put(key, { description: text, createdBy: by, status: 'ready' })
   }
 
   /** 名字 → 作用域键：读路径允许直接用别名找作用域。 */
@@ -2693,6 +3115,106 @@ export class LocalMemoryService implements MemoryServiceApi {
         updatedAt: [...s.records.values()].reduce((max, r) => Math.max(max, r.updatedAt), 0),
       }))
       .sort((a, b) => b.updatedAt - a.updatedAt || b.records - a.records || a.scope.localeCompare(b.scope))
+  }
+
+  /**
+   * 作用域目录（memory_scopes list / 未来面板的“作用域”页）。
+   *
+   * 与 `scopeStats()` 的区别：这里回答的是“有哪些作用域、各自干什么、我现在能不能
+   * 读/写/申请”，而不是“每个作用域有多少条”。三条语义写死：
+   *   - 没有记录但有元数据的作用域也会出现（删光记录不等于作用域消失）；
+   *   - 关闭的作用域类型（含 `customEnabled=false`）整条不出现；
+   *   - `absolute` 下范围外条目的名字/用途仍可见，但 readable/writable/canRequest*
+   *     全为 false —— 目录可见不等于正文可读，且 absolute 没有审批放行路径。
+   */
+  /**
+   * 作用域初始化记录（`initial: true`）的目录视图。只给 normal / none 用；
+   * absolute 由调用方跳过。正文截断到 800 字，每个作用域最多 3 条。
+   */
+  private initialRecordsOf(scope: MemoryScope): Array<{ id: string; kind: string; content: string; truncated?: boolean }> | undefined {
+    const store = this.store.peek(scope)
+    if (store === undefined) return undefined
+    const out: Array<{ id: string; kind: string; content: string; truncated?: boolean }> = []
+    for (const record of store.records.values()) {
+      if ((record as MemoryRecord & { initial?: unknown }).initial !== true) continue
+      const content = record.content.trim()
+      out.push({
+        id: record.id,
+        kind: record.kind,
+        content: content.length > 800 ? `${content.slice(0, 800)}…` : content,
+        ...(content.length > 800 ? { truncated: true } : {}),
+      })
+      if (out.length >= 3) break
+    }
+    return out.length > 0 ? out : undefined
+  }
+
+  scopeCatalog(agent: unknown): ScopeCatalogEntry[] {
+    const policy = this.visibilityPolicy(agent)
+    const stats = new Map(this.scopeStats().map((item) => [this.canonicalScope(item.scope), item]))
+    const metas = new Map(this.meta.list().map((item) => [this.canonicalScope(item.scope), item]))
+    const keys = new Set<MemoryScope>()
+    for (const scope of this.baseDefaultScopes(agent)) keys.add(this.canonicalScope(scope))
+    for (const scope of this.bindings.get(this.workspaceKeyFor(agent))) keys.add(this.canonicalScope(scope))
+    for (const scope of stats.keys()) keys.add(this.canonicalScope(scope))
+    for (const scope of metas.keys()) keys.add(scope)
+
+    const out: ScopeCatalogEntry[] = []
+    const evaluate = this.accessEvaluator(agent)
+    for (const scope of keys) {
+      // 目录发现本身也是一条授权判定：作用域类型被关闭时连名字/用途都不出现。
+      if (!evaluate({ scope, action: 'discover' }).allowed) continue
+      const meta = metas.get(scope)
+      const stat = stats.get(scope)
+      const rule = policy.scopes.find((item) => this.canonicalScope(item.scope) === scope)
+      const inScope = policy.level === 'none' || rule !== undefined
+      // 别的会话的 session scope 默认不进目录：它们没有用途、也不该被 Agent 主动申请，
+      // 全列出来只会把目录变成历史会话列表。有元数据（被人描述过）则保留。
+      if (!inScope && meta === undefined && scopeKind(scope) === 'session') continue
+      const readDecision = evaluate({ scope, action: 'read' })
+      const writeDecision = evaluate({ scope, action: 'write' })
+      const readable = readDecision.allowed
+      const writable = writeDecision.allowed
+      // 只有“整个作用域不在范围内”（SCOPE_NOT_IN_RANGE）才可申请；absolute 与
+      // 用户显式关掉的 read/write 都不会 requestable。
+      const canRequestRead = !readable && readDecision.requestable
+      const canRequestWrite = !writable && writeDecision.requestable
+      const accessStatus: ScopeCatalogEntry['accessStatus'] = !inScope
+        // 范围外但已有会话授权：如实显示“可读 / 可写”，而不是继续标 restricted。
+        ? readable && writable
+          ? 'read-write'
+          : readable
+            ? 'read-only'
+            : 'restricted'
+        : policy.source === 'default'
+          ? 'default'
+          : readable && writable
+            ? 'read-write'
+            : readable
+              ? 'read-only'
+              : 'restricted'
+      const name = meta?.name ?? this.names.nameOf(scope)
+      const initialRecords = policy.level === 'absolute' ? undefined : this.initialRecordsOf(scope)
+      out.push({
+        scope,
+        ...(name !== undefined ? { name } : {}),
+        ...(meta !== undefined ? { description: meta.description } : {}),
+        origin: meta?.origin ?? scopeKind(scope),
+        ...(inScope ? { records: stat?.records ?? 0 } : {}),
+        inScope,
+        readable,
+        writable,
+        canRequestRead,
+        canRequestWrite,
+        accessStatus,
+        updatedAt: stat?.updatedAt ?? meta?.updatedAt ?? 0,
+        ...(initialRecords !== undefined ? { initialRecords } : {}),
+      })
+    }
+    return out.sort((a, b) => Number(b.inScope) - Number(a.inScope)
+      || (b.records ?? 0) - (a.records ?? 0)
+      || b.updatedAt - a.updatedAt
+      || a.scope.localeCompare(b.scope))
   }
 
   /**
@@ -2882,6 +3404,11 @@ function memoryError(code: string, message: string): Error & { code: string } {
   const err = new Error(`[memory:${code}] ${message}`) as Error & { code: string }
   err.code = code
   return err
+}
+
+/** 作用域用途统一成一行（与工具的 description 同款收敛口径）。 */
+function normalizeScopeDescription(raw: unknown): string {
+  return typeof raw === 'string' ? raw.replace(/\s+/g, ' ').trim() : ''
 }
 
 /** discoverScopes() 的最短间隔:清单要够新,但 projects/ 目录不该被读成热路径。 */

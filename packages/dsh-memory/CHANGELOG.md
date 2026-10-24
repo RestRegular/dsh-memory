@@ -2,6 +2,23 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.24.0 — 作用域目录与用途元数据；自定义作用域原子初始化
+
+- **作用域元数据（`<storeDir>/scope-meta/<sha1(scope)>.json`）**：每个作用域可以带一句话用途，独立于记忆记录——删光记录、记录被 supersede / 过期都不会丢。旧作用域没有元数据时按「未填写用途」处理，不做迁移、不要求补齐。项目别名仍以 `scopes.json` 为准。
+- **自定义作用域创建（Agent 路径）必须说明用途**：`memory_save` 新增可选 `scopeDescription` / `scopeRule`。Agent 首次写入一个不存在的自定义作用域时缺 `scopeDescription` → `SCOPE_DESCRIPTION_REQUIRED`；提供后在同一次调用里原子完成：元数据先写 `pending`、写入初始事实（带 `initial: true`）、可选写一条初始规则（`kind: rule`，也带 `initial`）、最后转 `ready`。中途失败保留 `pending`，下次保存继续完成。面板 / 导入等没有 agent 上下文的路径不受强制。
+- **新工具 `memory_scopes`（本版仅 `action="list"`）**：返回作用域名字 / 用途 / 来源 / 当前可读可写状态；范围外条目不返回记录数、不返回任何正文。`includeOutOfScope: false` 只看范围内，`limit` 默认 50。
+- **统一授权判定（D2）**：新增纯函数 `authorize(request, context)`（`source/memory-local/src/authorize.ts`），`discover / read / write / delete` 共用一套规则；provider 的 `visibilityFilterFor`、`isRecordVisible`、`isScopeReadable`、`isScopeWritable`、`assertOperable` 与目录工具全部改为走它，工具层通过 `accessEvaluator(agent)` 一次解析、逐条判定，不再自己解释 `absolute / normal / none`。工具层只在 `requestable=true` 时发起审批；`absolute`、显式 `read:false` / `write:false`、作用域类型关闭都不产生审批卡，并给模型真实原因（新增 `withheld.reason='scope-disabled'`）。
+- **会话授权 + 主动申请（D3）**：
+  - 新增独立存储 `grants/<session>.json`（每个会话一个文件、原子写），与 `visibility/<session>.json` 的策略分开：只读 / 可写独立、可撤销、带 `scopeGeneration`（作用域删除重建后旧授权自动失效）、子 Agent 沿 `parentSession` 链继承。
+  - `memory_scopes` 新增 `action="request"`：按统一授权判定逐条筛，已允许 / 已有授权 / 不可申请（`absolute`、显式 read/write 关闭、作用域关闭）都不弹卡；只有普通限制下的范围外条目进入审批。
+  - 审批卡新增 `mode="grant"`：按 scope + 权限逐条勾选，**默认只勾只读**，写权限必须用户主动勾选；批准后写入本会话 grants，工具返回 `granted / already-allowed / already-granted / not-requestable / denied / timeout` 等逐项状态。
+  - 一次性访问仍走 `memory_*` 的隐式 `allowed-once` 审批，不塞进申请工具；`workspace` / `global` 长期授权留给后续版本。
+- **绝对限制语义写死**：`absolute` 下范围外作用域**目录可见**（名字 / 用途），但正文永不可读、不可写、`canRequestRead/Write` 恒为 false——**没有任何审批放行路径**；普通限制下范围外条目才标记「可申请」。
+- **initial 正文（D5）**：`normal / none` 下 `memory_scopes list` 会带上每个作用域的初始化记录正文（`initial: true`，最多 3 条、每条截到 800 字），Agent 不必先申请就能读到“这个作用域主要放什么”；`absolute` 下连初始正文也不返回（用途仍可见）。
+- **审批审计（D6）**：新增 `<storeDir>/approvals.jsonl`，记录 `requested / approved / denied / timeout / granted / revoked`，只写 scope、权限、工具、会话与理由，**不写记忆正文**；provider 暴露 `approvalAuditList()` 与 `revokeGrant()`，面板与诊断可直接消费。作用域显式删除的生命周期留到后续版本（当前没有“删除作用域”操作，grant 已用 `scopeGeneration` 防止同名重建复活）。
+- **`initial` 来源标记全链路**：`memory_get` 的 `fields` 新增 `initial`，导出 / 导入、`reviseRecord` 修正版都会保留；旧记录缺省 = 非初始，绝不当作公开或授权凭据。
+- **测试**：作用域元数据生命周期、目录在 normal / absolute / `customEnabled=false` 下的行为、缺失用途拒绝、原子初始化的初始事实与规则、`initial` 的 get / 导出 / 导入、目录工具契约与渲染。全套通过。
+
 ## 0.23.1 — 默认作用域显示为已绑定；绑定保存后可恢复
 
 - **修复「绑定后重开又变成未绑定」的观感与保存范围**：

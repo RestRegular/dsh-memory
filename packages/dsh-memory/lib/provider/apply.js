@@ -196,6 +196,21 @@ export class CordisMemoryService extends Service {
     return this.impl.scopeName(scope)
   }
 
+  /** 作用域用途等元数据(没有则 undefined)。 */
+  scopeMeta(scope             )                                              {
+    return this.impl.scopeMeta(scope)
+  }
+
+  /** 写入 / 更新作用域用途(不创建记录)。 */
+  describeScope(scope             , description        , by        )                                                  {
+    return this.impl.describeScope(scope, description, by)
+  }
+
+  /** 作用域目录:名字 / 用途 / 当前可读可写状态(工具 memory_scopes 与面板共用)。 */
+  scopeCatalog(agent         )                                                 {
+    return this.impl.scopeCatalog(agent)
+  }
+
   /** 注入设置(面板「设置」标签页读它)。 */
   injectSettings()                                                   {
     return this.impl.injectSettings()
@@ -268,6 +283,16 @@ export class CordisMemoryService extends Service {
     return this.impl.isScopeWritable(agent, scope)
   }
 
+  /** 统一授权判定(0.24.0)：read/write/delete/discover 的唯一规则出口。 */
+  authorize(agent         , request                                                )                                              {
+    return this.impl.authorize(agent, request)
+  }
+
+  /** 一次解析、多次判定(检索逐条过滤用)。 */
+  accessEvaluator(agent         )                                                    {
+    return this.impl.accessEvaluator(agent)
+  }
+
   /** 当前工作区 key(= 会话 cwd 解析出的 project scope)。 */
   workspaceKeyFor(agent         )                                                    {
     return this.impl.workspaceKeyFor(agent)
@@ -321,6 +346,26 @@ export class CordisMemoryService extends Service {
   /** 普通限制:范围外访问审批(挂起,等面板回答)。 */
   requestOutOfScope(agent         , input                                                        )                                                      {
     return this.impl.requestOutOfScope(agent, input)
+  }
+
+  /** Agent 主动申请范围外作用域的会话权限（0.24.0 / D3）。 */
+  requestScopeGrants(agent         , input                                                         )                                                       {
+    return this.impl.requestScopeGrants(agent, input)
+  }
+
+  /** 当前会话（含父链）的有效授权。 */
+  grantList(agent         )                                              {
+    return this.impl.grantList(agent)
+  }
+
+  /** 面板：撤销一条会话授权。 */
+  revokeGrant(sessionId        , id        )          {
+    return this.impl.revokeGrant(sessionId, id)
+  }
+
+  /** 最近的审批 / 授权生命周期事件（不含正文）。 */
+  approvalAuditList(limit         )                                                      {
+    return this.impl.approvalAuditList(limit)
   }
 
   /** 面板:当前待审批列表。 */

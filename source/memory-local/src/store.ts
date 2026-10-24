@@ -784,6 +784,10 @@ export class MemoryStore {
         // 同一内容重写 = 刷新状态:TLL 重新计时;显式去掉过期时间时一并清掉。
         if (input.expiredAt !== undefined) rec.expiredAt = input.expiredAt
         else delete rec.expiredAt
+        // 初始化流程重试时，去重命中的旧记录也要补上 initial 来源标记。
+        if ((input as MemorySaveInput & { initial?: unknown }).initial === true) {
+          ;(rec as MemoryRecord & { initial?: boolean }).initial = true
+        }
         // 流程触发词是可编辑元数据:重写同一条流程时跟着更新。
         const triggers = (input as MemorySaveInput & { triggers?: unknown }).triggers
         if (Array.isArray(triggers)) (rec as MemoryRecord & { triggers?: string[] }).triggers = triggers.map(String)
@@ -809,6 +813,8 @@ export class MemoryStore {
       ...(Array.isArray((input as MemorySaveInput & { triggers?: unknown }).triggers)
         ? { triggers: ((input as MemorySaveInput & { triggers?: unknown }).triggers as unknown[]).map(String) }
         : {}),
+      // 0.24.0：初始化流程创建的记录带来源标记（可选字段，旧记录缺省 = 非初始）。
+      ...((input as MemorySaveInput & { initial?: unknown }).initial === true ? { initial: true } : {}),
     }
     if (record.kind === 'state' && record.expiredAt === undefined) {
       // provider 已经按默认 TTL 算出 expiredAt;这里只兜底直接调 store 的调用方。

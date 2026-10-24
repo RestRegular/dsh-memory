@@ -35,6 +35,8 @@ export interface GetSourceRecord {
   expiredAt?: number
   supersedes?: string
   triggers?: string[]
+  /** 0.24.0：作用域初始化记录（目录/说明的来源标记）。 */
+  initial?: boolean
 }
 
 /** 范围外访问的处理方式(与 provider 的会话可见域一致)。 */
@@ -64,7 +66,7 @@ export type ApprovalAnswer = ApprovalOutcome | ApprovalDecision
  *   - absolute = 绝对限制下作用域根本不在范围内(0.23 起不再假装"不存在");
  *   - read-disabled = 作用域在范围内但「可读」开关被关掉(0.23)。
  */
-export type WithheldReason = 'rejected' | 'timeout' | 'unavailable' | 'partial' | 'absolute' | 'read-disabled'
+export type WithheldReason = 'rejected' | 'timeout' | 'unavailable' | 'partial' | 'absolute' | 'read-disabled' | 'scope-disabled'
 
 export interface VisibilityRuleView {
   scope: string
@@ -117,6 +119,64 @@ export interface ContextDedupView {
   markContent(records: ReadonlyArray<{ id: string; updatedAt: number }>): void
 }
 
+/**
+ * 目录工具的一行（与 provider 的 ScopeCatalogEntry 同形）。
+ * `absolute` 下范围外条目仍会出现，但 readable/writable/canRequest* 全为 false。
+ */
+export interface ScopeCatalogEntryView {
+  scope: string
+  name?: string
+  description?: string
+  origin: 'global' | 'project' | 'session' | 'custom'
+  records?: number
+  inScope: boolean
+  readable: boolean
+  writable: boolean
+  canRequestRead: boolean
+  canRequestWrite: boolean
+  accessStatus: 'default' | 'read-only' | 'read-write' | 'restricted' | 'unavailable'
+  updatedAt: number
+  /** 0.24.0 / D5：初始化记录正文；absolute 下不返回。 */
+  initialRecords?: Array<{ id: string; kind: string; content: string; truncated?: boolean }>
+}
+
+/** provider 统一授权判定的结果（0.24.0）。 */
+export interface AccessDecisionView {
+  allowed: boolean
+  reason?: string
+  /** 这次拒绝能否通过用户审批解决；absolute 恒为 false。 */
+  requestable: boolean
+}
+
+export interface AccessRequestView {
+  scope: string
+  action: 'discover' | 'read' | 'write' | 'delete'
+  kind?: string
+}
+
+/** 一条作用域权限申请的结果（0.24.0 / D3）。 */
+export type ScopeGrantStatus =
+  | 'granted'
+  | 'already-allowed'
+  | 'already-granted'
+  | 'not-requestable'
+  | 'unavailable'
+  | 'denied'
+  | 'timeout'
+  | 'approval-unavailable'
+
+export interface ScopeGrantResultItemView {
+  scope: string
+  permission: 'read' | 'write'
+  status: ScopeGrantStatus
+  reason?: string
+}
+
+export interface ScopeGrantRequestResultView {
+  results: ScopeGrantResultItemView[]
+  outcome?: 'allowed-once' | 'rejected' | 'timeout' | 'unavailable'
+}
+
 /** 只有这一层需要的能力子集(provider 在宿主里提供,测试里可以 mock)。 */
 export interface MemoryToolService {
   save(input: unknown): Promise<{ id: string; scope: string }>
@@ -127,6 +187,23 @@ export interface MemoryToolService {
   discoverScopes?(): MemoryScope[]
   /** 作用域清单(scope + 记录数),用于 memory_list 的尾部摘要与错误提示。 */
   scopeStats?(): Array<{ scope: string; records: number; pendingEmbeds: number }>
+  /** 作用域目录(名字/用途/访问状态);老 provider 没有时 memory_scopes 明确报不支持。 */
+  scopeCatalog?(agent: unknown): ScopeCatalogEntryView[]
+  /**
+   * 统一授权判定(0.24.0)：一次解析、多次判定。
+   * 工具层用它决定“能不能读/写、要不要审批”，不再自己解释 absolute / normal / none。
+   */
+  accessEvaluator?(agent: unknown): ((request: AccessRequestView) => AccessDecisionView) | undefined
+  /**
+   * Agent 主动申请范围外作用域的会话权限（0.24.0 / D3）。
+   * 只有 `requestable` 的 scope + 权限才会进入审批；once 不走这里。
+   */
+  requestScopeGrants?(agent: unknown, input: {
+    requests: ReadonlyArray<{ scope: string; permissions: readonly ('read' | 'write')[] }>
+    reason?: string
+    description?: string
+    signal?: AbortSignal
+  }): Promise<ScopeGrantRequestResultView>
   /** 无显式 scope 时的合并读取集合(会话 + 项目 + global)。 */
   resolveReadScopes?(agent: unknown): MemoryScope[]
   /**
@@ -180,7 +257,8 @@ export interface MemoryToolsOptions {
 
 const SCOPE_DESCRIPTION =
   "省略=当前会话；'global'=所有项目共享；'project'=当前工作区；其他任意名称=自定义作用域"
-  + "(memory_save 时不存在则自动创建)。读取时可用 'all' 跨所有作用域。"
+  + "(memory_save 时不存在则自动创建；由 Agent 创建时必须同时提供 scopeDescription 说明用途)。"
+  + "读取时可用 'all' 跨所有作用域。"
 
 export class MemoryToolError extends Error {
   readonly code: string
@@ -275,8 +353,8 @@ function policyRule(policy: VisibilityPolicyView | undefined, scope: string): Vi
   return policy.scopes.find((item) => item.scope === scope)
 }
 
-/** 这条记录是否在可见域内(scope、read 开关与类型都要满足)。 */
-function recordAllowed(policy: VisibilityPolicyView | undefined, scope: string, kind: string): boolean {
+/** 这条记录是否在可见域内(旧 provider 的纯策略回退;新 provider 走 authorize)。 */
+function legacyRecordAllowed(policy: VisibilityPolicyView | undefined, scope: string, kind: string): boolean {
   if (policy === undefined || policy.level === 'none') return true
   const rule = policyRule(policy, scope)
   if (rule === undefined || rule.read === false) return false
@@ -288,14 +366,96 @@ function outsideReason(policy: VisibilityPolicyView | undefined, scope: string):
   return scopeInPolicy(policy, scope) ? 'kind' : 'scope'
 }
 
-/** 范围被挡住时给模型的原因:绝对限制 / 可读开关 / 普通审批结局。 */
-function withheldReasonFor(
+/** provider 的授权判定器;老 provider / 拿不到会话时返回 undefined(走回退)。 */
+type DecideAccess = (
+  action: 'discover' | 'read' | 'write' | 'delete',
+  scope: string,
+  kind?: string,
+) => AccessDecisionView | undefined
+
+function decisionMaker(service: MemoryToolService, agent: unknown): DecideAccess {
+  if (agent === undefined) return () => undefined
+  try {
+    const evaluator = service.accessEvaluator?.(agent)
+    if (typeof evaluator === 'function') {
+      return (action, scope, kind) => {
+        try {
+          return evaluator({ scope, action, ...(kind !== undefined ? { kind } : {}) })
+        } catch {
+          return undefined
+        }
+      }
+    }
+  } catch { /* 回退到纯策略判定 */ }
+  return () => undefined
+}
+
+/** 读权限:优先 provider 的统一判定,老 provider 用纯策略回退。 */
+function recordAllowed(
+  decide: DecideAccess,
   policy: VisibilityPolicyView | undefined,
+  scope: string,
+  kind: string,
+): boolean {
+  const decision = decide('read', scope, kind)
+  return decision !== undefined ? decision.allowed : legacyRecordAllowed(policy, scope, kind)
+}
+
+/** 这条被挡住的读能不能申请审批;absolute 与显式 read:false 都不能。 */
+function recordRequestable(
+  decide: DecideAccess,
+  policy: VisibilityPolicyView | undefined,
+  scope: string,
+  kind: string,
+): boolean {
+  const decision = decide('read', scope, kind)
+  if (decision !== undefined) return !decision.allowed && decision.requestable
+  return policy?.level === 'normal' && policyRule(policy, scope) === undefined
+}
+
+/** 写权限:优先 provider 的统一判定,老 provider 用纯策略回退。 */
+function scopeWritableBy(
+  decide: DecideAccess,
+  service: MemoryToolService,
+  agent: unknown,
+  policy: VisibilityPolicyView | undefined,
+  scope: string,
+): boolean {
+  const decision = decide('write', scope)
+  if (decision !== undefined) return decision.allowed
+  return scopeWritable(service, agent, policy, scope)
+}
+
+/** 单条读被挡住的原因(给 withheld 用)。 */
+function readDenyReason(
+  decide: DecideAccess,
+  policy: VisibilityPolicyView | undefined,
+  scope: string,
+  kind: string,
+): WithheldReason {
+  const decision = decide('read', scope, kind)
+  switch (decision?.reason) {
+    case 'ABSOLUTE_ISOLATION': return 'absolute'
+    case 'SCOPE_DISABLED': return 'scope-disabled'
+    case 'READ_DISABLED': return 'read-disabled'
+    case 'KIND_NOT_ALLOWED': return 'read-disabled'
+    case 'SCOPE_NOT_IN_RANGE': return policy?.level === 'absolute' ? 'absolute' : 'read-disabled'
+  }
+  return policy?.level === 'absolute' ? 'absolute' : 'read-disabled'
+}
+
+/** 范围被挡住时给模型的原因:审批结局优先,否则按实际拒绝原因聚合。 */
+function withheldReasonFor(
+  decide: DecideAccess,
+  policy: VisibilityPolicyView | undefined,
+  denied: ReadonlyArray<{ scope: string; kind: string }>,
   verdict: ApprovalVerdict | undefined,
-  hasAbsolute: boolean,
 ): WithheldReason | undefined {
   if (verdict !== undefined) return verdict.outcome === 'allowed-once' ? 'partial' : verdict.outcome
-  if (policy !== undefined && policy.level === 'absolute' && hasAbsolute) return 'absolute'
+  if (denied.length === 0) return undefined
+  const reasons = denied.map((item) => readDenyReason(decide, policy, item.scope, item.kind))
+  if (reasons.includes('absolute')) return 'absolute'
+  if (reasons.includes('scope-disabled')) return 'scope-disabled'
   return 'read-disabled'
 }
 
@@ -459,6 +619,41 @@ function blockedRecordError(policy: VisibilityPolicyView | undefined, scope: str
   )
 }
 
+/** 按 id 删除时,记录存在但被 provider 的授权判定挡住的原因。 */
+function blockedRecordDecisionError(decision: AccessDecisionView, scope: string, id: string): MemoryToolError {
+  if (decision.reason === 'WRITE_DISABLED') {
+    return new MemoryToolError(
+      'SCOPE_READ_ONLY',
+      `记忆 ${id} 所在作用域 ${scope} 在本会话记忆范围里被标记为「不可写」，本次删除没有执行。如需删除，请让用户打开该作用域的「可写」状态。`,
+    )
+  }
+  if (decision.reason === 'SCOPE_DISABLED') {
+    return new MemoryToolError('SCOPE_DISABLED', `记忆 ${id} 所在作用域 ${scope} 已被配置关闭，本次删除没有执行。`)
+  }
+  return new MemoryToolError(
+    'VISIBILITY_ABSOLUTE',
+    `记忆 ${id} 不在本会话可见范围内（限制等级：绝对限制），本次删除没有执行。如需删除，请让用户调整「记忆范围」后重试。`,
+  )
+}
+
+/** 写入/删除被 provider 的授权判定挡住时给模型的真实原因。 */
+function writeDecisionError(decision: AccessDecisionView, scope: string, action: 'write' | 'delete'): MemoryToolError {
+  const verb = action === 'write' ? '写入' : '删除'
+  if (decision.reason === 'WRITE_DISABLED') {
+    return new MemoryToolError(
+      'SCOPE_READ_ONLY',
+      `作用域 ${scope} 在本会话记忆范围里被标记为「不可写」（可读/可写按钮），本次${verb}没有执行。如需${verb}，请让用户打开该作用域的「可写」状态。`,
+    )
+  }
+  if (decision.reason === 'SCOPE_DISABLED') {
+    return new MemoryToolError('SCOPE_DISABLED', `作用域 ${scope} 已被配置关闭，本次${verb}没有执行。`)
+  }
+  return new MemoryToolError(
+    'VISIBILITY_ABSOLUTE',
+    `作用域 ${scope} 不在本会话可见范围内（限制等级：绝对限制），本次${verb}没有执行。如需${verb}，请让用户调整「记忆范围」后重试。`,
+  )
+}
+
 /** 写入/删除前判断一个 scope 是否可写(0.23 起独立于 read 开关)。 */
 function scopeWritable(service: MemoryToolService, agent: unknown, policy: VisibilityPolicyView | undefined, scope: string): boolean {
   if (policy === undefined || policy.level === 'none') return true
@@ -542,6 +737,13 @@ export interface SaveArgs {
   ttlMs?: number
   /** 流程触发词(kind=procedure)。系统提示里的流程索引按它匹配任务/工具名。 */
   triggers?: string[]
+  /**
+   * 新建自定义作用域时必填：一句话说明这个作用域用来做什么。
+   * 已有作用域带上它是“更新用途”（不会写初始记忆）。
+   */
+  scopeDescription?: string
+  /** 初始化时可选写一条初始规则（kind=rule），只对新作用域生效。 */
+  scopeRule?: string
   /** 本次调用的用途(给用户看);普通限制下必填,审批弹窗展示。 */
   description?: string
 }
@@ -582,6 +784,8 @@ export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, Sav
       expiresAt: { type: 'number', description: '过期时间(毫秒时间戳)。kind=state 不传时按设置里的默认 TTL(7 天)' },
       ttlMs: { type: 'number', description: '相对有效期(毫秒)。与 expiresAt 二选一，expiresAt 优先' },
       triggers: { type: 'array', items: { type: 'string' }, description: '流程触发词(kind=procedure)：工具名/关键词/路径；缺省用 tags' },
+      scopeDescription: { type: 'string', description: '新建自定义作用域时必填：一句话说明这个作用域用来做什么（已有作用域带上它 = 更新用途）' },
+      scopeRule: { type: 'string', description: '初始化时可选写一条初始规则(kind=rule)：只对新自定义作用域生效，用于约定该作用域只记录什么、不记录什么' },
       description: { type: 'string', description: DESCRIPTION_PARAM_DESCRIPTION },
     },
     async execute(args: SaveArgs, exec?: unknown): Promise<SaveResult> {
@@ -629,12 +833,17 @@ export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, Sav
       //   - none → 不限制。
       // 拿不到会话(老宿主 / 无 exec)时不判断:没有会话就没有"本会话的可见域"。
       const policy = agent === undefined ? undefined : visibilityPolicy(service, agent)
+      const decide = decisionMaker(service, agent)
       const level = policy?.level ?? 'none'
       const target = explicit ?? (typeof service.resolveWriteScope === 'function' ? service.resolveWriteScope(agent) : undefined)
       let approved = false
-      if (level !== 'none' && target !== undefined && !scopeWritable(service, agent, policy, target)) {
-        const rule = policyRule(policy, target)
-        if (rule !== undefined || level === 'absolute') {
+      if (level !== 'none' && target !== undefined && !scopeWritableBy(decide, service, agent, policy, target)) {
+        const decision = decide('write', target)
+        if (decision !== undefined) {
+          // provider 已经给出统一判定：不可申请就直接讲原因（absolute / 关闭 / 只读）。
+          if (!decision.requestable) throw writeDecisionError(decision, target, 'write')
+        } else if (policyRule(policy, target) !== undefined || level === 'absolute') {
+          // 老 provider 没有授权判定时保持原有纯策略判断。
           throw scopeWriteBlockedError(policy, target, 'write')
         }
         const draft = {
@@ -677,6 +886,12 @@ export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, Sav
           ...(typeof args.expiresAt === 'number' ? { expiresAt: args.expiresAt } : {}),
           ...(typeof args.ttlMs === 'number' ? { ttlMs: args.ttlMs } : {}),
           ...(Array.isArray(args.triggers) ? { triggers: args.triggers.map(String) } : {}),
+          ...(typeof args.scopeDescription === 'string' && args.scopeDescription.trim() !== ''
+            ? { scopeDescription: args.scopeDescription }
+            : {}),
+          ...(typeof args.scopeRule === 'string' && args.scopeRule.trim() !== ''
+            ? { scopeRule: args.scopeRule }
+            : {}),
           source: { origin: 'explicit' },
         })
         return { id: record.id, scope: record.scope, ...(alias !== undefined ? { scopeName: alias } : {}), deduped: false }
@@ -785,6 +1000,7 @@ export function memorySearchTool(opts: MemoryToolsOptions): ToolSpec<SearchArgs,
       }
       const resolved = resolveScope(opts, service, exec, args.scope, 'read')
       const policy = visibilityPolicy(service, agent)
+      const decide = decisionMaker(service, agent)
       const level = policy?.level ?? 'none'
       // level=none 时策略里的 scopes 只是偏好,不参与限制(等价于没有可见域)。
       const visible = policy !== undefined && policy.level !== 'none' ? policy.scopes.map((rule) => rule.scope) : undefined
@@ -818,10 +1034,10 @@ export function memorySearchTool(opts: MemoryToolsOptions): ToolSpec<SearchArgs,
           topK: Math.min(60, Math.max(10, (wantedTopK ?? 10) * 3)),
           ...(args.includeSuperseded === true ? { includeSuperseded: true } : {}),
         })
-        const inside = hits.filter((hit) => recordAllowed(policy, hit.record.scope, hit.record.kind))
-        const outside = hits.filter((hit) => !recordAllowed(policy, hit.record.scope, hit.record.kind))
-        // 只有"作用域不在范围里"才可能审批;read:false 的作用域显式不可读,审批也不该放行。
-        const needsApproval = outside.filter((hit) => policyRule(policy, hit.record.scope) === undefined || policyRule(policy, hit.record.scope)?.read !== false)
+        const inside = hits.filter((hit) => recordAllowed(decide, policy, hit.record.scope, hit.record.kind))
+        const outside = hits.filter((hit) => !recordAllowed(decide, policy, hit.record.scope, hit.record.kind))
+        // 只有“作用域不在范围里”才可能审批;absolute 与 read:false 都不 requestable。
+        const needsApproval = outside.filter((hit) => recordRequestable(decide, policy, hit.record.scope, hit.record.kind))
         let verdict: ApprovalVerdict | undefined
         if (needsApproval.length > 0 && level === 'normal') {
           verdict = await askOutOfScope(
@@ -861,7 +1077,9 @@ export function memorySearchTool(opts: MemoryToolsOptions): ToolSpec<SearchArgs,
         // 0.23:被挡住时告诉模型真实原因(绝对限制 / 不可读 / 审批拒绝…),不再假装不存在。
         const denied = outside.length - approvedOutside.length
         if (denied > 0) {
-          const reason = withheldReasonFor(policy, verdict, outside.length > 0)
+          const approvedIds = new Set(approvedOutside.map((hit) => hit.record.id))
+          const deniedRecords = outside.filter((hit) => !approvedIds.has(hit.record.id))
+          const reason = withheldReasonFor(decide, policy, deniedRecords.map((hit) => ({ scope: hit.record.scope, kind: hit.record.kind })), verdict)
           if (reason !== undefined) result.withheld = { count: denied, reason }
         }
         if (wantedTopK !== undefined) result.records = result.records.slice(0, wantedTopK)
@@ -906,16 +1124,20 @@ export function memoryForgetTool(opts: MemoryToolsOptions): ToolSpec<ForgetArgs,
       if (args.id && args.query) throw new MemoryToolError('TARGET_AMBIGUOUS', 'provide id or query, not both')
       // 没有会话就不判断可见域:护栏只对"本会话的 Agent"生效(与 provider 一致)。
       const policy = agent === undefined ? undefined : visibilityPolicy(service, agent)
+      const decide = decisionMaker(service, agent)
       const level = policy?.level ?? 'none'
       const signal = (exec as { signal?: AbortSignal } | undefined)?.signal
       // ---- 按 id 删除:先查出这条记录在哪个 scope,再按可写范围判断 ----
       if (args.id) {
         const matches = (service.getByIds?.([args.id]) ?? []).filter((record) => record.id === args.id)
-        const blocked = matches.filter((record) => !scopeWritable(service, agent, policy, record.scope))
+        const blocked = matches.filter((record) => !scopeWritableBy(decide, service, agent, policy, record.scope))
         let approved = false
         if (blocked.length > 0) {
-          // 作用域在范围内但「可写」关掉,或绝对限制下根本不在范围内:直接说明原因。
-          if (level === 'absolute' || policyRule(policy, blocked[0]!.scope) !== undefined) {
+          const decision = decide('write', blocked[0]!.scope)
+          if (decision !== undefined) {
+            if (!decision.requestable) throw blockedRecordDecisionError(decision, blocked[0]!.scope, args.id)
+          } else if (level === 'absolute' || policyRule(policy, blocked[0]!.scope) !== undefined) {
+            // 老 provider 没有授权判定时保持原有纯策略判断。
             throw blockedRecordError(policy, blocked[0]!.scope, args.id)
           }
           if (level === 'normal') {
@@ -953,9 +1175,12 @@ export function memoryForgetTool(opts: MemoryToolsOptions): ToolSpec<ForgetArgs,
       }
       const scope = resolved.scope ?? readScopes(opts, service, agent)[0]
       let approved = false
-      if (level !== 'none' && scope !== undefined && !scopeWritable(service, agent, policy, scope)) {
-        // 绝对限制 / 「可写」关掉:直接说明原因,不再静默返回"删了 0 条"。
-        if (policyRule(policy, scope) !== undefined || level === 'absolute') {
+      if (level !== 'none' && scope !== undefined && !scopeWritableBy(decide, service, agent, policy, scope)) {
+        const decision = decide('write', scope)
+        if (decision !== undefined) {
+          if (!decision.requestable) throw writeDecisionError(decision, scope, 'delete')
+        } else if (policyRule(policy, scope) !== undefined || level === 'absolute') {
+          // 老 provider 没有授权判定时保持原有纯策略判断。
           throw scopeWriteBlockedError(policy, scope, 'delete')
         }
         const verdict = await askOutOfScope(
@@ -1031,6 +1256,7 @@ export function memoryListTool(opts: MemoryToolsOptions): ToolSpec<ListArgs, Lis
       requireDescription(service, agent, args.description)
       const resolved = resolveScope(opts, service, exec, args.scope, 'read')
       const policy = visibilityPolicy(service, agent)
+      const decide = decisionMaker(service, agent)
       const level = policy?.level ?? 'none'
       // level=none 时策略里的 scopes 只是偏好,不参与限制(等价于没有可见域)。
       const visible = policy !== undefined && policy.level !== 'none' ? policy.scopes.map((rule) => rule.scope) : undefined
@@ -1061,9 +1287,9 @@ export function memoryListTool(opts: MemoryToolsOptions): ToolSpec<ListArgs, Lis
           // 多取一些候选,避免范围外记录挤掉范围内结果。
           limit: Math.min(200, Math.max(limit, limit * 2)),
         })
-        const inside = raw.filter((record) => recordAllowed(policy, record.scope, record.kind))
-        const outside = raw.filter((record) => !recordAllowed(policy, record.scope, record.kind))
-        const needsApproval = outside.filter((record) => policyRule(policy, record.scope) === undefined || policyRule(policy, record.scope)?.read !== false)
+        const inside = raw.filter((record) => recordAllowed(decide, policy, record.scope, record.kind))
+        const outside = raw.filter((record) => !recordAllowed(decide, policy, record.scope, record.kind))
+        const needsApproval = outside.filter((record) => recordRequestable(decide, policy, record.scope, record.kind))
         let verdict: ApprovalVerdict | undefined
         if (needsApproval.length > 0 && level === 'normal') {
           verdict = await askOutOfScope(
@@ -1099,7 +1325,9 @@ export function memoryListTool(opts: MemoryToolsOptions): ToolSpec<ListArgs, Lis
         }))
         const denied = outside.length - approvedOutside.length
         if (denied > 0) {
-          const reason = withheldReasonFor(policy, verdict, outside.length > 0)
+          const approvedIdSet = new Set(approvedOutside.map((record) => record.id))
+          const deniedRecords = outside.filter((record) => !approvedIdSet.has(record.id))
+          const reason = withheldReasonFor(decide, policy, deniedRecords.map((record) => ({ scope: record.scope, kind: record.kind })), verdict)
           if (reason !== undefined) withheld = { count: denied, reason }
         }
         // 上下文去重:同版本已经出现过 → 只回 id,正文让 memory_get 按需取。
@@ -1133,6 +1361,130 @@ export function memoryListTool(opts: MemoryToolsOptions): ToolSpec<ListArgs, Lis
   }
 }
 
+export interface ScopeGrantRequestInputView {
+  scope: string
+  /** 省略 = 只申请只读；写权限必须显式列出。 */
+  permissions?: Array<'read' | 'write'>
+}
+
+export interface ScopesArgs {
+  action?: 'list' | 'request'
+  /** 默认 true；false 时只列当前可见域内的作用域。 */
+  includeOutOfScope?: boolean
+  limit?: number
+  /** action='request' 时必填：要申请的作用域与权限。 */
+  requests?: ScopeGrantRequestInputView[]
+  /** action='request' 时的申请理由（展示在审批卡上）。 */
+  reason?: string
+  /** 本次调用的用途(给用户看);普通限制下必填。 */
+  description?: string
+}
+
+export interface ScopesResult {
+  scopes: ScopeCatalogEntryView[]
+  /** 过滤后（limit 之前）的总数。 */
+  total: number
+  /** 因 limit 被省略的条数。 */
+  omitted: number
+}
+
+export type ScopesToolResult = ScopesResult | ScopeGrantRequestResultView
+
+/**
+ * 作用域目录 / 权限申请工具（0.24.0）。
+ *
+ * list：只返回目录元信息与访问状态，**不返回任何记忆正文**；范围外条目的记录数
+ * 也刻意不返回（条数会泄露“有没有内容”）。
+ *
+ * request：只申请**本会话**的授权（默认只读，写权限独立申请）。一次性访问不走这里，
+ * 继续由 memory_* 的隐式审批处理；absolute 下所有申请都会得到 not-requestable。
+ */
+export function memoryScopesTool(opts: MemoryToolsOptions): ToolSpec<ScopesArgs, ScopesToolResult> {
+  return {
+    name: 'memory_scopes',
+    description: 'List memory scopes with their purpose and access status (metadata only, no content), or request session access to out-of-scope scopes. action="request" defaults to read-only and requires a reason; absolute restriction never grants access.',
+    parameters: {
+      action: { type: 'string', enum: ['list', 'request'], description: 'list = 目录；request = 申请范围外作用域的会话权限（默认只读）' },
+      includeOutOfScope: { type: 'boolean', description: 'list：默认 true；false 时只列当前可见域内的作用域。' },
+      limit: { type: 'number', description: 'list：1~200，默认 50' },
+      requests: {
+        type: 'array',
+        description: 'request：要申请的作用域与权限，最多 5 个 scope；permissions 省略 = 只读',
+        items: {
+          type: 'object',
+          properties: {
+            scope: { type: 'string' },
+            permissions: { type: 'array', items: { type: 'string', enum: ['read', 'write'] } },
+          },
+          required: ['scope'],
+        },
+      },
+      reason: { type: 'string', description: 'request：一句话申请理由，展示在审批卡上' },
+      description: { type: 'string', description: DESCRIPTION_PARAM_DESCRIPTION },
+    },
+    async execute(args: ScopesArgs, exec?: unknown): Promise<ScopesToolResult> {
+      const service = svc(opts)
+      const agent = agentOf(exec)
+      requireDescription(service, agent, args.description)
+
+      if (args.action === 'request') {
+        if (typeof service.requestScopeGrants !== 'function') {
+          throw new MemoryToolError('SCOPES_UNAVAILABLE', '当前 provider 不支持作用域权限申请（请升级 @restregular/dsh-memory）')
+        }
+        const raw = Array.isArray(args.requests) ? args.requests : []
+        if (raw.length === 0) {
+          throw new MemoryToolError('REQUESTS_REQUIRED', 'action="request" 需要 requests 数组（scope + 可选 permissions）')
+        }
+        if (raw.length > 5) {
+          throw new MemoryToolError('REQUESTS_TOO_MANY', '一次最多申请 5 个作用域；请分批申请')
+        }
+        const requests = raw.map((item) => {
+          const scope = typeof item?.scope === 'string' ? item.scope.trim() : ''
+          if (scope === '') throw new MemoryToolError('SCOPE_INVALID', 'requests[].scope 不能为空')
+          const permissions = Array.isArray(item.permissions)
+            ? [...new Set(item.permissions.filter((permission): permission is 'read' | 'write' => permission === 'read' || permission === 'write'))]
+            : ['read' as const]
+          return { scope, permissions: permissions.length > 0 ? permissions : ['read' as const] }
+        })
+        const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
+        try {
+          const result = await service.requestScopeGrants(agent, {
+            requests,
+            ...(reason !== '' ? { reason } : {}),
+            ...(args.description !== undefined ? { description: args.description } : {}),
+            ...(exec as { signal?: AbortSignal } | undefined)?.signal !== undefined
+              ? { signal: (exec as { signal?: AbortSignal }).signal }
+              : {},
+          })
+          return {
+            results: result.results,
+            ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
+          }
+        } catch (error) {
+          throw toolError(error)
+        }
+      }
+
+      if (typeof service.scopeCatalog !== 'function') {
+        throw new MemoryToolError('SCOPES_UNAVAILABLE', '当前 provider 不支持作用域目录（请升级 @restregular/dsh-memory）')
+      }
+      let all: ScopeCatalogEntryView[]
+      try {
+        all = service.scopeCatalog(agent)
+      } catch (error) {
+        throw toolError(error)
+      }
+      const filtered = args.includeOutOfScope === false ? all.filter((item) => item.inScope) : all
+      const limit = args.limit !== undefined ? Math.min(200, Math.max(1, args.limit)) : 50
+      return {
+        scopes: filtered.slice(0, limit),
+        total: filtered.length,
+        omitted: Math.max(0, filtered.length - limit),
+      }
+    },
+  }
+}
+
 /** memory_get 可按需取得的字段。id 始终返回，不在此列。 */
 export const GET_FIELDS = [
   'content',
@@ -1146,6 +1498,7 @@ export const GET_FIELDS = [
   'expiresAt',
   'triggers',
   'supersedes',
+  'initial',
 ] as const
 
 export type GetField = (typeof GET_FIELDS)[number]
@@ -1226,6 +1579,7 @@ function pickGetFields(
       case 'expiresAt': if (record.expiredAt !== undefined) out.expiresAt = record.expiredAt; break
       case 'triggers': if (Array.isArray(record.triggers)) out.triggers = record.triggers; break
       case 'supersedes': if (record.supersedes !== undefined && record.supersedes !== '') out.supersedes = record.supersedes; break
+      case 'initial': if (record.initial === true) out.initial = true; break
     }
   }
   return out
@@ -1262,11 +1616,12 @@ export function memoryGetTool(opts: MemoryToolsOptions): ToolSpec<GetArgs, GetRe
         const all = service.getByIds(ids)
         // 可见域是白名单:即使知道 id,也不能直接读别的范围/别的类型的正文。
         const policy = visibilityPolicy(service, agent)
+        const decide = decisionMaker(service, agent)
         const level = policy?.level ?? 'none'
-        const inside = all.filter((record) => recordAllowed(policy, record.scope, record.kind))
-        const outside = all.filter((record) => !recordAllowed(policy, record.scope, record.kind))
-        // read:false 是用户显式关掉的可读状态,审批也不放行;只有"作用域不在范围里"才审批。
-        const needsApproval = outside.filter((record) => policyRule(policy, record.scope) === undefined || policyRule(policy, record.scope)?.read !== false)
+        const inside = all.filter((record) => recordAllowed(decide, policy, record.scope, record.kind))
+        const outside = all.filter((record) => !recordAllowed(decide, policy, record.scope, record.kind))
+        // read:false / absolute 都不 requestable;只有"作用域不在范围里"才审批。
+        const needsApproval = outside.filter((record) => recordRequestable(decide, policy, record.scope, record.kind))
         let verdict: ApprovalVerdict | undefined
         if (needsApproval.length > 0 && level === 'normal') {
           verdict = await askOutOfScope(
@@ -1293,7 +1648,11 @@ export function memoryGetTool(opts: MemoryToolsOptions): ToolSpec<GetArgs, GetRe
         const approvedIds = new Set(approvedOutside.map((record) => record.id))
         const found = all.filter((record) => insideIds.has(record.id) || approvedIds.has(record.id))
         const denied = outside.length - approvedOutside.length
-        const reason = denied > 0 ? withheldReasonFor(policy, verdict, outside.length > 0) : undefined
+        const approvedIdSet = new Set(approvedOutside.map((record) => record.id))
+        const deniedRecords = outside.filter((record) => !approvedIdSet.has(record.id))
+        const reason = denied > 0
+          ? withheldReasonFor(decide, policy, deniedRecords.map((record) => ({ scope: record.scope, kind: record.kind })), verdict)
+          : undefined
         return {
           records: found.map((r) => pickGetFields(r, fields, chars)),
           fields,
@@ -1316,6 +1675,7 @@ export function memoryTools(opts: MemoryToolsOptions) {
     memory_search: memorySearchTool(opts),
     memory_forget: memoryForgetTool(opts),
     memory_list: memoryListTool(opts),
+    memory_scopes: memoryScopesTool(opts),
     memory_get: memoryGetTool(opts),
   }
 }

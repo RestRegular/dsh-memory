@@ -1795,6 +1795,60 @@ test('审批卡:只在所属会话显示,读审批可逐条允许', async () => 
   hooks.resetAll()
 })
 
+test('审批卡:grant 模式默认只勾只读,允许后只提交只读权限', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const Dock = (exports.__test as { MemoryApprovalDock: (p: Record<string, unknown>) => unknown }).MemoryApprovalDock
+  const calls: Array<{ url: string; init?: { method?: string; body?: string } }> = []
+  const approval = {
+    id: 'g1',
+    sessionId: 's1',
+    tool: 'memory_scopes',
+    action: 'read',
+    mode: 'grant',
+    query: '需要团队约定',
+    items: [
+      { id: 'grant:handbook:read', scope: 'handbook', kind: 'grant', content: '只读访问', tags: [], importance: 0, updatedAt: 1, reason: 'scope', grantPermission: 'read' },
+      { id: 'grant:handbook:write', scope: 'handbook', kind: 'grant', content: '写入 / 删除', tags: [], importance: 0, updatedAt: 2, reason: 'scope', grantPermission: 'write' },
+    ],
+    createdAt: 1,
+    expiresAt: 2,
+  }
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string, init?: { method?: string; body?: string }) => {
+    calls.push({ url, init })
+    if (init === undefined || init.method === 'GET') {
+      return { status: 200, json: async () => ({ ok: true, value: { approvals: [approval] } }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, value: { answered: true } }) }
+  }
+  try {
+    let current: RenderNode | null = null
+    const element = () => hooks.React.createElement(Dock, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const text = textOf(current)
+    assert.ok(text.includes('申请访问可见域外的作用域'), 'grant 模式用申请文案')
+    assert.ok(text.includes('授权仅在本会话有效'), '说明授权范围')
+    assert.ok(text.includes('只读') && text.includes('可写'), '两种权限都展示')
+    const checks = collect(current).filter((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-approval-check'))
+    assert.deepEqual(checks.map((box) => box.props?.['aria-checked']), [true, false], '默认只勾只读')
+
+    const allow = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-approval-allow'))
+    assert.ok(String(textOf(allow)).includes('允许选中的 1 项（本会话）'))
+    ;(allow!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const posted = JSON.parse(String(calls[1]?.init?.body ?? '{}')) as { id: string; outcome: string; allowedIds?: string[] }
+    assert.deepEqual(posted, { id: 'g1', outcome: 'allowed-once', allowedIds: ['grant:handbook:read'] })
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
+})
+
 test('审批卡:取消勾选后只允许选中的部分记忆', async () => {
   const { exports, hooks } = await loadBundle()
   hooks.resetAll()

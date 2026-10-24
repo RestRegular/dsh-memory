@@ -9,7 +9,7 @@
  * 写进渲染文本。
  * 0.23.0：绝对限制与「不可读」开关也会被说明（不再假装"不存在"），并提示怎么调整。
  */
-import type { GetResult, GetField, ListResult, SearchResult, WithheldReason } from './index.ts'
+import type { GetResult, GetField, ListResult, ScopesResult, ScopesToolResult, SearchResult, WithheldReason } from './index.ts'
 
 /** 把 scope 键渲染成展示文案（宿主能查到会话标题时用它，否则用短 id）。 */
 export type ScopeLabel = (scope: string) => string
@@ -51,6 +51,8 @@ export function renderWithheldNote(withheld: WithheldInfo | undefined): string {
       return `另有 ${count} 条记忆在本会话的可见域外，当前限制等级为「绝对限制」，不会发起审批，未返回。如确实是本次任务需要的内容，请让用户调整「记忆范围」后重试。`
     case 'read-disabled':
       return `另有 ${count} 条记忆所在的作用域在本会话记忆范围里被标记为「不可读」（可读/可写按钮），未返回。如确实需要，请让用户打开该作用域的「可读」状态后重试。`
+    case 'scope-disabled':
+      return `另有 ${count} 条记忆所在的作用域已被配置关闭（global / project / session / custom 开关），未返回。如确实需要，请让用户打开对应类型的作用域。`
     default:
       return ''
   }
@@ -103,6 +105,74 @@ export function renderListResult(value: ListResult, label: ScopeLabel): string {
 }
 
 /**
+ * memory_scopes 的渲染：list 只讲“有什么、干什么、能不能碰”；request 讲每个
+ * scope + 权限的申请结局。两者共用同一个工具入口，但文案完全分开。
+ */
+export function renderScopesResult(value: ScopesToolResult, label: ScopeLabel): string {
+  if ('results' in value) {
+    if (value.results.length === 0) return '没有需要申请的作用域权限。'
+    const statusText = (status: string): string => {
+      switch (status) {
+        case 'granted': return '已授予（本会话）'
+        case 'already-allowed': return '本来就允许'
+        case 'already-granted': return '已有本会话授权'
+        case 'not-requestable': return '不可申请'
+        case 'unavailable': return '作用域不可用'
+        case 'denied': return '用户拒绝'
+        case 'timeout': return '审批超时'
+        case 'approval-unavailable': return '当前环境无法审批'
+        default: return status
+      }
+    }
+    const reasonText = (reason: string | undefined): string => {
+      switch (reason) {
+        case 'ABSOLUTE_ISOLATION': return '（绝对限制）'
+        case 'SCOPE_DISABLED': return '（作用域已关闭）'
+        case 'READ_DISABLED': return '（用户已关闭可读）'
+        case 'WRITE_DISABLED': return '（用户已关闭可写）'
+        default: return ''
+      }
+    }
+    const body = value.results.map((item) =>
+      `- ${label(item.scope)}：${item.permission === 'read' ? '只读' : '写入 / 删除'} → ${statusText(item.status)}${reasonText(item.reason)}`,
+    ).join('\n')
+    return `作用域权限申请结果：\n${body}`
+  }
+  if (value.scopes.length === 0) return '当前没有可列出的作用域。'
+  const body = value.scopes.map((item) => {
+    const name = item.name !== undefined && item.name !== '' ? item.name : label(item.scope)
+    const description = item.description !== undefined && item.description.trim() !== ''
+      ? item.description.trim()
+      : '（未填写用途）'
+    const meta: string[] = []
+    if (item.records !== undefined) meta.push(`${item.records} 条`)
+    if (item.inScope) {
+      meta.push(item.accessStatus === 'default'
+        ? '范围内'
+        : item.accessStatus === 'read-only'
+          ? '范围内 · 只读'
+          : item.accessStatus === 'read-write'
+            ? '范围内 · 读写'
+            : '范围内 · 受限')
+    } else if (item.readable || item.writable) {
+      meta.push(`范围外 · 已授权${item.readable && item.writable ? '读写' : item.readable ? '只读' : '可写'}`)
+    } else {
+      const canRead = item.canRequestRead
+      const canWrite = item.canRequestWrite
+      meta.push(canRead || canWrite
+        ? `范围外 · 可申请${canRead ? '只读' : ''}${canWrite ? (canRead ? '/读写' : '读写') : ''}`
+        : '范围外 · 不可申请')
+    }
+    const initial = Array.isArray(item.initialRecords) && item.initialRecords.length > 0
+      ? `\n  初始记录：${item.initialRecords.map((record) => `[${record.kind}] ${record.content}`).join(' / ')}`
+      : ''
+    return `- ${name}（${item.scope}）：${description}（${meta.join(' · ')}）${initial}`
+  }).join('\n')
+  const tail = value.omitted > 0 ? `\n…另有 ${value.omitted} 个作用域未列出，可调整 limit。` : ''
+  return `作用域目录（共 ${value.total} 个）：\n${body}${tail}`
+}
+
+/**
  * memory_get 的渲染：
  *   - 元数据按 fields 拼在首行括号里；
  *   - content 优先于 summary（两者都给时正文已经足够）；
@@ -141,6 +211,7 @@ export function renderGetResult(value: GetResult, label: ScopeLabel): string {
     if (fields.has('supersedes') && typeof record.supersedes === 'string' && record.supersedes !== '') {
       meta.push(`修正 ${shortId(record.supersedes)}`)
     }
+    if (fields.has('initial') && record.initial === true) meta.push('初始记录')
     const head = `[${record.id}]${meta.length > 0 ? ` (${meta.join(' · ')})` : ''}`
     const content = typeof record.content === 'string' ? record.content : undefined
     const summary = typeof record.summary === 'string' ? record.summary : undefined

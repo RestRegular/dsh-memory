@@ -5005,26 +5005,34 @@ window.__ModuleLoader__.load({
 
       // 0.20 起写/删也会触发审批,文案按 action 走。
       const action = pending.action === 'write' || pending.action === 'delete' ? pending.action : 'read'
-      const actionLabel = action === 'write' ? '写入' : action === 'delete' ? '删除' : '读取'
-      const actionHint = action === 'write'
-        ? 'Agent 想把一条记忆写入可见域外的作用域。允许只对本次调用生效；拒绝则不写入。'
-        : action === 'delete'
-          ? 'Agent 想删除可见域外的记忆。允许只对本次调用生效；拒绝则不删除。'
-          : '以下记忆不在本会话的可见域内。勾选要允许的条目（默认全选）；允许只对本次调用生效，其余条目不会返回。'
+      // 0.24.0：grant 模式 = 作用域权限申请，不是记忆条目审批。
+      const grantMode = pending.mode === 'grant'
+      const actionLabel = grantMode ? '访问' : action === 'write' ? '写入' : action === 'delete' ? '删除' : '读取'
+      const actionHint = grantMode
+        ? 'Agent 申请访问可见域外的作用域。勾选要授予的权限（默认只读）；授权仅在本会话有效，子 Agent 会继承。'
+        : action === 'write'
+          ? 'Agent 想把一条记忆写入可见域外的作用域。允许只对本次调用生效；拒绝则不写入。'
+          : action === 'delete'
+            ? 'Agent 想删除可见域外的记忆。允许只对本次调用生效；拒绝则不删除。'
+            : '以下记忆不在本会话的可见域内。勾选要允许的条目（默认全选）；允许只对本次调用生效，其余条目不会返回。'
       const items = Array.isArray(pending.items) ? pending.items : []
       // 模型写的用途说明(0.22.0;普通限制下工具层强制提供)。
       const description = typeof pending.description === 'string' ? pending.description.trim() : ''
       const allIds = items.map((item) => item.id)
-      // 只有"读 + 多条"才有逐条勾选的意义:写/删是单条,允许就是允许。
-      const selectable = action === 'read' && allIds.length > 1
+      // grant 模式默认只勾只读项（写权限必须用户主动勾）；普通读审批默认全选。
+      const defaultIds = grantMode
+        ? items.filter((item) => item.grantPermission !== 'write').map((item) => item.id)
+        : allIds
+      // 多条目才有逐条勾选的意义；grant 模式下 even 1 条也走勾选以明确权限。
+      const selectable = grantMode ? allIds.length > 0 : action === 'read' && allIds.length > 1
       const stored = Array.isArray(picked[pending.id]) ? picked[pending.id].filter((id) => allIds.includes(id)) : null
-      const selectedIds = stored === null ? allIds : stored
+      const selectedIds = stored === null ? defaultIds : stored
       const selectedSet = new Set(selectedIds)
       const selectedCount = selectedIds.length
 
       const toggle = (itemId) => {
         setPicked((prev) => {
-          const current = Array.isArray(prev[pending.id]) ? prev[pending.id].filter((id) => allIds.includes(id)) : [...allIds]
+          const current = Array.isArray(prev[pending.id]) ? prev[pending.id].filter((id) => allIds.includes(id)) : [...defaultIds]
           const next = current.includes(itemId) ? current.filter((id) => id !== itemId) : [...current, itemId]
           return { ...prev, [pending.id]: next }
         })
@@ -5085,16 +5093,20 @@ window.__ModuleLoader__.load({
 
       const allowLabel = busy === pending.id
         ? '处理中…'
-        : selectable && selectedCount !== allIds.length
-          ? `允许选中的 ${selectedCount} 条`
-          : '允许一次'
+        : grantMode && selectable && selectedCount !== allIds.length
+          ? `允许选中的 ${selectedCount} 项（本会话）`
+          : grantMode
+            ? '允许授权（本会话）'
+            : selectable && selectedCount !== allIds.length
+              ? `允许选中的 ${selectedCount} 条`
+              : '允许一次'
 
       return h('div', {
         className: 'mem-approval',
         'data-approval-id': pending.id,
         onKeyDown: keydown,
       },
-        h('div', { className: 'mem-approval-card', role: 'dialog', 'aria-label': `记忆${actionLabel}审批`, 'aria-busy': busy === pending.id },
+        h('div', { className: 'mem-approval-card', role: 'dialog', 'aria-label': grantMode ? '记忆访问授权审批' : `记忆${actionLabel}审批`, 'aria-busy': busy === pending.id },
           h('div', { className: 'mem-approval-strip' },
             h('span', { className: 'mem-approval-dot' }),
             h('span', null, busy === pending.id ? '处理中…' : '等待审批'),
@@ -5114,9 +5126,13 @@ window.__ModuleLoader__.load({
           isCollapsed
             ? null
             : h('div', { className: 'mem-approval-body' },
-                h('div', { className: 'mem-approval-headline' }, `工具 ${pending.tool || 'memory'} 请求${actionLabel}可见域外的记忆`),
+                h('div', { className: 'mem-approval-headline' }, grantMode
+                  ? `工具 ${pending.tool || 'memory'} 申请访问可见域外的作用域`
+                  : `工具 ${pending.tool || 'memory'} 请求${actionLabel}可见域外的记忆`),
                 h('div', { className: 'mem-approval-hint' }, actionHint),
-                h('div', { className: 'mem-approval-command' }, `Agent 查询：${pending.query || '（未提供）'}`),
+                h('div', { className: 'mem-approval-command' }, grantMode
+                  ? `申请理由：${pending.query || '（未提供）'}`
+                  : `Agent 查询：${pending.query || '（未提供）'}`),
                 description !== ''
                   ? h('div', { className: 'mem-approval-desc', title: description }, `Agent 说明：${description}`)
                   : null,
@@ -5158,7 +5174,7 @@ window.__ModuleLoader__.load({
                           className: 'mem-approval-check' + (checked ? ' on' : ''),
                           role: 'checkbox',
                           'aria-checked': checked,
-                          'aria-label': `允许这条记忆 ${item.id}`,
+                          'aria-label': grantMode ? `允许这项权限 ${item.id}` : `允许这条记忆 ${item.id}`,
                           onClick: (event) => {
                             if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
                             toggle(item.id)
@@ -5167,7 +5183,7 @@ window.__ModuleLoader__.load({
                         : null,
                       h('div', { className: 'mem-approval-item-body' },
                         h('div', { className: 'mem-approval-row' },
-                          action === 'read'
+                          !grantMode && action === 'read'
                             ? h('button', {
                               type: 'button',
                               className: 'mem-approval-id',
@@ -5179,14 +5195,22 @@ window.__ModuleLoader__.load({
                                 openMemoryRecordPanel(item.id, item.scope, item)
                               },
                             }, String(item.id).length > 12 ? `${item.id.slice(0, 8)}…${item.id.slice(-4)}` : String(item.id))
-                            : h('span', { className: 'mem-approval-id', title: item.id }, String(item.id).length > 12 ? `${item.id.slice(0, 8)}…${item.id.slice(-4)}` : String(item.id)),
+                            : h('span', { className: 'mem-approval-id', title: item.id }, grantMode
+                              ? (item.grantPermission === 'write' ? '可写' : '只读')
+                              : (String(item.id).length > 12 ? `${item.id.slice(0, 8)}…${item.id.slice(-4)}` : String(item.id))),
                           h('span', { className: 'audit-pill mute' }, item.scope),
-                          h('span', { className: 'audit-pill mute' }, item.kind ? kindMeta(item.kind).label : '未知'),
-                          item.reason === 'kind'
-                            ? h('span', { className: 'audit-pill warn' }, '类型受限')
-                            : h('span', { className: 'audit-pill warn' }, '范围外'),
+                          grantMode
+                            ? h('span', { className: 'audit-pill mute' }, item.grantPermission === 'write' ? '写入 / 删除' : '只读访问')
+                            : h('span', { className: 'audit-pill mute' }, item.kind ? kindMeta(item.kind).label : '未知'),
+                          grantMode
+                            ? h('span', { className: 'audit-pill warn' }, '本会话授权')
+                            : item.reason === 'kind'
+                              ? h('span', { className: 'audit-pill warn' }, '类型受限')
+                              : h('span', { className: 'audit-pill warn' }, '范围外'),
                         ),
-                        h('div', { className: 'mem-approval-summary' }, String(item.content || '').replace(/\s+/g, ' ').slice(0, 180)),
+                        h('div', { className: 'mem-approval-summary' }, grantMode
+                          ? (item.grantPermission === 'write' ? '允许新增、修改与删除该作用域的记录' : '允许查询与读取该作用域的正文')
+                          : String(item.content || '').replace(/\s+/g, ' ').slice(0, 180)),
                       ),
                     )
                   }),

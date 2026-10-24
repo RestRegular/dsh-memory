@@ -4,9 +4,15 @@
  */
 export const POLICY_TEXT = `## 记忆系统
 
-本会话挂着一个本地记忆库，工具：memory_search / memory_list / memory_get / memory_save / memory_forget（可按会话、项目、全局等作用域读写）。
+本会话挂着一个本地记忆库，工具：memory_search / memory_list / memory_get / memory_save / memory_forget / memory_scopes（可按会话、项目、全局等作用域读写）。
 
 memory_search 只返回印象（ID、作用域、类型、标签和少量摘要）；判断相关后再用 memory_get(ids, fields) 取正文。fields 省略 = content + scope + kind + tags；只要摘要用 ["summary"]，只要正文用 ["content"]，需要重要度 / 时间 / 触发词等再显式加上对应字段。
+
+需要知道有哪些作用域、各自用来做什么、当前能不能读/写时，用 memory_scopes（action="list"）。它只返回目录元信息（名字 / 用途 / 访问状态）与初始化记录正文，不返回普通记忆正文；范围外作用域在绝对限制下仍可发现，但正文（含初始化记录）永不可读、不可申请。
+
+需要长期使用范围外作用域时，用 memory_scopes 的 action="request" 申请本会话权限：默认只读，写权限必须在 permissions 里显式列出；审批卡默认只勾只读。批准后本会话（及子 Agent）可直接读写该作用域，不必每次审批；一次性访问仍直接调用 memory_search / memory_get。
+
+新建自定义作用域时，memory_save 必须带 scopeDescription（一句话用途）；可选带 scopeRule 写一条初始规则。已有作用域带上 scopeDescription 表示更新用途，不会写初始记忆。
 
 同一会话里已经出现过的记忆，memory_search / memory_list 只回 ID 并注明“摘要因上下文去重被省略”；那不是没找到，需要正文时直接用 memory_get 取。
 
