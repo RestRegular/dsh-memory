@@ -251,7 +251,7 @@ test('面板 /visibility:read/write 状态与工作区绑定落盘,默认范围�
         scopes: [{ scope: 'global', read: false }, { scope: 'project:D:\\w' }, { scope: 'handbook' }],
         level: 'normal',
       },
-      bindings: ['global', 'handbook'],
+      bindings: ['handbook'],
     }), set)
     assert.equal(set.out.status, 200)
     const value = set.out.body.value
@@ -261,11 +261,16 @@ test('面板 /visibility:read/write 状态与工作区绑定落盘,默认范围�
       { scope: 'handbook' },
     ])
     assert.equal(value.workspace, 'project:D:\\w')
-    assert.deepEqual([...value.bindings].sort(), ['global', 'handbook'])
+    assert.deepEqual(value.bindings, ['handbook'], '只存额外绑定,默认作用域不重复落盘')
+    assert.deepEqual(value.defaultScopes, ['session:s1', 'project:D:\\w', 'global'], '默认基础范围')
     const globalItem = value.scopes.find((item) => item.scope === 'global')
     assert.equal(globalItem.read, false, '可读状态随目录返回')
     assert.equal(globalItem.write, true)
-    assert.equal(globalItem.bound, true, '绑定状态随目录返回')
+    assert.equal(globalItem.bound, true, '默认作用域显示为已绑定')
+    assert.equal(globalItem.defaultBound, true, '默认作用域不可取消绑定')
+    const handbookItem = value.scopes.find((item) => item.scope === 'handbook')
+    assert.equal(handbookItem.bound, true, '额外绑定显示为已绑定')
+    assert.equal(handbookItem.defaultBound, false)
     assert.equal(value.scopes.find((item) => item.scope === 'session:s1')?.bindable, false, '会话作用域不可绑定')
 
     // 恢复默认:绑定保留,默认范围额外并入 handbook。

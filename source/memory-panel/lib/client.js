@@ -536,6 +536,7 @@ window.__ModuleLoader__.load({
       '.mem-scope-state:hover:not(:disabled){border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,var(--dsw-alias-border-l1));color:var(--dsw-alias-label-primary)}',
       '.mem-scope-state.on{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 58%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 14%,transparent);color:var(--dsw-alias-state-business-primary)}',
       '.mem-scope-state.bind.on{border-style:dashed}',
+      '.mem-scope-state.bind.locked{opacity:.82;cursor:default}',
       '.mem-scope-state:disabled{opacity:.42;cursor:default}',
       '.mem-scope-state:focus-visible{outline:1px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
       '.mem-scope-sep{width:1px;height:12px;margin:0 1px;background:var(--dsw-alias-border-l1);flex:none}',
@@ -4565,6 +4566,7 @@ window.__ModuleLoader__.load({
       const [entries, setEntries] = React.useState({})
       const [perms, setPerms] = React.useState({})
       const [bound, setBound] = React.useState({})
+      const [defaultBound, setDefaultBound] = React.useState({})
       const [catalog, setCatalog] = React.useState([])
       const [search, setSearch] = React.useState('')
       const [anchor, setAnchor] = React.useState(null)
@@ -4641,20 +4643,32 @@ window.__ModuleLoader__.load({
           (Array.isArray(value.bindings) ? value.bindings : [])
             .filter((scope) => typeof scope === 'string' && scope !== ''),
         )
+        // 默认基础范围(会话 + 项目 + global)天然包含在默认范围里:展示为已绑定、
+        // 不可取消;只有额外绑定才进 bound 状态、才会随保存提交。
+        const defaultSet = new Set(
+          (Array.isArray(value.defaultScopes)
+            ? value.defaultScopes
+            : (Array.isArray(value.defaults) ? value.defaults : []).filter((scope) => typeof scope === 'string'
+              && (scope === 'global' || scope.startsWith('session:') || scope.startsWith('project:'))))
+            .filter((scope) => typeof scope === 'string' && scope !== ''),
+        )
         const nextPerms = {}
         const nextBound = {}
+        const nextDefaultBound = {}
         for (const item of nextCatalog) {
           const rule = ruleByScope.get(item.scope)
           nextPerms[item.scope] = {
             read: rule ? rule.read !== false : item.read !== false,
             write: rule ? rule.write !== false : item.write !== false,
           }
-          nextBound[item.scope] = boundSet.has(item.scope) || item.bound === true
+          nextBound[item.scope] = boundSet.has(item.scope)
+          nextDefaultBound[item.scope] = defaultSet.has(item.scope) || item.defaultBound === true
         }
         setCatalog(nextCatalog)
         setEntries(nextEntries)
         setPerms(nextPerms)
         setBound(nextBound)
+        setDefaultBound(nextDefaultBound)
       }
 
       const load = () => {
@@ -4723,9 +4737,9 @@ window.__ModuleLoader__.load({
       const save = (config) => {
         setBusy(true)
         setError('')
-        // 绑定是工作区级、与本次会话的显式覆盖一起提交;会话作用域不能绑定。
+        // 只提交**额外**绑定:默认范围自带的会话 / 项目 / global 不需要也不允许写入。
         const bindings = catalog
-          .filter((item) => bound[item.scope] && !String(item.scope).startsWith('session:'))
+          .filter((item) => bound[item.scope] && !defaultBound[item.scope] && !String(item.scope).startsWith('session:'))
           .map((item) => item.scope)
         api('visibility', { session: sessionId, visibility: config, bindings })
           .then((value) => {
@@ -4864,17 +4878,18 @@ window.__ModuleLoader__.load({
                       ),
                       // 0.23.0:状态按钮 —— 绑定(工作区级) / 可读 | 可写(会话级)。
                       h('div', { className: 'mem-scope-state-row' },
-                        item.bindable === false || String(item.scope).startsWith('session:')
-                          ? null
-                          : h('button', {
-                              type: 'button',
-                              className: `mem-scope-state bind${bound[item.scope] ? ' on' : ''}`,
-                              'aria-pressed': Boolean(bound[item.scope]),
-                              title: bound[item.scope]
-                                ? '已绑定到当前工作区：本工作区新会话的默认可见范围会包含它'
-                                : '绑定到当前工作区：本工作区新会话的默认可见范围会包含它',
-                              onClick: () => toggleBound(item.scope),
-                            }, '绑定'),
+                        h('button', {
+                          type: 'button',
+                          className: `mem-scope-state bind${defaultBound[item.scope] || bound[item.scope] ? ' on' : ''}${defaultBound[item.scope] ? ' locked' : ''}`,
+                          'aria-pressed': Boolean(defaultBound[item.scope] || bound[item.scope]),
+                          disabled: Boolean(defaultBound[item.scope]),
+                          title: defaultBound[item.scope]
+                            ? '默认可见范围已包含（会话 + 项目 + global 默认绑定），无需再绑定'
+                            : (bound[item.scope]
+                              ? '已绑定到当前工作区：本工作区新会话的默认可见范围会包含它'
+                              : '绑定到当前工作区：本工作区新会话的默认可见范围会包含它'),
+                          onClick: () => { if (!defaultBound[item.scope]) toggleBound(item.scope) },
+                        }, '绑定'),
                         h('span', { className: 'mem-scope-sep', 'aria-hidden': 'true' }),
                         h('button', {
                           type: 'button',

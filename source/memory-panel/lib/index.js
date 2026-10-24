@@ -543,6 +543,17 @@ function visibilityPayload(ctx, memory, sessionId) {
   }
   const sessionScope = refs?.session ?? defaults.find((scope) => scope.startsWith('session:'))
   const projectScope = refs?.project ?? defaults.find((scope) => scope.startsWith('project:'))
+  // 默认范围的**基础集合** = 会话 + 项目 + global。它们天然包含在默认范围里,
+  // 面板按「已绑定」展示且不可取消;工作区绑定只负责额外并入其它作用域。
+  let defaultScopes = []
+  try {
+    const list = typeof memory.defaultScopes === 'function' ? memory.defaultScopes(agentLike) : undefined
+    if (Array.isArray(list)) defaultScopes = list.filter((scope) => typeof scope === 'string' && scope !== '')
+  } catch { /* 旧 provider:退回下面的本地面包 */ }
+  if (defaultScopes.length === 0) {
+    defaultScopes = [sessionScope, projectScope, 'global'].filter((scope) => typeof scope === 'string' && scope !== '')
+  }
+  const defaultBound = new Set(defaultScopes)
   ensure(sessionScope)
   ensure(projectScope)
   ensure('global')
@@ -558,8 +569,10 @@ function visibilityPayload(ctx, memory, sessionId) {
         label: item.name ?? scopeLabel(ctx, item.scope),
         read: rule === undefined ? true : rule.read !== false,
         write: rule === undefined ? true : rule.write !== false,
-        bound: bound.has(item.scope),
-        bindable: !String(item.scope).startsWith('session:'),
+        // bound = 显式绑定或默认范围自带;defaultBound 告诉客户端这一项不能取消。
+        bound: bound.has(item.scope) || defaultBound.has(item.scope),
+        defaultBound: defaultBound.has(item.scope),
+        bindable: !String(item.scope).startsWith('session:') && !defaultBound.has(item.scope),
       }
     })
   return {
@@ -569,6 +582,7 @@ function visibilityPayload(ctx, memory, sessionId) {
     inherited,
     source,
     defaults,
+    defaultScopes,
     workspace,
     bindings: [...bound],
     scopes,

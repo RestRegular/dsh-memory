@@ -1578,9 +1578,11 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
     effective: null,
     inherited: false,
     defaults: ['session:s1', 'global'],
+    defaultScopes: ['session:s1', 'global'],
     bindings: [],
     scopes: [
-      { scope: 'global', label: '全局', records: 5, pendingEmbeds: 0, read: true, write: true, bound: false, bindable: true },
+      { scope: 'global', label: '全局', records: 5, pendingEmbeds: 0, read: true, write: true, bound: true, defaultBound: true, bindable: false },
+      { scope: 'handbook', label: 'handbook', records: 1, pendingEmbeds: 0, read: true, write: true, bound: false, defaultBound: false, bindable: true },
     ],
   }
   const savedFetch = (globalThis as Record<string, unknown>).fetch
@@ -1621,16 +1623,21 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
     assert.ok(text.includes('绝对限制') && text.includes('普通限制') && text.includes('无限制'), '三档限制等级')
     assert.ok(!text.includes('事实') && !text.includes('规则'), '不再显示类型 chips')
     const boxes = collect(current).filter((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-check'))
-    assert.equal(boxes.length, 2, '默认范围补齐为两层(当前会话 + 全局)')
-    assert.deepEqual(boxes.map((box) => box.props?.['aria-checked']), [true, true], '默认范围全部预选')
+    assert.equal(boxes.length, 3, '目录里的三个作用域都渲染')
+    assert.equal(boxes.filter((box) => box.props?.['aria-checked'] === true).length, 2, '默认范围的两个作用域预选')
 
-    // 0.23:状态按钮 —— 绑定 / 可读 | 可写;会话作用域不可绑定,读写默认开启。
+    // 0.23.1:状态按钮 —— 绑定 / 可读 | 可写。默认的会话 + global 显示为已绑定且不可取消。
     const stateButtons = collect(current).filter((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-state'))
-    assert.equal(stateButtons.filter((node) => textOf(node) === '可读').length, 2, '每个已选作用域都有可读')
-    assert.equal(stateButtons.filter((node) => textOf(node) === '可写').length, 2, '可读与可写并列')
-    assert.equal(stateButtons.filter((node) => textOf(node) === '绑定').length, 1, '会话作用域不可绑定,只有 global 有绑定')
-    const bind = stateButtons.find((node) => textOf(node) === '绑定')
-    assert.ok(bind, '全局作用域可绑定到工作区')
+    assert.equal(stateButtons.filter((node) => textOf(node) === '可读').length, 3, '每个作用域都有可读')
+    assert.equal(stateButtons.filter((node) => textOf(node) === '可写').length, 3, '可读与可写并列')
+    const bindButtons = stateButtons.filter((node) => textOf(node) === '绑定')
+    assert.equal(bindButtons.length, 3, '每个作用域都有绑定状态')
+    const defaultLocked = bindButtons.filter((node) => node.props?.disabled === true)
+    assert.equal(defaultLocked.length, 2, '默认范围(会话 + global)默认绑定且不可取消')
+    assert.deepEqual(defaultLocked.map((node) => node.props?.['aria-pressed']), [true, true], '默认作用域显示为已绑定')
+    const bind = bindButtons.find((node) => node.props?.disabled !== true)
+    assert.ok(bind, '额外作用域可绑定到工作区')
+    assert.equal(bind!.props?.['aria-pressed'], false)
     ;(bind!.props!.onClick as () => void)()
     const writable = stateButtons.filter((node) => textOf(node) === '可写' && node.props?.disabled !== true)
     assert.equal(writable.length, 2, '已勾选的两个作用域都能调可写状态')
@@ -1650,7 +1657,7 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
     const globalScope = posted.visibility.scopes.find((item) => item.scope === 'global')!
     assert.equal(globalScope.read, true)
     assert.equal(globalScope.write, false, '关掉可写后按 false 提交')
-    assert.deepEqual(posted.bindings, ['global'], '绑定工作区随保存提交')
+    assert.deepEqual(posted.bindings, ['handbook'], '只提交额外绑定(默认作用域不写入)')
     assert.equal(posted.visibility.level, 'normal')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch

@@ -1470,7 +1470,8 @@ export class LocalMemoryService implements MemoryServiceApi {
   }
 
   /** 没有显式覆盖时的默认可见域范围(会话 + 项目 + global + 工作区绑定的作用域)。 */
-  private defaultReadScopes(agent: unknown): MemoryScope[] {
+  /** 默认三路(会话 + 项目 + global),**不含**工作区绑定;各自开关生效。 */
+  private baseDefaultScopes(agent: unknown): MemoryScope[] {
     const refs = this.scopeRefs(agent)
     const out: MemoryScope[] = []
     const push = (scope: MemoryScope | undefined, enabled: boolean): void => {
@@ -1480,12 +1481,32 @@ export class LocalMemoryService implements MemoryServiceApi {
     push(refs.session, this.cfg.sessionEnabled)
     push(refs.project, this.cfg.projectEnabled)
     push('global', this.cfg.globalEnabled)
+    return out
+  }
+
+  /**
+   * 面板:默认可见范围的**基础集合**(会话 + 项目 + global)。
+   * 这些作用域天然包含在默认范围里,面板把它们显示为「已绑定」且不可取消;
+   * 工作区绑定只用于**额外**并入的作用域。
+   */
+  defaultScopes(agent: unknown): MemoryScope[] {
+    return this.baseDefaultScopes(agent)
+  }
+
+  /** 没有显式覆盖时的默认可见域范围(基础三路 + 工作区绑定的额外作用域)。 */
+  private defaultReadScopes(agent: unknown): MemoryScope[] {
+    const out = this.baseDefaultScopes(agent)
+    const push = (scope: MemoryScope): void => {
+      if (out.includes(scope)) return
+      out.push(scope)
+    }
     // 0.23.0:工作区绑定的作用域默认可见。会话作用域不能绑定,这里再守一次。
+    const refs = this.scopeRefs(agent)
     for (const raw of this.bindings.get(refs.project)) {
       const scope = this.canonicalScope(raw)
       if (scopeKind(scope) === 'session') continue
       if (!this.scopeEnabled(scope)) continue
-      push(scope, true)
+      push(scope)
     }
     return out
   }

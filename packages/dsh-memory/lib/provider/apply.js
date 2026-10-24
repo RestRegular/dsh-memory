@@ -278,6 +278,11 @@ export class CordisMemoryService extends Service {
     return this.impl.workspaceBindings(agent)
   }
 
+  /** 面板:默认范围的基础集合(会话 + 项目 + global),不含工作区绑定。 */
+  defaultScopes(agent         )                                                  {
+    return this.impl.defaultScopes(agent)
+  }
+
   /** 面板:设置当前工作区绑定的作用域。 */
   setWorkspaceBindings(agent         , scopes                   )                                                         {
     return this.impl.setWorkspaceBindings(agent, scopes)

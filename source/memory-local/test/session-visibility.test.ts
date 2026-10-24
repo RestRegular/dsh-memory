@@ -447,6 +447,7 @@ test('0.23 工作区绑定:默认可见范围包含绑定作用域,新会话继�
   assert.deepEqual(svc.workspaceBindings(a), [])
   assert.deepEqual(svc.setWorkspaceBindings(a, ['global', 'handbook']), ['global', 'handbook'])
   assert.deepEqual(svc.workspaceBindings(a), ['global', 'handbook'])
+  assert.deepEqual(svc.defaultScopes(a), ['session:s1', CWD_PROJECT, 'global'], '默认基础范围不包含额外绑定')
 
   assert.deepEqual(
     svc.resolveReadScopes(agent({ id: 's2', cwd: 'D:/w' })),
