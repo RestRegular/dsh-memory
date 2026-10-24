@@ -2031,6 +2031,93 @@ test('记忆权限浮窗:已勾选在上、未勾选在下按字母序;取消勾
   hooks.resetAll()
 })
 
+test('记忆权限浮窗:整张作用域卡片可点选(按钮与勾选框除外)', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const Button = (exports.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
+  const payload = {
+    sessionId: 's1',
+    override: null,
+    effective: { level: 'normal', scopes: [{ scope: 'session:s1' }] },
+    source: 'default',
+    inherited: false,
+    defaults: ['session:s1'],
+    defaultScopes: ['session:s1'],
+    bindings: [],
+    scopes: [
+      { scope: 'session:s1', label: '当前会话', records: 1 },
+      { scope: 'handbook', label: 'handbook', records: 1 },
+    ],
+  }
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string) => {
+    if (url.startsWith('/memory/api/grants?')) {
+      return { status: 200, json: async () => ({ ok: true, value: { sessionId: 's1', grants: [] } }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, value: payload }) }
+  }
+  try {
+    let current: RenderNode | null = null
+    const element = () => hooks.React.createElement(Button, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const button = () => collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))!
+    ;(button().props!.onClick as (event: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 40, top: 500 }) } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const item = () => collect(current).find((n) => n.tag === 'div'
+      && String(n.props?.className ?? '').split(' ').includes('mem-scope-item')
+      && textOf(n).includes('handbook'))!
+    const check = () => collect(item()).find((n) => n.tag === 'button'
+      && String(n.props?.className ?? '').split(' ').includes('mem-scope-check'))!
+    /** 模拟一次「点卡片空白处」:target 不是任何可交互元素。 */
+    const clickCard = async (target: unknown = { closest: () => null }) => {
+      ;(item().props!.onClick as (event: unknown) => void)({ target })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    /** 模拟点行内某个 button:事件从按钮冒泡到卡片。 */
+    const buttonTarget = { closest: (selector: string) => (selector.includes('button') ? {} : null) }
+
+    assert.equal(String(check().props?.['aria-checked']), 'false', '初始未勾选')
+    // 卡片留白 / 名称 / 计数区域都能勾选,不用去戳 16px 的小方块。
+    await clickCard()
+    assert.equal(String(check().props?.['aria-checked']), 'true', '点卡片即可勾选')
+    assert.ok(textOf(current).includes('已选 2'), '计数跟着勾选走')
+
+    // 按钮自己处理点击:冒泡上来的按钮事件不再切换第二次。
+    await clickCard(buttonTarget)
+    assert.equal(String(check().props?.['aria-checked']), 'true', '点按钮不额外切换卡片')
+
+    // 点勾选框 + 冒泡到卡片:只切换一次。
+    ;(check().props!.onClick as () => void)()
+    await clickCard(buttonTarget)
+    assert.equal(String(check().props?.['aria-checked']), 'false', '点勾选框只切换一次')
+
+    // 点名称按钮(它自己也绑定 toggle)+ 冒泡到卡片:仍然只切换一次。
+    const label = collect(item()).find((n) => n.tag === 'button' && String(n.props?.className ?? '') === 'mem-scope-label')!
+    ;(label.props!.onClick as () => void)()
+    await clickCard(buttonTarget)
+    assert.equal(String(check().props?.['aria-checked']), 'true', '点名称只切换一次')
+    // 再次点卡片空白处取消勾选。
+    await clickCard()
+    assert.equal(String(check().props?.['aria-checked']), 'false', '再点卡片可取消勾选')
+
+    // 状态按钮(绑定 / 可读 / 可写)不触发勾选切换。
+    const bind = collect(item()).find((n) => n.tag === 'button'
+      && String(n.props?.className ?? '').split(' ').includes('bind'))!
+    ;(bind.props!.onClick as () => void)()
+    await clickCard(buttonTarget)
+    assert.equal(String(check().props?.['aria-checked']), 'false', '点绑定按钮不改变勾选')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
+})
+
 test('记忆范围浮窗:深色模式用 business-primary + 前景色,列表高度收紧', async () => {
   const { exports } = await loadBundle()
   const css = (exports.__test as { CSS: string }).CSS
@@ -2042,6 +2129,9 @@ test('记忆范围浮窗:深色模式用 business-primary + 前景色,列表高�
   assert.match(css, /\.mem-scope-item\.ai\{[^}]*border-style:dashed/, 'AI 授权的行用虚线边框')
   assert.match(css, /\.mem-scope-item\.ai\{[^}]*background:color-mix\(in srgb,var\(--dsw-alias-label-primary\) 3%/, 'AI 授权的行不用用户选中的蓝色底')
   assert.match(css, /\.mem-scope-check\.on\.ai \.box\{[^}]*background:transparent[^}]*border-style:dashed/, 'AI 授权勾选框是描边虚线，不是实心蓝底')
+  // 0.25.7：整张卡片可点选，鼠标形态与拖选行为要跟着变。
+  assert.match(css, /\.mem-scope-item\{[^}]*cursor:pointer/, '作用域卡片显示可点击')
+  assert.match(css, /\.mem-scope-item\{[^}]*user-select:none/, '拖选不会误触勾选')
 })
 
 test('记忆范围按钮:数字展示范围,边框样式展示限制等级(橙黄实线/蓝色实线/灰色虚线)', async () => {

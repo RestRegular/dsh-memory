@@ -519,7 +519,7 @@ window.__ModuleLoader__.load({
       '.mem-scope-list{display:flex;flex-direction:column;gap:3px;overflow:auto;min-height:0;max-height:min(220px,32vh);padding:2px 2px 2px 0;scrollbar-width:thin}',
       '.mem-scope-list::-webkit-scrollbar{width:8px}',
       '.mem-scope-list::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--dsw-alias-label-secondary) 35%,transparent);border-radius:999px;border:2px solid transparent;background-clip:padding-box}',
-      '.mem-scope-item{display:flex;flex-direction:column;gap:4px;padding:5px 6px;border:1px solid transparent;border-radius:10px}',
+      '.mem-scope-item{display:flex;flex-direction:column;gap:4px;padding:5px 6px;border:1px solid transparent;border-radius:10px;cursor:pointer;user-select:none}',
       '.mem-scope-item:hover{background:var(--dsw-alias-interactive-bg-hover)}',
       '.mem-scope-item.on{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 38%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 8%,transparent)}',
       // 0.25.5：AI 授权的勾选与用户自己勾选要能一眼分开 —— 行用虚线边框 + 中性底，
@@ -5050,7 +5050,19 @@ window.__ModuleLoader__.load({
                     const checked = isChecked(row.scope)
                     // 只靠 AI 授权才勾上的行加 .ai：样式与用户自己勾选的行区分开。
                     const aiOnly = Boolean(grant) && !entries[row.scope]
-                    return h('div', { className: `mem-scope-item${checked ? ' on' : ''}${aiOnly ? ' ai' : ''}`, key: row.scope },
+                    // 0.25.7：整张卡片都可点选 —— 按钮（勾选框 / 绑定 / 可读 / 可写）自己处理点击，
+                    // 点卡片其余区域（名称、计数、留白）等同点勾选框，避免只能戳 16px 的小方块。
+                    const toggleFromCard = (event) => {
+                      const target = event && event.target
+                      if (target && typeof target.closest === 'function'
+                        && target.closest('button,input,textarea,select,a,label')) return
+                      toggleScope(row.scope)
+                    }
+                    return h('div', {
+                      className: `mem-scope-item${checked ? ' on' : ''}${aiOnly ? ' ai' : ''}`,
+                      key: row.scope,
+                      onClick: toggleFromCard,
+                    },
                       h('div', { className: 'mem-scope-row' },
                         h('button', {
                           type: 'button',
