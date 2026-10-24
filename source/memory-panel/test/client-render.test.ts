@@ -1666,7 +1666,7 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
 })
 
 
-test('记忆权限浮窗:只有勾选作用域 + 可读/可写,不再展示 Agent 授权与解释文本', async () => {
+test('记忆权限浮窗:移除 Agent 授权行与解释文本,只留勾选 + 可读/可写', async () => {
   const { exports, hooks } = await loadBundle()
   hooks.resetAll()
   const Button = (exports.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
@@ -1689,6 +1689,9 @@ test('记忆权限浮窗:只有勾选作用域 + 可读/可写,不再展示 Agen
   const savedFetch = (globalThis as Record<string, unknown>).fetch
   ;(globalThis as Record<string, unknown>).fetch = async (url: string, init?: { method?: string; body?: string }) => {
     calls.push({ url, init })
+    if (url.startsWith('/memory/api/grants?')) {
+      return { status: 200, json: async () => ({ ok: true, value: { sessionId: 's1', grants: [] } }) }
+    }
     return { status: 200, json: async () => ({ ok: true, value: payload }) }
   }
   try {
@@ -1709,10 +1712,10 @@ test('记忆权限浮窗:只有勾选作用域 + 可读/可写,不再展示 Agen
 
     const opened = textOf(current)
     assert.ok(opened.includes('记忆权限'), '浮窗标题是记忆权限')
-    assert.ok(!opened.includes('Agent 授权'), '不再展示 Agent 授权(只留勾选 + 可读 / 可写)')
+    assert.ok(!opened.includes('Agent 授权'), '不再展示独立的 Agent 授权行(授权改用勾选 + AI 气泡)')
     assert.ok(!opened.includes('范围外例外'), '不再展示授权与可见范围区别的解释文本')
     assert.ok(!opened.includes('勾选作用域 +'), '移除浮窗上方多余的解释文本')
-    assert.ok(!calls.some((call) => call.url.startsWith('/memory/api/grants')), '不再为授权单独请求 / grants')
+    assert.ok(calls.some((call) => call.url.startsWith('/memory/api/grants?session=s1')), '打开即拉取本会话授权')
 
     const item = collect(current).find((n) => n.tag === 'div' && String(n.props?.className ?? '').includes('mem-scope-item')
       && textOf(n).includes('handbook'))
@@ -1722,6 +1725,88 @@ test('记忆权限浮窗:只有勾选作用域 + 可读/可写,不再展示 Agen
     assert.equal(states.length, 3, '行内只有绑定 / 可读 / 可写三个状态按钮')
     assert.ok(textOf(item).includes('可读') && textOf(item).includes('可写'), '保留可读 / 可写操作权限')
     assert.ok(!textOf(item).includes('撤销'), '作用域行内不再有撤销授权的动作')
+    assert.ok(!collect(item).some((n) => String(n.props?.className ?? '').includes('mem-scope-ai')), '没有授权就不挂 AI 气泡')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
+})
+
+test('记忆权限浮窗:Agent 授权用勾选 + AI 气泡呈现,取消勾选即撤销', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const Button = (exports.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
+  const calls: Array<{ url: string; init?: { method?: string; body?: string } }> = []
+  const payload = {
+    sessionId: 's1',
+    override: null,
+    effective: { level: 'normal', scopes: [] },
+    source: 'default',
+    inherited: false,
+    defaults: [],
+    defaultScopes: [],
+    bindings: [],
+    scopes: [
+      { scope: 'zulu', label: 'zulu', records: 1 },
+      { scope: 'handbook', label: 'handbook', records: 1 },
+    ],
+  }
+  let grants = [{
+    id: 'grant-1',
+    scope: 'handbook',
+    label: 'handbook',
+    permissions: ['read'],
+    grantedAt: 1792844000000,
+    ownerSession: 's1',
+    inherited: false,
+  }]
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string, init?: { method?: string; body?: string }) => {
+    calls.push({ url, init })
+    if (url.startsWith('/memory/api/grants?')) {
+      return { status: 200, json: async () => ({ ok: true, value: { sessionId: 's1', grants } }) }
+    }
+    if (url === '/memory/api/grants' && init?.method === 'POST') {
+      grants = []
+      return { status: 200, json: async () => ({ ok: true, value: { sessionId: 's1', grants } }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, value: payload }) }
+  }
+  try {
+    let current: RenderNode | null = null
+    const element = () => hooks.React.createElement(Button, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const button = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))
+    ;(button!.props!.onClick as (event: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 40, top: 500 }) } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const handbook = () => collect(current).find((n) => n.tag === 'div'
+      && String(n.props?.className ?? '').includes('mem-scope-item') && textOf(n).includes('handbook'))!
+    assert.ok(handbook(), 'handbook 作用域行存在')
+    const check = () => collect(handbook()).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-check'))!
+    assert.equal(String(check().props?.['aria-checked']), 'true', '有 AI 授权的行显示为已勾选')
+    assert.ok(collect(handbook()).some((n) => String(n.props?.className ?? '').includes('mem-scope-ai')), '名称右边有 AI 气泡')
+    assert.match(String(collect(handbook()).find((n) => String(n.props?.className ?? '').includes('mem-scope-ai'))?.props?.title ?? ''), /只读/, '气泡 title 写明授权权限')
+    assert.ok(!textOf(current).includes('Agent 授权'), '授权不再以独立行 / 文本块出现')
+    // 授权来的勾选排在未勾选的上面。
+    const names = collect(current)
+      .filter((n) => n.tag === 'div' && String(n.props?.className ?? '').split(' ').includes('mem-scope-item'))
+      .map((n) => textOf(collect(n).find((c) => c.tag === 'button' && String(c.props?.className ?? '') === 'mem-scope-label') ?? null))
+    assert.deepEqual(names, ['handbook', 'zulu'], '授权行算已勾选，排在未勾选前面')
+
+    // 取消勾选 = 撤销授权：POST /grants，气泡和勾选一起消失。
+    ;(check().props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const posted = calls.find((call) => call.url === '/memory/api/grants' && call.init?.method === 'POST')
+    assert.ok(posted, '取消勾选走 POST /grants 撤销')
+    assert.deepEqual(JSON.parse(String(posted?.init?.body ?? '{}')), { session: 's1', id: 'grant-1', view: 's1' })
+    assert.equal(String(check().props?.['aria-checked']), 'false', '撤销后勾选取消')
+    assert.ok(!collect(handbook()).some((n) => String(n.props?.className ?? '').includes('mem-scope-ai')), '撤销后 AI 气泡自动消失')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch
   }

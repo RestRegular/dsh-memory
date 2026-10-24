@@ -540,6 +540,9 @@ window.__ModuleLoader__.load({
       '.mem-scope-state:disabled{opacity:.42;cursor:default}',
       '.mem-scope-state:focus-visible{outline:1px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
       '.mem-scope-sep{width:1px;height:12px;margin:0 1px;background:var(--dsw-alias-border-l1);flex:none}',
+      // 0.25.3：Agent 授权用「勾选 + AI 气泡」呈现，气泡挂在作用域名称右边。
+      '.mem-scope-ai{flex:none;font-size:9.5px;line-height:1.7;padding:0 6px;border-radius:999px;border:1px solid color-mix(in srgb,var(--dsw-alias-state-business-primary,#4176e6) 45%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#4176e6) 12%,transparent);color:color-mix(in srgb,var(--dsw-alias-state-business-primary,#4176e6) 78%,var(--dsw-alias-label-primary));white-space:nowrap;cursor:help}',
+      '.mem-scope-ai.inherited{border-style:dashed;background:transparent;color:var(--dsw-alias-label-secondary)}',
       '.mem-scope-foot{display:flex;align-items:center;gap:8px}',
       '.mem-scope-foot .spacer{flex:1}',
       '.mem-scope-reset{padding:6px 13px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:12px;cursor:pointer;transition:border-color .12s ease,color .12s ease}',
@@ -618,6 +621,13 @@ window.__ModuleLoader__.load({
       const d = new Date(ts)
       const pad = (n) => String(n).padStart(2, '0')
       return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+    }
+
+    /** Agent 授权里的权限文案（read / write 组合）。 */
+    function grantPermissionText(permissions) {
+      return (Array.isArray(permissions) ? permissions : [])
+        .map((permission) => (permission === 'write' ? '可写' : '只读'))
+        .join(' / ')
     }
 
     /** 过期时间的人话描述:还剩多久 / 已过期多久。 */
@@ -4570,6 +4580,9 @@ window.__ModuleLoader__.load({
       const [catalog, setCatalog] = React.useState([])
       const [search, setSearch] = React.useState('')
       const [anchor, setAnchor] = React.useState(null)
+      const [grants, setGrants] = React.useState([])
+      const [grantBusy, setGrantBusy] = React.useState('')
+      const [grantError, setGrantError] = React.useState('')
       const wrapRef = React.useRef(null)
 
       React.useEffect(() => {
@@ -4701,8 +4714,60 @@ window.__ModuleLoader__.load({
         load()
       }
 
+      /**
+       * 0.25.3：本会话的 Agent 授权（grants）。
+       * 授权结果直接体现在作用域行的勾选上（外加「AI」气泡），所以浮窗打开期间
+       * 按 3 秒轮询：Agent 刚审批到的授权不用重开面板就能看到勾选与气泡。
+       */
+      const loadGrants = () => {
+        if (typeof sessionId !== 'string' || sessionId === '') return
+        api(`grants?session=${encodeURIComponent(sessionId)}`)
+          .then((value) => {
+            setGrants(Array.isArray(value.grants) ? value.grants : [])
+            setGrantError('')
+          })
+          .catch((e) => setGrantError(String((e && e.message) || e)))
+      }
+
+      React.useEffect(() => {
+        if (!open) return undefined
+        loadGrants()
+        if (typeof setInterval !== 'function') return undefined
+        const timer = setInterval(() => {
+          if (typeof document !== 'undefined' && document.hidden) return
+          loadGrants()
+        }, 3000)
+        return () => clearInterval(timer)
+      }, [open, sessionId])
+
+      /** 撤销一条本会话授权（继承自父会话的授权只能到父会话撤销）。 */
+      const revokeGrant = (grant) => {
+        if (!grant || grant.inherited === true) return Promise.resolve()
+        const id = typeof grant.id === 'string' ? grant.id : ''
+        if (id === '') return Promise.resolve()
+        const owner = typeof grant.ownerSession === 'string' && grant.ownerSession !== '' ? grant.ownerSession : sessionId
+        setGrantBusy(id)
+        setGrantError('')
+        return api('grants', { session: owner, id, view: sessionId })
+          .then((value) => setGrants(Array.isArray(value.grants) ? value.grants : []))
+          .catch((e) => setGrantError(String((e && e.message) || e)))
+          .finally(() => setGrantBusy(''))
+      }
+
       const toggleScope = (scope) => {
-        setEntries((prev) => ({ ...prev, [scope]: !prev[scope] }))
+        const grant = grantsByScope.get(scope)
+        if (!grant) {
+          setEntries((prev) => ({ ...prev, [scope]: !prev[scope] }))
+          return
+        }
+        // 勾选里有 Agent 授权：取消勾选 = 撤销授权（撤销后「AI」气泡一起消失）。
+        if (grant.inherited === true) {
+          setEntries((prev) => ({ ...prev, [scope]: true }))
+          setGrantError('继承自父会话的授权需要到父会话撤销')
+          return
+        }
+        setEntries((prev) => ({ ...prev, [scope]: false }))
+        revokeGrant(grant)
       }
 
       /** 切换某个作用域的可读 / 可写状态（会话级）。 */
@@ -4732,6 +4797,17 @@ window.__ModuleLoader__.load({
           for (const key of Object.keys(next)) next[key] = false
           return next
         })
+        // 取消全选 = 把这些作用域全部取消勾选，所以 Agent 授权也一并撤销；
+        // 继承自父会话的授权撤销不了，只提示去父会话操作。
+        let inherited = 0
+        let chain = Promise.resolve()
+        for (const grant of Array.isArray(grants) ? grants : []) {
+          if (!grant || typeof grant.scope !== 'string' || grant.scope === '') continue
+          if (grant.inherited === true) { inherited += 1; continue }
+          chain = chain.then(() => revokeGrant(grant))
+        }
+        if (inherited > 0) setGrantError('继承自父会话的授权需要到父会话撤销')
+        chain.catch(() => { /* revokeGrant 自己会记录错误 */ })
       }
 
       const save = (config) => {
@@ -4773,16 +4849,40 @@ window.__ModuleLoader__.load({
         : (data && Array.isArray(data.defaults) ? data.defaults.length : 0)
       const selectedCount = catalog.filter((item) => entries[item.scope]).length
       const needle = search.trim().toLowerCase()
-      const visibleScopes = catalog.filter((item) => {
-        if (!needle) return true
-        return String(item.label || item.scope).toLowerCase().includes(needle) || String(item.scope).toLowerCase().includes(needle)
-      })
-      // 0.25.2：已勾选的排在上面、未勾选的排在下面，组内按名称字母排序
-      // （中英文混排也走同一份 key，勾选状态一变列表就重排）。
-      const nameOf = (item) => String(item.label || item.scope)
-      visibleScopes.sort((a, b) => (Number(Boolean(b.scope && entries[b.scope])) - Number(Boolean(a.scope && entries[a.scope])))
-        || nameOf(a).localeCompare(nameOf(b), 'zh-Hans-CN', { sensitivity: 'base', numeric: true })
-        || String(a.scope).localeCompare(String(b.scope)))
+      // 0.25.3：Agent 授权的结果也用勾选呈现 —— 勾选 = 本会话可访问，授权来的作用域
+      // 在名称右边挂一个「AI」气泡；取消勾选即撤销，撤销后气泡自动消失。
+      const grantList = Array.isArray(grants) ? grants : []
+      const grantsByScope = new Map()
+      for (const grant of grantList) {
+        if (!grant || typeof grant.scope !== 'string' || grant.scope === '') continue
+        if (!grantsByScope.has(grant.scope)) grantsByScope.set(grant.scope, grant)
+      }
+      const isChecked = (scope) => Boolean(entries[scope]) || grantsByScope.has(scope)
+      const matches = (label, scope) => !needle
+        || String(label || scope).toLowerCase().includes(needle) || String(scope).toLowerCase().includes(needle)
+      const visibleScopes = catalog.filter((item) => matches(item.label || item.scope, item.scope))
+      // 目录里已经看不到的作用域（记录删光 / 元数据没了）仍占一行，方便取消勾选撤销授权。
+      const catalogScopes = new Set(catalog.map((item) => item.scope))
+      const orphanGrants = grantList.filter((grant) => grant && typeof grant.scope === 'string' && grant.scope !== ''
+        && !catalogScopes.has(grant.scope) && matches(grant.label || grant.scope, grant.scope))
+      const orphanCount = grantList.filter((grant) => grant && typeof grant.scope === 'string'
+        && grant.scope !== '' && !catalogScopes.has(grant.scope)).length
+      const checkedCount = catalog.filter((item) => isChecked(item.scope)).length + orphanCount
+      // 已勾选的排上面、未勾选的排下面，组内按名称字母排序（授权行同样算已勾选）。
+      const rows = [
+        ...visibleScopes.map((item) => ({ scope: item.scope, name: String(item.label || item.scope), item })),
+        ...orphanGrants.map((grant) => ({ scope: grant.scope, name: String(grant.label || grant.scope), grant })),
+      ]
+      rows.sort((a, b) => (Number(isChecked(b.scope)) - Number(isChecked(a.scope)))
+        || a.name.localeCompare(b.name, 'zh-Hans-CN', { sensitivity: 'base', numeric: true })
+        || a.scope.localeCompare(b.scope))
+      /** 作用域名称右边的「AI」气泡：表示这条勾选来自 Agent 申请的授权。 */
+      const grantTag = (grant) => h('span', {
+        className: `mem-scope-ai${grant.inherited === true ? ' inherited' : ''}`,
+        title: grant.inherited === true
+          ? `Agent 申请的范围外授权（${grantPermissionText(grant.permissions)}）· 继承自父会话，要到父会话撤销`
+          : `Agent 申请的范围外授权（${grantPermissionText(grant.permissions)}）；取消勾选即撤销`,
+      }, grant.inherited === true ? 'AI·继承' : 'AI')
       let popStyle = {}
       if (anchor) {
         const width = 340
@@ -4826,7 +4926,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'mem-scope-head' },
             h('h4', null, '记忆权限'),
             h('span', { className: 'spacer' }),
-            h('span', { className: 'mem-scope-count' }, `已选 ${selectedCount}`),
+            h('span', { className: 'mem-scope-count' }, `已选 ${checkedCount}`),
           ),
           data && data.inherited
             ? h('div', { className: 'hint' }, '当前继承自父会话；保存后在本会话独立生效。')
@@ -4859,64 +4959,77 @@ window.__ModuleLoader__.load({
           loading && data === null
             ? h('div', { className: 'hint' }, '读取中…')
             : h('div', { className: 'mem-scope-list' },
-                visibleScopes.length === 0
+                rows.length === 0
                   ? h('div', { className: 'hint' }, needle ? '没有匹配的作用域。' : '还没有可选的范围。')
-                  : visibleScopes.map((item) => h('div', { className: `mem-scope-item${entries[item.scope] ? ' on' : ''}`, key: item.scope },
+                  : rows.map((row) => {
+                    const item = row.item
+                    const grant = item ? grantsByScope.get(row.scope) : row.grant
+                    const checked = isChecked(row.scope)
+                    return h('div', { className: `mem-scope-item${checked ? ' on' : ''}`, key: row.scope },
                       h('div', { className: 'mem-scope-row' },
                         h('button', {
                           type: 'button',
                           role: 'checkbox',
-                          'aria-checked': Boolean(entries[item.scope]),
-                          className: `mem-scope-check${entries[item.scope] ? ' on' : ''}`,
-                          onClick: () => toggleScope(item.scope),
-                          'aria-label': entries[item.scope] ? '取消选择' : '选择',
-                        }, h('span', { className: 'box' }, entries[item.scope] ? h('svg', { width: 11, height: 11, viewBox: '0 0 12 12', 'aria-hidden': 'true' }, h('path', { d: 'M2 6.2 4.7 9 10 3.4', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' })) : null)),
+                          'aria-checked': checked,
+                          className: `mem-scope-check${checked ? ' on' : ''}`,
+                          onClick: () => toggleScope(row.scope),
+                          'aria-label': checked ? '取消选择' : '选择',
+                          title: grant
+                            ? (grant.inherited === true
+                              ? 'AI 申请的授权（继承自父会话，要到父会话撤销）'
+                              : '取消勾选会撤销 AI 申请的这条授权')
+                            : null,
+                        }, h('span', { className: 'box' }, checked ? h('svg', { width: 11, height: 11, viewBox: '0 0 12 12', 'aria-hidden': 'true' }, h('path', { d: 'M2 6.2 4.7 9 10 3.4', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' })) : null)),
                         h('button', {
                           type: 'button',
                           className: 'mem-scope-label',
-                          title: item.scope,
-                          onClick: () => toggleScope(item.scope),
-                        }, item.label || item.scope),
-                        h('span', { className: 'cnt' }, `${item.records ?? 0}`),
+                          title: item ? row.scope : `${row.scope}（目录中已不可见）`,
+                          onClick: () => toggleScope(row.scope),
+                        }, item ? (item.label || item.scope) : (row.grant.label || row.grant.scope)),
+                        grant ? grantTag(grant) : null,
+                        h('span', { className: 'cnt' }, item ? `${item.records ?? 0}` : '目录中已不可见'),
                       ),
-                      // 0.23.0:状态按钮 —— 绑定(工作区级) / 可读 | 可写(会话级)。
-                      h('div', { className: 'mem-scope-state-row' },
-                        h('button', {
-                          type: 'button',
-                          className: `mem-scope-state bind${defaultBound[item.scope] || bound[item.scope] ? ' on' : ''}${defaultBound[item.scope] ? ' locked' : ''}`,
-                          'aria-pressed': Boolean(defaultBound[item.scope] || bound[item.scope]),
-                          disabled: Boolean(defaultBound[item.scope]),
-                          title: defaultBound[item.scope]
-                            ? '默认可见范围已包含（会话 + 项目 + global 默认绑定），无需再绑定'
-                            : (bound[item.scope]
-                              ? '已绑定到当前工作区：本工作区新会话的默认可见范围会包含它'
-                              : '绑定到当前工作区：本工作区新会话的默认可见范围会包含它'),
-                          onClick: () => { if (!defaultBound[item.scope]) toggleBound(item.scope) },
-                        }, '绑定'),
-                        h('span', { className: 'mem-scope-sep', 'aria-hidden': 'true' }),
-                        h('button', {
-                          type: 'button',
-                          className: `mem-scope-state read${perms[item.scope]?.read !== false ? ' on' : ''}`,
-                          'aria-pressed': perms[item.scope]?.read !== false,
-                          disabled: !entries[item.scope],
-                          title: entries[item.scope]
-                            ? (perms[item.scope]?.read !== false ? '可读：搜索 / 读取会命中该作用域' : '不可读：搜索 / 读取会跳过该作用域')
-                            : '先勾选该作用域再调整可读 / 可写',
-                          onClick: () => togglePerm(item.scope, 'read'),
-                        }, '可读'),
-                        h('button', {
-                          type: 'button',
-                          className: `mem-scope-state write${perms[item.scope]?.write !== false ? ' on' : ''}`,
-                          'aria-pressed': perms[item.scope]?.write !== false,
-                          disabled: !entries[item.scope],
-                          title: entries[item.scope]
-                            ? (perms[item.scope]?.write !== false ? '可写：保存 / 删除会作用到该作用域' : '不可写：保存 / 删除会被拒绝并告知原因')
-                            : '先勾选该作用域再调整可读 / 可写',
-                          onClick: () => togglePerm(item.scope, 'write'),
-                        }, '可写'),
-                      ),
-                    )),
+                      item
+                        ? h('div', { className: 'mem-scope-state-row' },
+                          h('button', {
+                            type: 'button',
+                            className: `mem-scope-state bind${defaultBound[item.scope] || bound[item.scope] ? ' on' : ''}${defaultBound[item.scope] ? ' locked' : ''}`,
+                            'aria-pressed': Boolean(defaultBound[item.scope] || bound[item.scope]),
+                            disabled: Boolean(defaultBound[item.scope]),
+                            title: defaultBound[item.scope]
+                              ? '默认可见范围已包含（会话 + 项目 + global 默认绑定），无需再绑定'
+                              : (bound[item.scope]
+                                ? '已绑定到当前工作区：本工作区新会话的默认可见范围会包含它'
+                                : '绑定到当前工作区：本工作区新会话的默认可见范围会包含它'),
+                            onClick: () => { if (!defaultBound[item.scope]) toggleBound(item.scope) },
+                          }, '绑定'),
+                          h('span', { className: 'mem-scope-sep', 'aria-hidden': 'true' }),
+                          h('button', {
+                            type: 'button',
+                            className: `mem-scope-state read${perms[item.scope]?.read !== false ? ' on' : ''}`,
+                            'aria-pressed': perms[item.scope]?.read !== false,
+                            disabled: !entries[item.scope],
+                            title: entries[item.scope]
+                              ? (perms[item.scope]?.read !== false ? '可读：搜索 / 读取会命中该作用域' : '不可读：搜索 / 读取会跳过该作用域')
+                              : (grant ? '这条勾选来自 AI 授权，权限由审批决定；你自己勾选后可改' : '先勾选该作用域再调整可读 / 可写'),
+                            onClick: () => togglePerm(item.scope, 'read'),
+                          }, '可读'),
+                          h('button', {
+                            type: 'button',
+                            className: `mem-scope-state write${perms[item.scope]?.write !== false ? ' on' : ''}`,
+                            'aria-pressed': perms[item.scope]?.write !== false,
+                            disabled: !entries[item.scope],
+                            title: entries[item.scope]
+                              ? (perms[item.scope]?.write !== false ? '可写：保存 / 删除会作用到该作用域' : '不可写：保存 / 删除会被拒绝并告知原因')
+                              : (grant ? '这条勾选来自 AI 授权，权限由审批决定；你自己勾选后可改' : '先勾选该作用域再调整可读 / 可写'),
+                            onClick: () => togglePerm(item.scope, 'write'),
+                          }, '可写'),
+                        )
+                        : null,
+                    )
+                  }),
               ),
+          grantError ? h('div', { className: 'mem-scope-err' }, grantError) : null,
           error ? h('div', { className: 'mem-scope-err' }, error) : null,
           h('div', { className: 'mem-scope-foot' },
             h('button', {
