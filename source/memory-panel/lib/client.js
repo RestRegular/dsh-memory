@@ -26,6 +26,25 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const h = React.createElement
 
+    /**
+     * 0.25.8：把「记忆权限」浮窗挂到 document.body 用的 portal。
+     *
+     * 按钮注册在 conversation.input.right，整个输入框在宿主会话的 active 阶段是
+     * `.composerSeat{position:sticky; z-index:7}` —— 一个独立的层叠上下文。浮窗哪怕写
+     * `position:fixed` 也只能在这个上下文里排层级，永远压不过兄弟层的「回到底部」圆钮
+     * (`.toBottomSlot{z-index:8}`)，表现为圆钮盖在浮窗上面。portal 到 body 之后浮窗直接
+     * 在根层叠上下文里参与排序，才真正高于 8。
+     *
+     * react-dom 由宿主的 ModuleLoader 以 seed word 提供(宿主自己与 dshmarket / rewind
+     * 等插件的 client bundle 都 require 它)。拿不到就退回原地渲染：层级受限，但不报错。
+     */
+    const createPortal = (() => {
+      try {
+        const dom = require('react-dom')
+        return dom && typeof dom.createPortal === 'function' ? dom.createPortal : null
+      } catch { return null }
+    })()
+
     const API = '/memory/api'
 
     const CSS = [
@@ -496,7 +515,10 @@ window.__ModuleLoader__.load({
       '.mem-scope-btn.is-absolute:hover,.mem-scope-btn.is-normal:hover,.mem-scope-btn.is-none:hover{background:var(--dsw-alias-interactive-bg-hover)}',
       '.mem-scope-btn svg{flex:none}',
       // 毛玻璃浮窗:半透明 + backdrop blur;不支持 backdrop-filter 时退回实心底。
-      '.mem-scope-pop{position:fixed;z-index:80;width:340px;max-height:min(520px,72vh);display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l2,var(--dsw-alias-border-l1)) 60%,transparent);border-radius:14px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 78%,transparent);-webkit-backdrop-filter:blur(20px) saturate(1.35);backdrop-filter:blur(20px) saturate(1.35);box-shadow:0 10px 28px rgba(0,0,0,.18);color:var(--dsw-alias-label-primary);font-size:13px;overflow:hidden}',
+      // 0.25.8:z-index 80 → 900。浮窗 portal 到 body 后与宿主各层在根层叠上下文里比较:
+      // 会话层的「回到底部」按钮是 z-index:8、宿主的下拉/菜单层是 100,而宿主自己的
+      // 对话框 / 提示层是 1000 起 —— 取 900 保证压过会话里的所有浮动件，又不会盖住宿主弹窗。
+      '.mem-scope-pop{position:fixed;z-index:900;width:340px;max-height:min(520px,72vh);display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid color-mix(in srgb,var(--dsw-alias-border-l2,var(--dsw-alias-border-l1)) 60%,transparent);border-radius:14px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 78%,transparent);-webkit-backdrop-filter:blur(20px) saturate(1.35);backdrop-filter:blur(20px) saturate(1.35);box-shadow:0 10px 28px rgba(0,0,0,.18);color:var(--dsw-alias-label-primary);font-size:13px;overflow:hidden}',
       '@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.mem-scope-pop{background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-1))}}',
       '.mem-scope-head{display:flex;align-items:center;gap:8px}',
       '.mem-scope-head h4{margin:0;font-size:13px;font-weight:600;line-height:1.4}',
@@ -4593,14 +4615,18 @@ window.__ModuleLoader__.load({
       const [grantBusy, setGrantBusy] = React.useState('')
       const [grantError, setGrantError] = React.useState('')
       const wrapRef = React.useRef(null)
+      // 0.25.8：浮窗 portal 到 body 后不再长在 wrapRef 这棵树里，点它自己不能算「点外面」。
+      const popRef = React.useRef(null)
 
       React.useEffect(() => {
         if (!open) return undefined
         if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return undefined
+        const inside = (node, target) => Boolean(node && typeof node.contains === 'function' && node.contains(target))
         const onDown = (event) => {
           try {
-            const node = wrapRef.current
-            if (node && typeof node.contains === 'function' && !node.contains(event.target)) setOpen(false)
+            const target = event ? event.target : null
+            if (inside(wrapRef.current, target) || inside(popRef.current, target)) return
+            setOpen(false)
           } catch { /* 关闭失败不影响页面 */ }
         }
         const onKey = (event) => { if (event && event.key === 'Escape') setOpen(false) }
@@ -4924,8 +4950,20 @@ window.__ModuleLoader__.load({
         || (grantsByScope.has(scope) && !pendingRevoke[scope])
       /** 已保存状态的勾选（排序只看它，草稿改动不立刻重排）。 */
       const savedChecked = (scope) => Boolean(savedEntries[scope]) || grantsByScope.has(scope)
+      /**
+       * 0.25.8：本会话自己的 session scope 在列表里叫「当前会话」。
+       *
+       * 面板是「这个会话」的权限面板，那一行就是用户正在用的会话 —— 显示
+       * `session:<uuid>` 或「会话 1a2b3c4d」都只有实现细节，用户无从对号。
+       * **只**改本会话那一条：目录里可能还有别的会话的 scope（它们带记录就会被发现），
+       * 那些仍按标题 / 短 id 显示，不能跟着叫「当前会话」。
+       */
+      const currentSessionScope = (typeof sessionId === 'string' && sessionId !== '') ? `session:${sessionId}` : ''
+      const displayName = (scope, label) => (currentSessionScope !== '' && scope === currentSessionScope)
+        ? '当前会话'
+        : String(label || scope)
       const matches = (label, scope) => !needle
-        || String(label || scope).toLowerCase().includes(needle) || String(scope).toLowerCase().includes(needle)
+        || displayName(scope, label).toLowerCase().includes(needle) || String(scope).toLowerCase().includes(needle)
       const visibleScopes = catalog.filter((item) => matches(item.label || item.scope, item.scope))
       // 目录里已经看不到的作用域（记录删光 / 元数据没了）仍占一行，方便取消勾选撤销授权。
       const catalogScopes = new Set(catalog.map((item) => item.scope))
@@ -4933,8 +4971,8 @@ window.__ModuleLoader__.load({
         && !catalogScopes.has(grant.scope) && matches(grant.label || grant.scope, grant.scope))
       // 已勾选的排上面、未勾选的排下面，组内按名称字母排序；顺序以保存过的状态为准。
       const rows = [
-        ...visibleScopes.map((item) => ({ scope: item.scope, name: String(item.label || item.scope), item })),
-        ...orphanGrants.map((grant) => ({ scope: grant.scope, name: String(grant.label || grant.scope), grant })),
+        ...visibleScopes.map((item) => ({ scope: item.scope, name: displayName(item.scope, item.label), item })),
+        ...orphanGrants.map((grant) => ({ scope: grant.scope, name: displayName(grant.scope, grant.label), grant })),
       ]
       rows.sort((a, b) => (Number(savedChecked(b.scope)) - Number(savedChecked(a.scope)))
         || a.name.localeCompare(b.name, 'zh-Hans-CN', { sensitivity: 'base', numeric: true })
@@ -4992,20 +5030,10 @@ window.__ModuleLoader__.load({
         && grant.scope !== '' && !catalogScopes.has(grant.scope) && !pendingRevoke[grant.scope]).length
       const checkedCount = catalog.filter((item) => isChecked(item.scope)).length + orphanChecked
       const scopeCountText = `${accessibleCount} 个作用域`
-      return h('span', { className: 'mem-scope-wrap', ref: wrapRef },
-        h('button', {
-          type: 'button',
-          className: `mem-scope-btn is-${buttonLevel}`,
-          title: `${sourceText}记忆权限：${scopeCountText} · ${buttonLevelLabel}`,
-          'aria-label': `${sourceText}记忆权限，${scopeCountText}，${buttonLevelLabel}`,
-          'aria-expanded': open,
-          onMouseDown: (event) => { try { event.preventDefault() } catch { /* keepFocus */ } },
-          onClick: toggle,
-        },
-          h(NavLineIcon, { size: 14 }),
-          data === null ? null : h('span', null, String(accessibleCount)),
-        ),
-        open ? h('div', { className: 'mem-scope-pop', style: popStyle, role: 'dialog', 'aria-label': '记忆权限' },
+      const portalTarget = typeof document !== 'undefined' && document !== null && document.body ? document.body : null
+      // 0.25.8：浮窗 portal 到 body（原因见文件头 createPortal 的注释）。拿不到 react-dom
+      // 或没有 document.body 时退回原地渲染 —— 层级受限，但功能完全一致。
+      const popover = open ? h('div', { className: 'mem-scope-pop', ref: popRef, style: popStyle, role: 'dialog', 'aria-label': '记忆权限' },
           h('div', { className: 'mem-scope-head' },
             h('h4', null, '记忆权限'),
             h('span', { className: 'spacer' }),
@@ -5082,7 +5110,7 @@ window.__ModuleLoader__.load({
                           className: 'mem-scope-label',
                           title: item ? row.scope : `${row.scope}（目录中已不可见）`,
                           onClick: () => toggleScope(row.scope),
-                        }, item ? (item.label || item.scope) : (row.grant.label || row.grant.scope)),
+                        }, displayName(row.scope, item ? item.label : row.grant.label)),
                         grant ? grantTag(grant, row.scope) : null,
                         h('span', { className: 'cnt' }, item ? `${item.records ?? 0}` : '目录中已不可见'),
                       ),
@@ -5143,7 +5171,23 @@ window.__ModuleLoader__.load({
               onClick: saveDraft,
             }, busy ? '保存中…' : '保存'),
           ),
-        ) : null,
+        ) : null
+      return h('span', { className: 'mem-scope-wrap', ref: wrapRef },
+        h('button', {
+          type: 'button',
+          className: `mem-scope-btn is-${buttonLevel}`,
+          title: `${sourceText}记忆权限：${scopeCountText} · ${buttonLevelLabel}`,
+          'aria-label': `${sourceText}记忆权限，${scopeCountText}，${buttonLevelLabel}`,
+          'aria-expanded': open,
+          onMouseDown: (event) => { try { event.preventDefault() } catch { /* keepFocus */ } },
+          onClick: toggle,
+        },
+          h(NavLineIcon, { size: 14 }),
+          data === null ? null : h('span', null, String(accessibleCount)),
+        ),
+        popover === null
+          ? null
+          : (createPortal !== null && portalTarget !== null ? createPortal(popover, portalTarget) : popover),
       )
     }
     /**

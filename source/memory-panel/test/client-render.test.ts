@@ -105,6 +105,9 @@ function makeReact() {
 
 interface RenderNode { tag?: unknown; props?: Record<string, unknown>; text?: string; children?: RenderNode[] }
 
+/** portal 桩:0.25.8 起「记忆权限」浮窗挂到 document.body,渲染时把 portal 里的树继续往下画。 */
+interface PortalEntry { node: unknown; container: unknown }
+
 /**
  * 一次"渲染提交"只保留**这一轮**注册的 effect。
  *
@@ -132,6 +135,10 @@ function renderNode(node: unknown, hooks: ReturnType<typeof makeReact>, path = '
   if (node === null || node === undefined || node === false || node === true) return null
   if (typeof node === 'string' || typeof node === 'number') return { text: String(node) }
   if (Array.isArray(node)) return { children: node.map((n, i) => render(n, hooks, `${path}[${i}]`)).filter(Boolean) as RenderNode[] }
+  // createPortal 的返回值只在真实 DOM 里"挂到别处";测试里等价于把里面的树渲染在原位,
+  // 挂载目标由 portals 数组单独断言(见「浮窗 portal 到 body」用例)。
+  const portal = (node as { __portal?: PortalEntry }).__portal
+  if (portal !== undefined) return render(portal.node, hooks, path)
   const vnode = node as VNode
   if (typeof vnode.type === 'function') {
     const component = vnode.type as (p: Record<string, unknown>) => unknown
@@ -177,9 +184,24 @@ async function loadBundleImpl() {
   globals.document = {
     createElement: () => ({ set textContent(_v: string) {}, remove() {} }),
     head: { appendChild() {} },
+    body: { tagName: 'BODY' },
   }
+  /**
+   * react-dom 桩。bundle 只用 createPortal(把「记忆权限」浮窗挂到 body,理由见
+   * client.js 文件头),这里记录每次 portal 的目标容器,并返回一个渲染器认识的标记。
+   */
+  const portals: PortalEntry[] = []
   const requireShim = (name: string) => {
     if (name === 'react') return hooks.React
+    if (name === 'react-dom') {
+      return {
+        createPortal(node: unknown, container: unknown) {
+          const entry: PortalEntry = { node, container }
+          portals.push(entry)
+          return { __portal: entry }
+        },
+      }
+    }
     throw new Error(`unexpected require("${name}") in the client bundle`)
   }
   await import('../lib/client.js')
@@ -189,11 +211,11 @@ async function loadBundleImpl() {
   const exports = reg.factory(requireShim)
   assert.equal(typeof exports.apply, 'function')
   assert.deepEqual(exports.inject, ['slots'])
-  return { exports, hooks }
+  return { exports, hooks, portals }
 }
 
 // ESM caches the bundle, so it can only be evaluated once per process.
-let cached: Promise<{ exports: Record<string, unknown>; hooks: ReturnType<typeof makeReact> }> | null = null
+let cached: Promise<{ exports: Record<string, unknown>; hooks: ReturnType<typeof makeReact>; portals: PortalEntry[] }> | null = null
 function loadBundle() {
   if (!cached) cached = loadBundleImpl()
   return cached
@@ -1618,7 +1640,11 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
 
     const text = textOf(current)
     assert.ok(text.includes('记忆权限'))
-    assert.ok(text.includes('session:s1'), '默认范围里客户端补齐的 scope 也会渲染')
+    // 0.25.8:本会话的 session scope 在列表里显示为「当前会话」,原始 scope 键退到 title 提示里。
+    assert.ok(text.includes('当前会话'), '本会话 session scope 显示为当前会话')
+    const sessionLabel = collect(current).find((n) => n.tag === 'button'
+      && String(n.props?.className ?? '') === 'mem-scope-label' && String(n.props?.title ?? '') === 'session:s1')
+    assert.ok(sessionLabel, '原始 scope 键仍留在 label 的 title 里')
     assert.ok(text.includes('全局'))
     assert.ok(text.includes('绝对限制') && text.includes('普通限制') && text.includes('无限制'), '三档限制等级')
     assert.ok(!text.includes('事实') && !text.includes('规则'), '不再显示类型 chips')
@@ -1641,7 +1667,17 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
     ;(bind!.props!.onClick as () => void)()
     const writable = stateButtons.filter((node) => textOf(node) === '可写' && node.props?.disabled !== true)
     assert.equal(writable.length, 2, '已勾选的两个作用域都能调可写状态')
-    ;(writable[0]!.props!.onClick as () => void)()
+    // 按行找全局作用域的「可写」:列表顺序跟着显示名走(本会话那行现在叫「当前会话」),
+    // 用下标取会很脆。
+    const globalRow = collect(current).find((n) => n.tag === 'div'
+      && String(n.props?.className ?? '').split(' ').includes('mem-scope-item')
+      && textOf(n).includes('全局'))!
+    assert.ok(globalRow, '全局作用域行存在')
+    const globalWrite = collect(globalRow).find((n) => n.tag === 'button'
+      && String(n.props?.className ?? '').includes('mem-scope-state')
+      && String(n.props?.className ?? '').includes('write'))!
+    assert.ok(globalWrite && globalWrite.props?.disabled !== true, '全局作用域的可写按钮可点')
+    ;(globalWrite.props!.onClick as () => void)()
 
     const save = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '保存')
     assert.ok(save, '保存按钮存在')
@@ -1726,6 +1762,130 @@ test('记忆权限浮窗:移除 Agent 授权行与解释文本,只留勾选 + �
     assert.ok(textOf(item).includes('可读') && textOf(item).includes('可写'), '保留可读 / 可写操作权限')
     assert.ok(!textOf(item).includes('撤销'), '作用域行内不再有撤销授权的动作')
     assert.ok(!collect(item).some((n) => String(n.props?.className ?? '').includes('mem-scope-ai')), '没有授权就不挂 AI 气泡')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
+})
+
+test('记忆权限浮窗:portal 到 document.body,不再被输入框那层 sticky 容器压住', async () => {
+  const { exports, hooks, portals } = await loadBundle()
+  hooks.resetAll()
+  const Button = (exports.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
+  const payload = {
+    sessionId: 's1',
+    override: null,
+    effective: { level: 'normal', scopes: [{ scope: 'session:s1' }, { scope: 'global' }] },
+    source: 'default',
+    inherited: false,
+    defaults: ['session:s1', 'global'],
+    defaultScopes: ['session:s1', 'global'],
+    bindings: [],
+    scopes: [
+      { scope: 'session:s1', label: '当前会话', records: 1 },
+      { scope: 'global', label: '全局', records: 2 },
+    ],
+  }
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string) => {
+    if (url.startsWith('/memory/api/grants?')) {
+      return { status: 200, json: async () => ({ ok: true, value: { sessionId: 's1', grants: [] } }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, value: payload }) }
+  }
+  try {
+    let current: RenderNode | null = null
+    const element = () => hooks.React.createElement(Button, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const before = portals.length
+
+    const button = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))
+    assert.ok(button, '记忆权限按钮存在')
+    ;(button!.props!.onClick as (event: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 40, top: 500 }) } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    assert.ok(portals.length > before, '浮窗走 createPortal 渲染')
+    const last = portals[portals.length - 1]!
+    const doc = (globalThis as Record<string, unknown>).document as { body: unknown }
+    assert.equal(last.container, doc.body, 'portal 目标是 document.body')
+    assert.equal(String((last.node as RenderNode).props?.className), 'mem-scope-pop', '挂出去的是浮窗本身')
+    assert.ok(textOf(current).includes('记忆权限'), '浮窗内容仍然渲染出来')
+
+    // 关掉浮窗后不再往 body 挂东西。重新取按钮:上面那个节点的 onClick 闭包里 open 还是
+    // false,再点它是「又打开一次」而不是「关掉」。
+    const closeButton = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))
+    assert.equal(closeButton!.props?.['aria-expanded'], true, '浮窗现在是打开的')
+    ;(closeButton!.props!.onClick as (event: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 40, top: 500 }) } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const afterClose = portals.length
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    assert.equal(portals.length, afterClose, '浮窗关掉后不再 portal')
+    assert.ok(!collect(current).some((n) => String(n.props?.className) === 'mem-scope-pop'), '浮窗已从树上移除')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
+})
+
+test('记忆权限浮窗:本会话的 session scope 显示为「当前会话」,别的会话照旧', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const Button = (exports.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
+  const payload = {
+    sessionId: 's1',
+    override: null,
+    effective: { level: 'normal', scopes: [{ scope: 'session:s1' }, { scope: 'global' }] },
+    source: 'default',
+    inherited: false,
+    defaults: ['session:s1', 'global'],
+    defaultScopes: ['session:s1', 'global'],
+    bindings: [],
+    scopes: [
+      { scope: 'session:s1', label: '修浮窗层级(11111111)', records: 3 },
+      { scope: 'session:s2', label: '会话 22222222', records: 1 },
+      { scope: 'global', label: '全局', records: 2 },
+    ],
+  }
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string) => {
+    if (url.startsWith('/memory/api/grants?')) {
+      return { status: 200, json: async () => ({ ok: true, value: { sessionId: 's1', grants: [] } }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, value: payload }) }
+  }
+  try {
+    let current: RenderNode | null = null
+    const element = () => hooks.React.createElement(Button, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const button = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))
+    assert.ok(button, '记忆权限按钮存在')
+    ;(button!.props!.onClick as (event: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 40, top: 500 }) } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const labels = () => collect(current)
+      .filter((n) => n.tag === 'button' && String(n.props?.className ?? '') === 'mem-scope-label')
+      .map((n) => textOf(n))
+    assert.ok(labels().includes('当前会话'), '本会话的 session scope 叫当前会话')
+    assert.ok(!labels().some((name) => name.includes('11111111')), '不再把会话标题 / 短 id 当名字')
+    assert.ok(labels().includes('会话 22222222'), '别的会话的 scope 仍按原标签显示,不跟着叫当前会话')
+
+    // 搜索按显示名走:「当前会话」能命中本会话作用域。
+    const search = collect(current).find((n) => n.tag === 'input' && n.props?.type === 'search')
+    assert.ok(search, '有搜索框')
+    ;(search!.props!.onChange as (event: unknown) => void)({ target: { value: '当前会话' } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(labels(), ['当前会话'], '搜索当前会话只留本会话作用域')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch
   }
@@ -2125,6 +2285,9 @@ test('记忆范围浮窗:深色模式用 business-primary + 前景色,列表高�
   assert.match(css, /\.mem-scope-save\{[^}]*state-business-primary[^}]*label-primary-foreground/, '保存按钮不再用近白色的 brand-primary 填充')
   assert.match(css, /\.mem-scope-list\{[^}]*max-height:min\(220px,32vh\)/, '滚动列表高度收紧')
   assert.match(css, /\.mem-scope-pop\{[^}]*max-height:min\(520px,72vh\)/, '浮窗整体高度收紧')
+  // 0.25.8：浮窗 portal 到 body，层级要压过会话里的「回到底部」圆钮（z-index:8），
+  // 又不能盖住宿主自己的对话框 / 提示层（1000 起）。
+  assert.match(css, /\.mem-scope-pop\{[^}]*position:fixed[^}]*z-index:900/, '浮窗层级在会话浮动件之上、宿主弹窗之下')
   // 0.25.5：AI 授权勾选的行与用户勾选的行样式分开（虚线 + 描边勾选框，不套实心蓝底）。
   assert.match(css, /\.mem-scope-item\.ai\{[^}]*border-style:dashed/, 'AI 授权的行用虚线边框')
   assert.match(css, /\.mem-scope-item\.ai\{[^}]*background:color-mix\(in srgb,var\(--dsw-alias-label-primary\) 3%/, 'AI 授权的行不用用户选中的蓝色底')
