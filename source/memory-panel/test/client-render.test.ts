@@ -1875,6 +1875,74 @@ test('审批卡:全选/取消全选、展示 Agent 说明、点记忆 ID 跳到�
   hooks.resetAll()
 })
 
+test('审批卡:整行点击即可选中条目,详情可折叠但动作行仍可用', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const Dock = (exports.__test as { MemoryApprovalDock: (p: Record<string, unknown>) => unknown }).MemoryApprovalDock
+  const item = (id: string, content: string) => ({
+    id,
+    scope: 'global',
+    kind: 'rule',
+    content,
+    tags: [],
+    importance: 0.5,
+    updatedAt: 1,
+    reason: 'scope',
+  })
+  const approval = {
+    id: 'a1',
+    sessionId: 's1',
+    tool: 'memory_search',
+    action: 'read',
+    query: '发布流程',
+    description: '查发布流程是否踩过坑',
+    items: [item('abcdef1234567890', '范围外规则 A'), item('12345678abcdef00', '范围外规则 B')],
+    createdAt: 1,
+    expiresAt: 2,
+  }
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string, init?: { method?: string }) => {
+    if (init === undefined || init.method === 'GET') {
+      return { status: 200, json: async () => ({ ok: true, value: { approvals: [approval] } }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, value: { answered: true } }) }
+  }
+  let current: RenderNode | null = null
+  const rows = () => collect(current).filter((n) => n.tag === 'div' && String(n.props?.className ?? '').split(/\s+/).includes('mem-approval-item'))
+  const checks = () => collect(current).filter((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-approval-check'))
+  try {
+    const element = () => hooks.React.createElement(Dock, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    assert.equal(rows().length, 2, '两条记忆各一行')
+    assert.match(String(rows()[0]!.props!.className), /is-clickable/, '整行可点选')
+    ;(rows()[0]!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(checks().map((box) => box.props?.['aria-checked']), [false, true], '点击行本身就能取消该条')
+
+    const toggle = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-approval-toggle'))
+    assert.ok(toggle, 'strip 上有折叠按钮')
+    assert.equal(toggle!.props?.['aria-expanded'], true)
+    ;(toggle!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.ok(!textOf(current).includes('Agent 查询：'), '折叠后隐藏详情')
+    assert.ok(!textOf(current).includes('范围外规则 A'), '折叠后隐藏记忆摘要')
+    assert.ok(textOf(current).includes('等待审批'), 'strip 仍在')
+    assert.ok(textOf(current).includes('拒绝') && textOf(current).includes('允许选中的 1 条'), '折叠后仍可直接审批')
+    assert.equal(collect(current).find((n) => String(n.props?.className ?? '').includes('mem-approval-toggle'))?.props?.['aria-expanded'], false)
+
+    ;((collect(current).find((n) => String(n.props?.className ?? '').includes('mem-approval-toggle'))!).props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.ok(textOf(current).includes('Agent 查询：'), '再点一次恢复展开')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
+})
+
 
 test('记忆视图用 composer overlay 占满高度，滚动只发生在审计列表里', async () => {
   const { exports, hooks } = await loadBundle()

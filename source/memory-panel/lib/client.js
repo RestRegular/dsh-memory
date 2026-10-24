@@ -555,7 +555,12 @@ window.__ModuleLoader__.load({
       '.mem-approval-command{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:13px;line-height:20px;word-break:break-word;white-space:pre-wrap;max-height:72px;overflow:auto}',
       '.mem-approval-list{display:flex;flex-direction:column;gap:6px;overflow:auto;min-height:0;padding-bottom:2px}',
       '.mem-approval-item{display:flex;align-items:flex-start;gap:8px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 55%,transparent)}',
+      '.mem-approval-item.is-clickable{cursor:pointer;transition:border-color .12s ease,background .12s ease}',
+      '.mem-approval-item.is-clickable:hover{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary,#4176e6) 42%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#4176e6) 6%,transparent)}',
       '.mem-approval-item.is-off{opacity:.62}',
+      '.mem-approval-toggle{padding:0 2px;border:none;background:transparent;color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:18px;cursor:pointer;flex:none}',
+      '.mem-approval-toggle:hover{color:var(--dsw-alias-label-primary);text-decoration:underline}',
+      '.mem-approval-toggle:focus-visible{outline:1px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
       '.mem-approval-item-body{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}',
       '.mem-approval-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}',
       '.mem-approval-id{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px;color:var(--dsw-alias-label-secondary);padding:0;border:none;background:transparent;text-align:left;line-height:1.4;cursor:pointer;border-radius:4px}',
@@ -4816,6 +4821,9 @@ window.__ModuleLoader__.load({
       const [error, setError] = React.useState('')
       // approval id → 勾选的条目 id;没有记录 = 默认全选(与「允许一次」同义)。
       const [picked, setPicked] = React.useState({})
+      // approval id → 是否折叠了详情(0.22.1)。折叠只藏正文,strip 与动作行仍在,
+      // 用户不必展开就能拒绝 / 允许。
+      const [collapsed, setCollapsed] = React.useState({})
       const activeRef = React.useRef(true)
       const sessionRef = React.useRef(sessionId)
       sessionRef.current = sessionId
@@ -4842,6 +4850,7 @@ window.__ModuleLoader__.load({
         // 切换会话 = 换一张审批卡:清掉上一个会话的待审批与勾选状态。
         setApprovals([])
         setPicked({})
+        setCollapsed({})
         setError('')
         setBusy('')
         if (typeof sessionId !== 'string' || sessionId === '') return undefined
@@ -4883,6 +4892,10 @@ window.__ModuleLoader__.load({
           return { ...prev, [pending.id]: next }
         })
       }
+
+      // 折叠只藏详情(列表 / 说明),strip 与动作行保留 —— 折叠状态下仍可审批。
+      const isCollapsed = collapsed[pending.id] === true
+      const toggleCollapse = () => setCollapsed((prev) => ({ ...prev, [pending.id]: !prev[pending.id] }))
 
       // 逐条勾选之外的批量操作:全选 / 取消全选(0.22.0)。
       const selectAll = () => setPicked((prev) => ({ ...prev, [pending.id]: [...allIds] }))
@@ -4950,69 +4963,98 @@ window.__ModuleLoader__.load({
             h('span', null, busy === pending.id ? '处理中…' : '等待审批'),
             h('span', { className: 'mem-approval-tool' }, pending.tool || 'memory'),
             h('span', { className: 'spacer' }),
+            selectable && isCollapsed ? h('span', { className: 'muted' }, `已选 ${selectedCount}/${allIds.length}`) : null,
             approvals.length > 1 ? h('span', { className: 'muted' }, `还有 ${approvals.length - 1} 个待审批`) : null,
+            h('button', {
+              type: 'button',
+              className: 'mem-approval-toggle',
+              'aria-expanded': !isCollapsed,
+              'aria-label': isCollapsed ? '展开审批详情' : '折叠审批详情',
+              title: isCollapsed ? '展开审批详情' : '折叠审批详情（折叠后仍可直接允许 / 拒绝）',
+              onClick: toggleCollapse,
+            }, isCollapsed ? '展开' : '折叠'),
           ),
-          h('div', { className: 'mem-approval-body' },
-            h('div', { className: 'mem-approval-headline' }, `工具 ${pending.tool || 'memory'} 请求${actionLabel}可见域外的记忆`),
-            h('div', { className: 'mem-approval-hint' }, actionHint),
-            h('div', { className: 'mem-approval-command' }, `Agent 查询：${pending.query || '（未提供）'}`),
-            description !== ''
-              ? h('div', { className: 'mem-approval-desc', title: description }, `Agent 说明：${description}`)
-              : null,
-            selectable
-              ? h('div', { className: 'mem-approval-bulk' },
-                  h('span', null, `已选 ${selectedCount} / ${allIds.length}`),
-                  h('span', { className: 'spacer' }),
-                  h('button', {
-                    type: 'button',
-                    disabled: busy === pending.id || selectedCount === allIds.length,
-                    onClick: selectAll,
-                  }, '全选'),
-                  h('button', {
-                    type: 'button',
-                    disabled: busy === pending.id || selectedCount === 0,
-                    onClick: clearAll,
-                  }, '取消全选'),
-                )
-              : null,
-            h('div', { className: 'mem-approval-list' },
-              items.map((item) => {
-                const checked = !selectable || selectedSet.has(item.id)
-                return h('div', { className: 'mem-approval-item' + (selectable && !checked ? ' is-off' : ''), key: item.id },
-                  selectable
-                    ? h('button', {
-                      type: 'button',
-                      className: 'mem-approval-check' + (checked ? ' on' : ''),
-                      role: 'checkbox',
-                      'aria-checked': checked,
-                      'aria-label': `允许这条记忆 ${item.id}`,
-                      onClick: () => toggle(item.id),
-                    }, h('span', { className: 'box' }, checked ? h('span', { className: 'tick' }, '✓') : null))
-                    : null,
-                  h('div', { className: 'mem-approval-item-body' },
-                    h('div', { className: 'mem-approval-row' },
-                      action === 'read'
+          isCollapsed
+            ? null
+            : h('div', { className: 'mem-approval-body' },
+                h('div', { className: 'mem-approval-headline' }, `工具 ${pending.tool || 'memory'} 请求${actionLabel}可见域外的记忆`),
+                h('div', { className: 'mem-approval-hint' }, actionHint),
+                h('div', { className: 'mem-approval-command' }, `Agent 查询：${pending.query || '（未提供）'}`),
+                description !== ''
+                  ? h('div', { className: 'mem-approval-desc', title: description }, `Agent 说明：${description}`)
+                  : null,
+                selectable
+                  ? h('div', { className: 'mem-approval-bulk' },
+                      h('span', null, `已选 ${selectedCount} / ${allIds.length}`),
+                      h('span', { className: 'spacer' }),
+                      h('button', {
+                        type: 'button',
+                        disabled: busy === pending.id || selectedCount === allIds.length,
+                        onClick: selectAll,
+                      }, '全选'),
+                      h('button', {
+                        type: 'button',
+                        disabled: busy === pending.id || selectedCount === 0,
+                        onClick: clearAll,
+                      }, '取消全选'),
+                    )
+                  : null,
+                h('div', { className: 'mem-approval-list' },
+                  items.map((item) => {
+                    const checked = !selectable || selectedSet.has(item.id)
+                    return h('div', {
+                      className: 'mem-approval-item'
+                        + (selectable && !checked ? ' is-off' : '')
+                        + (selectable ? ' is-clickable' : ''),
+                      key: item.id,
+                      // 整行可点选(0.22.1):不必非要点中那个小勾选框;按钮各自 stopPropagation。
+                      ...(selectable
+                        ? {
+                          onClick: () => toggle(item.id),
+                          title: checked ? '点击取消选择这条记忆' : '点击选择这条记忆',
+                        }
+                        : {}),
+                    },
+                      selectable
                         ? h('button', {
                           type: 'button',
-                          className: 'mem-approval-id',
-                          title: '在记忆面板中查看并展开这条记忆',
-                          'aria-label': `在记忆面板中查看记忆 ${item.id}`,
-                          // 点击 → 主面板「记录」页:切 tab、定位、展开并滚到这条(0.22.0)。
-                          onClick: () => openMemoryRecordPanel(item.id, item.scope, item),
-                        }, String(item.id).length > 12 ? `${item.id.slice(0, 8)}…${item.id.slice(-4)}` : String(item.id))
-                        : h('span', { className: 'mem-approval-id', title: item.id }, String(item.id).length > 12 ? `${item.id.slice(0, 8)}…${item.id.slice(-4)}` : String(item.id)),
-                      h('span', { className: 'audit-pill mute' }, item.scope),
-                      h('span', { className: 'audit-pill mute' }, item.kind ? kindMeta(item.kind).label : '未知'),
-                      item.reason === 'kind'
-                        ? h('span', { className: 'audit-pill warn' }, '类型受限')
-                        : h('span', { className: 'audit-pill warn' }, '范围外'),
-                    ),
-                    h('div', { className: 'mem-approval-summary' }, String(item.content || '').replace(/\s+/g, ' ').slice(0, 180)),
-                  ),
-                )
-              }),
-            ),
-          ),
+                          className: 'mem-approval-check' + (checked ? ' on' : ''),
+                          role: 'checkbox',
+                          'aria-checked': checked,
+                          'aria-label': `允许这条记忆 ${item.id}`,
+                          onClick: (event) => {
+                            if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
+                            toggle(item.id)
+                          },
+                        }, h('span', { className: 'box' }, checked ? h('span', { className: 'tick' }, '✓') : null))
+                        : null,
+                      h('div', { className: 'mem-approval-item-body' },
+                        h('div', { className: 'mem-approval-row' },
+                          action === 'read'
+                            ? h('button', {
+                              type: 'button',
+                              className: 'mem-approval-id',
+                              title: '在记忆面板中查看并展开这条记忆',
+                              'aria-label': `在记忆面板中查看记忆 ${item.id}`,
+                              // 点击 → 主面板「记录」页:切 tab、定位、展开并滚到这条(0.22.0)。
+                              onClick: (event) => {
+                                if (event && typeof event.stopPropagation === 'function') event.stopPropagation()
+                                openMemoryRecordPanel(item.id, item.scope, item)
+                              },
+                            }, String(item.id).length > 12 ? `${item.id.slice(0, 8)}…${item.id.slice(-4)}` : String(item.id))
+                            : h('span', { className: 'mem-approval-id', title: item.id }, String(item.id).length > 12 ? `${item.id.slice(0, 8)}…${item.id.slice(-4)}` : String(item.id)),
+                          h('span', { className: 'audit-pill mute' }, item.scope),
+                          h('span', { className: 'audit-pill mute' }, item.kind ? kindMeta(item.kind).label : '未知'),
+                          item.reason === 'kind'
+                            ? h('span', { className: 'audit-pill warn' }, '类型受限')
+                            : h('span', { className: 'audit-pill warn' }, '范围外'),
+                        ),
+                        h('div', { className: 'mem-approval-summary' }, String(item.content || '').replace(/\s+/g, ' ').slice(0, 180)),
+                      ),
+                    )
+                  }),
+                ),
+              ),
           error ? h('div', { className: 'mem-approval-err' }, error) : null,
           h('div', { className: 'mem-approval-actionrow' },
             h('button', {
