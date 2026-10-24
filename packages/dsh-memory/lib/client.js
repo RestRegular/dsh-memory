@@ -522,10 +522,16 @@ window.__ModuleLoader__.load({
       '.mem-scope-item{display:flex;flex-direction:column;gap:4px;padding:5px 6px;border:1px solid transparent;border-radius:10px}',
       '.mem-scope-item:hover{background:var(--dsw-alias-interactive-bg-hover)}',
       '.mem-scope-item.on{border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary) 38%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-state-business-primary) 8%,transparent)}',
+      // 0.25.5：AI 授权的勾选与用户自己勾选要能一眼分开 —— 行用虚线边框 + 中性底，
+      // 勾选框用描边（虚线、透明底、蓝勾），不再套用用户选中的实心蓝底。
+      '.mem-scope-item.ai{border-style:dashed;border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary,#4176e6) 32%,var(--dsw-alias-border-l1));background:color-mix(in srgb,var(--dsw-alias-label-primary) 3%,transparent)}',
+      '.mem-scope-item.ai:hover{background:var(--dsw-alias-interactive-bg-hover)}',
+      '.mem-scope-check.ai .box{background:transparent}',
       '.mem-scope-row{display:flex;align-items:center;gap:8px}',
       '.mem-scope-check{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:none;background:transparent;flex:none;cursor:pointer}',
       '.mem-scope-check .box{display:flex;align-items:center;justify-content:center;width:16px;height:16px;border:1.5px solid color-mix(in srgb,var(--dsw-alias-label-secondary) 52%,var(--dsw-alias-border-l1));border-radius:5px;background:color-mix(in srgb,var(--dsw-alias-label-primary) 5%,transparent);color:var(--dsw-alias-label-primary-foreground);transition:background .12s ease,border-color .12s ease}',
       '.mem-scope-check.on .box{background:var(--dsw-alias-state-business-primary);border-color:var(--dsw-alias-state-business-primary);color:var(--dsw-alias-label-primary-foreground)}',
+      '.mem-scope-check.on.ai .box{background:transparent;border-style:dashed;border-color:color-mix(in srgb,var(--dsw-alias-state-business-primary,#4176e6) 72%,var(--dsw-alias-border-l1));color:var(--dsw-alias-state-business-primary,#4176e6)}',
       '.mem-scope-check:focus-visible{outline:1px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
       '.mem-scope-label{flex:1;min-width:0;padding:0;border:none;background:transparent;color:var(--dsw-alias-label-primary);font-size:12.5px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}',
       '.mem-scope-label:hover{color:var(--dsw-alias-brand-primary);border:none}',
@@ -4872,9 +4878,6 @@ window.__ModuleLoader__.load({
       const hasOverride = override !== null
       const effectiveConfig = override
         ?? (data && data.effective && typeof data.effective === 'object' && !Array.isArray(data.effective) ? data.effective : null)
-      const effectiveCount = effectiveConfig && Array.isArray(effectiveConfig.scopes)
-        ? effectiveConfig.scopes.length
-        : (data && Array.isArray(data.defaults) ? data.defaults.length : 0)
       const selectedCount = catalog.filter((item) => entries[item.scope]).length
       const needle = search.trim().toLowerCase()
       // 0.25.4：Agent 授权的结果用勾选呈现 —— 勾选 = 本会话可访问，授权来的作用域
@@ -4943,7 +4946,22 @@ window.__ModuleLoader__.load({
       const sourceText = data && data.source === 'inherited'
         ? '继承自父会话'
         : hasOverride ? '本会话已设置' : '本会话使用默认'
-      const scopeCountText = `${effectiveCount} 个作用域`
+      // 0.25.5：按钮数字 = 可见范围 ∪ AI 授权（AI 授权也是本会话能读的作用域，算进去）。
+      const effectiveScopeKeys = effectiveConfig && Array.isArray(effectiveConfig.scopes)
+        ? effectiveConfig.scopes
+          .map((rule) => (typeof rule === 'string' ? rule : rule && typeof rule.scope === 'string' ? rule.scope : ''))
+          .filter((scope) => scope !== '')
+        : (data && Array.isArray(data.defaults) ? data.defaults.filter((scope) => typeof scope === 'string') : [])
+      const accessibleCount = new Set([
+        ...effectiveScopeKeys,
+        ...grantList.filter((grant) => grant && typeof grant.scope === 'string' && grant.scope !== '')
+          .map((grant) => grant.scope),
+      ]).size
+      // 弹窗头部的「已选」= 当前勾选数（含 AI 授权的勾选；标了待撤销的不算）。
+      const orphanChecked = grantList.filter((grant) => grant && typeof grant.scope === 'string'
+        && grant.scope !== '' && !catalogScopes.has(grant.scope) && !pendingRevoke[grant.scope]).length
+      const checkedCount = catalog.filter((item) => isChecked(item.scope)).length + orphanChecked
+      const scopeCountText = `${accessibleCount} 个作用域`
       return h('span', { className: 'mem-scope-wrap', ref: wrapRef },
         h('button', {
           type: 'button',
@@ -4955,13 +4973,13 @@ window.__ModuleLoader__.load({
           onClick: toggle,
         },
           h(NavLineIcon, { size: 14 }),
-          data === null ? null : h('span', null, String(effectiveCount)),
+          data === null ? null : h('span', null, String(accessibleCount)),
         ),
         open ? h('div', { className: 'mem-scope-pop', style: popStyle, role: 'dialog', 'aria-label': '记忆权限' },
           h('div', { className: 'mem-scope-head' },
             h('h4', null, '记忆权限'),
             h('span', { className: 'spacer' }),
-            h('span', { className: 'mem-scope-count' }, `已选 ${selectedCount}`),
+            h('span', { className: 'mem-scope-count' }, `已选 ${checkedCount}`),
           ),
           data && data.inherited
             ? h('div', { className: 'hint' }, '当前继承自父会话；保存后在本会话独立生效。')
@@ -5000,13 +5018,15 @@ window.__ModuleLoader__.load({
                     const item = row.item
                     const grant = item ? grantsByScope.get(row.scope) : row.grant
                     const checked = isChecked(row.scope)
-                    return h('div', { className: `mem-scope-item${checked ? ' on' : ''}`, key: row.scope },
+                    // 只靠 AI 授权才勾上的行加 .ai：样式与用户自己勾选的行区分开。
+                    const aiOnly = Boolean(grant) && !entries[row.scope]
+                    return h('div', { className: `mem-scope-item${checked ? ' on' : ''}${aiOnly ? ' ai' : ''}`, key: row.scope },
                       h('div', { className: 'mem-scope-row' },
                         h('button', {
                           type: 'button',
                           role: 'checkbox',
                           'aria-checked': checked,
-                          className: `mem-scope-check${checked ? ' on' : ''}`,
+                          className: `mem-scope-check${checked ? ' on' : ''}${aiOnly ? ' ai' : ''}`,
                           onClick: () => toggleScope(row.scope),
                           'aria-label': checked ? '取消选择' : '选择',
                           title: grant

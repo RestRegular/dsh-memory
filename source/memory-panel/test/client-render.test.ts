@@ -1793,8 +1793,11 @@ test('记忆权限浮窗:Agent 授权用勾选 + AI 气泡呈现,取消勾选后
     assert.ok(collect(handbook()).some((n) => String(n.props?.className ?? '').includes('mem-scope-ai')), '名称右边有 AI 气泡')
     assert.match(String(collect(handbook()).find((n) => String(n.props?.className ?? '').includes('mem-scope-ai'))?.props?.title ?? ''), /只读/, '气泡 title 写明授权权限')
     assert.ok(!textOf(current).includes('Agent 授权'), '授权不再以独立行 / 文本块出现')
-    // 计数只算你勾选的可见范围，AI 授权不掺进来（已选 1 = zulu）。
-    assert.ok(textOf(current).includes('已选 1'), '已选只统计可见范围，不含 AI 授权')
+    // AI 授权也算进数字：已选 2 = zulu（范围）+ handbook（AI 授权）；输入框按钮同样显示 2。
+    assert.ok(textOf(current).includes('已选 2'), '已选把 AI 授权算进去')
+    const btnNow = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))
+    assert.equal(textOf(btnNow).trim(), '2', '按钮数字包含 AI 授权')
+    assert.ok(collect(handbook()).some((n) => String(n.props?.className ?? '').split(' ').includes('ai')), 'AI 授权的行用 .ai 样式与用户勾选区分')
     const names = () => collect(current)
       .filter((n) => n.tag === 'div' && String(n.props?.className ?? '').split(' ').includes('mem-scope-item'))
       .map((n) => textOf(collect(n).find((c) => c.tag === 'button' && String(c.props?.className ?? '') === 'mem-scope-label') ?? null))
@@ -1807,7 +1810,7 @@ test('记忆权限浮窗:Agent 授权用勾选 + AI 气泡呈现,取消勾选后
     assert.equal(String(check().props?.['aria-checked']), 'false', '草稿里立即取消勾选')
     assert.ok(textOf(handbook()).includes('AI·待撤销'), '气泡改成待撤销标记')
     assert.deepEqual(names(), ['handbook', 'zulu'], '保存前不重新排序')
-    assert.ok(textOf(current).includes('已选 1'), '计数不受 AI 授权勾选影响')
+    assert.ok(textOf(current).includes('已选 1'), '草稿取消勾选后计数立即少 1')
 
     // 点保存：先撤销授权，再保存可见范围。
     const saveButton = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-save'))
@@ -1913,6 +1916,10 @@ test('记忆范围浮窗:深色模式用 business-primary + 前景色,列表高�
   assert.match(css, /\.mem-scope-save\{[^}]*state-business-primary[^}]*label-primary-foreground/, '保存按钮不再用近白色的 brand-primary 填充')
   assert.match(css, /\.mem-scope-list\{[^}]*max-height:min\(220px,32vh\)/, '滚动列表高度收紧')
   assert.match(css, /\.mem-scope-pop\{[^}]*max-height:min\(520px,72vh\)/, '浮窗整体高度收紧')
+  // 0.25.5：AI 授权勾选的行与用户勾选的行样式分开（虚线 + 描边勾选框，不套实心蓝底）。
+  assert.match(css, /\.mem-scope-item\.ai\{[^}]*border-style:dashed/, 'AI 授权的行用虚线边框')
+  assert.match(css, /\.mem-scope-item\.ai\{[^}]*background:color-mix\(in srgb,var\(--dsw-alias-label-primary\) 3%/, 'AI 授权的行不用用户选中的蓝色底')
+  assert.match(css, /\.mem-scope-check\.on\.ai \.box\{[^}]*background:transparent[^}]*border-style:dashed/, 'AI 授权勾选框是描边虚线，不是实心蓝底')
 })
 
 test('记忆范围按钮:数字展示范围,边框样式展示限制等级(橙黄实线/蓝色实线/灰色虚线)', async () => {
