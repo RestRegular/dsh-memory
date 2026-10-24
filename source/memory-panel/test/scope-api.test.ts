@@ -4,7 +4,7 @@
  * 锁住三件事:
  *   1. 非法 scope → 400(SCOPE_INVALID),而不是被当成一个陌生 scope 去建文件;
  *   2. 合法但不存在的 scope → 空列表,而且**不创建**任何文件、不进作用域枚举;
- *   3. /status 每项都带展示 label(会话 scope 回退成「会话 <前 8 位>」)。
+ *   3. /status 每项都带展示 label(会话 scope 回退成「会话 <id 前 16 位>」)。
  * 顺带守着读路径无副作用这条:面板是"只看一眼"的界面,点开不该改磁盘。
  */
 import { test } from 'node:test'
@@ -118,8 +118,32 @@ test('面板 /status:每项带 label(会话 / 项目 / global / 自定义)', asy
     const labels = Object.fromEntries(res.out.body.value.scopes.map((s) => [s.scope, s.label]))
     assert.equal(labels['global'], '全局')
     assert.equal(labels[`project:${cwd}`], cwd)
-    assert.equal(labels['session:sess-12345678'], '会话 sess-123', '拿不到会话标题 → 前 8 位')
+    assert.equal(labels['session:sess-12345678'], '会话 sess-12345678', '拿不到会话标题 → 前 16 位(这里是整个 id)')
     assert.equal(labels['my notes'], 'my notes', '自定义 scope 用原名')
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('面板 /status:会话 id 以 session- 开头时,回退标签取 16 位而不是被前缀占满', async () => {
+  // 真机上的会话 id 形如 `session-1a2b3c4d-…`:前 8 位恒为 `session-`。
+  // 只取 8 位会让每个会话作用域都显示成「会话 session-」,0.25.9 起取 16 位。
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-scope-'))
+  const svc = makeService(dir)
+  svc.setProjectScope('project:/w')
+  try {
+    await svc.save({ scope: 'session:session-1a2b3c4d-0000-4000-8000-000000000001', kind: 'note', content: 'a' })
+    await svc.save({ scope: 'session:session-99887766-0000-4000-8000-000000000002', kind: 'note', content: 'b' })
+    svc.store.flush()
+    const res = fakeRes()
+    await handleRequest(ctxWith(svc), ROUTE, get(`${ROUTE}/status`), res)
+    assert.equal(res.out.status, 200)
+    const labels = Object.fromEntries(res.out.body.value.scopes.map((s) => [s.scope, s.label]))
+    assert.equal(labels['session:session-1a2b3c4d-0000-4000-8000-000000000001'], '会话 session-1a2b3c4d')
+    assert.equal(labels['session:session-99887766-0000-4000-8000-000000000002'], '会话 session-99887766')
+    const values = Object.values(labels)
+    assert.equal(new Set(values.filter((label) => label.startsWith('会话 session-'))).size, 2, '两个会话的作用域名不同')
   } finally {
     svc.flushSync()
     rmSync(dir, { recursive: true, force: true })
@@ -141,7 +165,7 @@ test('面板 /status:宿主提供 sessionTitle/sessions 时用会话标题', asy
     const res = fakeRes()
     await handleRequest(ctx, ROUTE, get(`${ROUTE}/status`), res)
     const labels = Object.fromEntries(res.out.body.value.scopes.map((s) => [s.scope, s.label]))
-    assert.equal(labels['session:sess-abc12345'], '重构记忆作用域(sess-abc)')
+    assert.equal(labels['session:sess-abc12345'], '重构记忆作用域(sess-abc12345)')
   } finally {
     svc.flushSync()
     rmSync(dir, { recursive: true, force: true })
@@ -162,7 +186,7 @@ test('面板 /status:会话标题服务抛错时回退,不影响响应', async (
     await handleRequest(ctx, ROUTE, get(`${ROUTE}/status`), res)
     assert.equal(res.out.status, 200)
     const labels = Object.fromEntries(res.out.body.value.scopes.map((s) => [s.scope, s.label]))
-    assert.equal(labels['session:sess-zzz99999'], '会话 sess-zzz')
+    assert.equal(labels['session:sess-zzz99999'], '会话 sess-zzz99999')
   } finally {
     svc.flushSync()
     rmSync(dir, { recursive: true, force: true })
@@ -186,7 +210,7 @@ test('面板 /status:超过 50 个会话 scope 时列表仍然完整,标题只�
     svc.store.flush()
 
     const seen = []
-    // id 形如 s00sess(<= 8 个字符,正好等于展示用的短 id)
+    // id 形如 s00sess(7 个字符,短于展示用的 16 位,所以整段都是短 id)
     const shortOf = (n) => `s${String(n).padStart(2, '0')}sess`
     const scopesOf = (n) => `session:${shortOf(n)}`
     const liveIds = new Set(Array.from({ length: TITLED }, (_, i) => shortOf(i)))

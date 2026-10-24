@@ -27,7 +27,7 @@
 // scope 规范化与 provider 共用同一份实现。路径按**源码树位置**写:构建脚本的改写表
 // 会把它落成产物里的 `../provider/scope.js`(`lib/panel.js` → `lib/provider/scope.js`),
 // 在源码树里同一路径直接命中 source/memory-local/src —— 测试与真实加载都能解析。
-import { normalizeScopeInput, resolveCurrentScopes } from '../../memory-local/src/scope.ts'
+import { normalizeScopeInput, resolveCurrentScopes, sessionScopeLabel, sessionShortId } from '../../memory-local/src/scope.ts'
 
 
 function writeJson(res, body, status = 200) {
@@ -144,13 +144,16 @@ async function readJsonBody(req) {
  * scope 键 → **不需要查宿主服务**的展示标签。
  *   global        → 「全局」
  *   project:<cwd> → cwd
- *   session:<id>  → 「会话 <id 前 8 位>」
+ *   session:<id>  → 「会话 <id 前 16 位>」(如 `会话 session-1a2b3c4d`)
  *   其他           → 原名(自定义 scope)
+ *
+ * 16 位而不是 8 位:会话 id 以 `session-` 开头(正好 8 个字符),取 8 位会让所有会话
+ * 作用域都显示成「会话 session-」。规则集中在 provider 的 sessionScopeLabel。
  */
 function fallbackScopeLabel(scope) {
   if (scope === 'global') return '全局'
   if (scope.startsWith('project:')) return scope.slice('project:'.length)
-  if (scope.startsWith('session:')) return `会话 ${scope.slice('session:'.length, 'session:'.length + 8)}`
+  if (scope.startsWith('session:')) return sessionScopeLabel(scope)
   return scope
 }
 
@@ -162,7 +165,7 @@ function fallbackScopeLabel(scope) {
 function scopeLabel(ctx, scope) {
   if (!scope.startsWith('session:')) return fallbackScopeLabel(scope)
   const id = scope.slice('session:'.length)
-  const short = id.slice(0, 8)
+  const short = sessionShortId(id)
   try {
     const session = ctx?.get?.('sessions')?.get?.(id)
     if (session !== undefined) {
@@ -170,7 +173,7 @@ function scopeLabel(ctx, scope) {
       if (typeof title === 'string' && title.length > 0) return `${title}(${short})`
     }
   } catch { /* 标题是尽力而为 */ }
-  return `会话 ${short}`
+  return sessionScopeLabel(scope)
 }
 
 /** 会话 scope 查标题的上限:标题要读会话事件日志,scope 多了它就成了 /status 的大头。 */
@@ -835,7 +838,7 @@ async function handle(ctx, routePath, req, res) {
         ? memory.scopeStats()
         : store.allScopes().map((s) => ({ scope: s.scope, records: s.records.size, pendingEmbeds: s.embedPending.size }))
       // 会话标题是尽力而为的增强,而且要读会话事件日志:只给最近活跃的前 N 个查,
-      // 其余直接用「会话 <id 前 8 位>」。列表本身**始终**完整(不受这个上限影响)。
+      // 其余直接用「会话 <id 前 16 位>」。列表本身**始终**完整(不受这个上限影响)。
       const scopes = stats.map((s, index) => ({
         ...s,
         label: s.name ?? (index < TITLE_LOOKUP_LIMIT ? scopeLabel(ctx, s.scope) : fallbackScopeLabel(s.scope)),

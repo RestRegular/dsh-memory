@@ -516,7 +516,7 @@ test('作用域下拉用服务端给的 label(会话标题 / project 的 cwd)', 
     scopes: [
       { scope: 'global', records: 1, pendingEmbeds: 0, label: '全局' },
       { scope: 'project:C:/demo', records: 1, pendingEmbeds: 0, label: 'C:/demo' },
-      { scope: 'session:sess-12345678', records: 1, pendingEmbeds: 0, label: '重构记忆作用域(sess-123)' },
+      { scope: 'session:sess-12345678', records: 1, pendingEmbeds: 0, label: '重构记忆作用域(sess-12345678)' },
       { scope: 'handbook', records: 1, pendingEmbeds: 0, label: 'handbook' },
     ],
     embedServer: null,
@@ -534,9 +534,33 @@ test('作用域下拉用服务端给的 label(会话标题 / project 的 cwd)', 
   const optionTexts = collect(tree())
     .filter((n) => n.props?.role === 'option')
     .map((n) => textOf(n))
-  assert.ok(optionTexts.includes('重构记忆作用域(sess-123)'), `下拉里显示会话标题(实际:${JSON.stringify(optionTexts)})`)
+  assert.ok(optionTexts.includes('重构记忆作用域(sess-12345678)'), `下拉里显示会话标题(实际:${JSON.stringify(optionTexts)})`)
   assert.ok(optionTexts.includes('C:/demo'), 'project scope 显示 cwd')
   assert.ok(!optionTexts.includes('session:sess-12345678'), '不再回退成裸 scope 键')
+})
+
+test('会话作用域展示名:客户端也取会话 id 前 16 位(前 8 位恒为 session-)', async () => {
+  const { exports } = await loadBundle()
+  const helpers = exports.__test as {
+    sessionShortId: (id: string) => string
+    sessionScopeLabel: (scope: string) => string
+    scopeLabel: (scope: string, labels?: Record<string, string>) => string
+  }
+  const real = 'session-1a2b3c4d-0000-4000-8000-000000000001'
+  // 真机 id 以 `session-` 开头(正好 8 个字符):8 位会让所有会话都显示成「会话 session-」。
+  assert.equal(helpers.sessionShortId(real), 'session-1a2b3c4d')
+  assert.equal(helpers.sessionScopeLabel(`session:${real}`), '会话 session-1a2b3c4d')
+  assert.equal(helpers.scopeLabel(`session:${real}`, {}), '会话 session-1a2b3c4d', '回退标签同口径')
+  // 服务端给了 label 就用服务端的(服务端能查会话标题)
+  assert.equal(helpers.scopeLabel(`session:${real}`, { [`session:${real}`]: '修层级(1a2b3c4d)' }), '修层级(1a2b3c4d)')
+  // 两个会话不能显示成同一个名字
+  assert.notEqual(
+    helpers.sessionScopeLabel(`session:${real}`),
+    helpers.sessionScopeLabel('session:session-99887766-0000-4000-8000-000000000002'),
+  )
+  // 短 id 原样返回;异常输入不抛错
+  assert.equal(helpers.sessionShortId('sess-abc12345'), 'sess-abc12345')
+  assert.doesNotThrow(() => helpers.sessionShortId(undefined as unknown as string))
 })
 
 test('未配置的后端:展开「模型与硬件」给出模型列表与安装按钮,而不是一个死开关', async () => {

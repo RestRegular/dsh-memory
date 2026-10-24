@@ -675,6 +675,22 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * 会话 id → 展示用的短 id(前 16 位,如 `session-1a2b3c4d`)。
+     *
+     * 为什么是 16 而不是 8:DSH 的会话 id 以 `session-` 开头 —— 正好 8 个字符。
+     * 取前 8 位会让所有会话作用域都显示成「会话 session-」,等于没给 id。
+     * 服务端 memory-local 的 sessionShortId / sessionScopeLabel 是同一口径。
+     */
+    const SESSION_SHORT_ID_CHARS = 16
+    function sessionShortId(sessionId) {
+      return String(sessionId === null || sessionId === undefined ? '' : sessionId).slice(0, SESSION_SHORT_ID_CHARS)
+    }
+    /** 会话 scope 键(`session:<id>`)→「会话 + 前 16 位 id」。 */
+    function sessionScopeLabel(scope) {
+      return `会话 ${sessionShortId(String(scope).slice('session:'.length))}`
+    }
+
+    /**
      * scope 键 → 展示标签。优先用 /status 返回的 `label`(服务端能查会话标题、能解析
      * project 的 cwd);服务端没给(旧 provider / 还没加载到)时用本地回退。
      */
@@ -683,7 +699,7 @@ window.__ModuleLoader__.load({
       if (typeof mapped === 'string' && mapped.length > 0) return mapped
       if (scope === 'global') return '全局'
       if (scope.startsWith('project:')) return scope.slice(8)
-      if (scope.startsWith('session:')) return `会话 ${scope.slice(8, 16)}`
+      if (scope.startsWith('session:')) return sessionScopeLabel(scope)
       return scope
     }
 
@@ -3025,11 +3041,11 @@ window.__ModuleLoader__.load({
       const writeErrors = stats && typeof stats.writeErrors === 'number' ? stats.writeErrors : 0
       const sessionOptions = [{ value: '', label: '全部会话（显式）' }]
         .concat((scopes || []).filter((scope) => scope.scope?.startsWith('session:')).map((scope) => ({
-          value: scope.scope.slice(8),
-          label: scope.label || `会话 ${scope.scope.slice(8, 16)}`,
+          value: scope.scope.slice('session:'.length),
+          label: scope.label || sessionScopeLabel(scope.scope),
         })))
       if (effectiveSession && !sessionOptions.some((item) => item.value === effectiveSession)) {
-        sessionOptions.push({ value: effectiveSession, label: `会话 ${effectiveSession.slice(0, 8)}` })
+        sessionOptions.push({ value: effectiveSession, label: sessionScopeLabel(`session:${effectiveSession}`) })
       }
       const channelOptions = [{ value: '', label: '全部通道' }].concat(Object.keys(AUDIT_CHANNEL_META).map((key) => ({ value: key, label: AUDIT_CHANNEL_META[key] })))
       const outcomeOptions = [{ value: '', label: '全部结果' }].concat(Object.keys(AUDIT_OUTCOME_META).map((key) => ({ value: key, label: AUDIT_OUTCOME_META[key].label })))
@@ -3070,7 +3086,7 @@ window.__ModuleLoader__.load({
       const toolbar = h('div', { className: 'audit-toolbar' },
         h('div', { className: 'audit-filter-row' },
           lockSession
-            ? h('span', { className: 'audit-pill mute', title: lockSession }, `会话 ${String(lockSession).slice(0, 10)}`)
+            ? h('span', { className: 'audit-pill mute', title: lockSession }, sessionScopeLabel(`session:${lockSession}`))
             : h(Dropdown, {
                 items: sessionOptions, value: session, disabled: loading,
                 onChange: (next) => { setSession(next); writeAuditSession(next); resetAndReload() },
@@ -3383,11 +3399,11 @@ window.__ModuleLoader__.load({
       const tipNode = tip === null ? null : (() => {
         if (tip.type === 'session') {
           const summary = tip.summary || {}
-          const title = summary.title || summary.name || `会话 ${String(tip.id).slice(0, 8)}`
+          const title = summary.title || summary.name || sessionScopeLabel(`session:${tip.id}`)
           return h('div', { className: 'audit-tip', style: { left: tip.x, top: tip.y }, onMouseEnter: cancelHideTip, onMouseLeave: hideTip, onClick: () => openSessionId(tip.id) },
             h('div', { className: 'audit-tip-head' }, h('span', null, '会话'), h('span', { className: 'audit-tip-title' }, title)),
             h('div', { className: 'audit-tip-meta' },
-              auditPill(String(tip.id).slice(0, 8) + '…', 'mute'),
+              auditPill(`${sessionShortId(tip.id)}…`, 'mute'),
               summary.running === true ? auditPill('运行中', 'ok') : null,
               summary.archived === true ? auditPill('已归档', 'warn') : null,
             ),
@@ -5768,6 +5784,10 @@ window.__ModuleLoader__.load({
       requestRecordFocus: requestRecordFocus,
       takeRecordFocus: takeRecordFocus,
       buildMemoryTree: buildMemoryTree,
+      // 会话作用域展示名:取会话 id 前 16 位(前 8 位恒为 `session-`)
+      sessionShortId: sessionShortId,
+      sessionScopeLabel: sessionScopeLabel,
+      scopeLabel: scopeLabel,
       KIND_META: KIND_META,
       CSS: CSS,
       shouldPollInstall: shouldPollInstall,

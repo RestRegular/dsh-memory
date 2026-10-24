@@ -14,6 +14,8 @@ import {
   resolveScopeRef,
   scopeKind,
   scopeTier,
+  sessionScopeLabel,
+  sessionShortId,
   writeScopeForDefault,
 } from '../src/scope.ts'
 
@@ -191,4 +193,21 @@ test('resolveCurrentScopes: 拿不到会话信息只降级,绝不抛错', () => 
   // 宿主对象访问抛错(异常 getter)→ 不把错误带出去
   const hostile = { get session(): never { throw new Error('boom') } }
   assert.deepEqual(resolveCurrentScopes(hostile), { project: `project:${cwd}` })
+})
+
+test('会话作用域展示名:取会话 id 前 16 位(不是 8 位)', () => {
+  // 真机 id 形如 `session-1a2b3c4d-…`:前 8 位恒为 `session-`,只取 8 位会让所有
+  // 会话作用域都显示成同一个「会话 session-」。
+  const real = 'session-1a2b3c4d-0000-4000-8000-000000000001'
+  assert.equal(sessionShortId(real), 'session-1a2b3c4d')
+  assert.equal(sessionScopeLabel(`session:${real}`), '会话 session-1a2b3c4d')
+  // 短 id 原样返回,不补空格/不截断多字符
+  assert.equal(sessionShortId('sess-abc12345'), 'sess-abc12345')
+  assert.equal(sessionScopeLabel('session:sess-abc12345'), '会话 sess-abc12345')
+  // 两个会话必须显示成两个不同的名字(0.25.8 及以前的 bug:都是「会话 session-」)
+  const other = 'session-99887766-0000-4000-8000-000000000002'
+  assert.notEqual(sessionScopeLabel(`session:${real}`), sessionScopeLabel(`session:${other}`))
+  // 异常输入不许抛错(展示层会把 undefined / 空 id 塞进来)
+  assert.equal(sessionShortId(undefined as unknown as string), '')
+  assert.doesNotThrow(() => sessionScopeLabel('session:'))
 })

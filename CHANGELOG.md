@@ -2,6 +2,14 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.25.9 — 会话作用域的短 id 改成前 16 位（以前全显示成「会话 session-」）
+
+- **问题**：真机会话 id 以 `session-` 开头，那正好是 8 个字符。以前展示会话作用域时取「id 前 8 位」，于是每个会话作用域都渲染成同一个「会话 session-」——用户无法区分是哪个会话，等于没给 id。
+- **口径**：统一改成会话 id 的**前 16 位**，形如 `会话 session-1a2b3c4d`；有会话标题时是 `标题(session-1a2b3c4d)`。规则集中在 `memory-local` 的 `sessionShortId` / `sessionScopeLabel`，服务端与客户端同口径。
+- **覆盖范围**（凡是显示会话作用域名字的地方）：`/status` 的 label（面板作用域下拉、记录卡与记忆树）、审计页的会话筛选选项与悬停提示、审计页锁定会话的 pill、以及 `memory_save` / `memory_search` / `memory_list` / `memory_get` / `memory_scopes` 的工具输出。
+- **保持不变**：「记忆权限」浮窗里本会话那一行仍是「当前会话」（0.25.8），标签里的裸 scope 键仍留在 `title`；注入摘要里的 scope 分类标签仍是「会话」（那是分类不是名字）。
+- 测试：新增 `sessionShortId` / `sessionScopeLabel` 的单测（含 `session-` 前缀的真实 id、两个会话必须不同名、异常输入不抛错）、`/status` 真实前缀 id 的回退标签用例、以及客户端 helper 用例；改写三个受口径影响的既有断言。全套 502 tests / 501 pass / 1 skipped。
+
 ## 0.25.8 — 记忆权限浮窗不再被「回到底部」按钮盖住；本会话作用域叫「当前会话」
 
 - **层级修正（浮窗曾被「回到底部」圆钮压住）**：宿主会话在 active 阶段给输入框所在的 composer seat 上了 `position:sticky + z-index:7`，那是一个独立的层叠上下文；浮窗写在它里面，`position:fixed` 也只在那个上下文里比较层级，永远压不过兄弟层 z-index:8 的「回到底部」按钮。现在浮窗通过 `react-dom` 的 `createPortal` 挂到 `document.body`，直接参与根层叠上下文的排序；`z-index` 从 80 提到 900（会话里的浮动件都在 100 以内，宿主自己的对话框 / 提示层是 1000 起，所以压得过前者、盖不住后者）。拿不到 `react-dom` 的宿主退回原地渲染，功能一致。

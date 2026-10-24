@@ -183,6 +183,25 @@ export function scopeTier(scope          )         {
   }
 }
 
+/** 会话 id 的展示长度。 */
+export const SESSION_SHORT_ID_CHARS = 16
+
+/**
+ * 会话 id → 展示用的短 id(前 16 位,如 `session-1a2b3c4d`)。
+ *
+ * 为什么是 16 而不是 8:DSH 的会话 id 以 `session-` 开头 —— 那正好是 8 个字符。
+ * 取前 8 位会让**所有**会话作用域显示成同一个「会话 session-」,等于没给 id。
+ * 16 位 = `session-` + 8 位 uuid,既短又能区分。
+ */
+export function sessionShortId(sessionId        )         {
+  return String(sessionId ?? '').slice(0, SESSION_SHORT_ID_CHARS)
+}
+
+/** 会话 scope 键(`session:<id>`)→ 「会话 + 前 16 位 id」的展示名。 */
+export function sessionScopeLabel(scope          )         {
+  return `会话 ${sessionShortId(scope.slice('session:'.length))}`
+}
+
 /** 写路径遇到只读 scope 时的错误码('all' 不能写)。 */
 export const SCOPE_NOT_WRITABLE = 'SCOPE_NOT_WRITABLE'
 

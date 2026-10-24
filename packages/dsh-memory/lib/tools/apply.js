@@ -21,7 +21,7 @@ import {
                 
 } from './index.js'
 import { renderGetResult, renderListResult, renderScopesResult, renderSearchResult } from './render.js'
-import { resolveCurrentScopes, scopeKind,               } from '../provider/scope.js'
+import { resolveCurrentScopes, scopeKind, sessionScopeLabel, sessionShortId,               } from '../provider/scope.js'
 
 export const name = 'dsh-tool-memory'
 export const inject = ['tools', 'memory']
@@ -91,14 +91,14 @@ export function apply(ctx     , config                   = {}) {
   /**
    * scope 键 → 展示标签。会话标题只有宿主服务能给:`ctx.get('sessionTitle')` 的 `get(session)`
    * 返回 `{ title }`(见 @deepseek-ai/dsh-session-title)。整套访问都在 try/catch 里 ——
-   * 旧宿主没有这个服务、会话已经不在内存里,都不能影响工具结果,回退成"会话 <id 前 8 位>"。
+   * 旧宿主没有这个服务、会话已经不在内存里,都不能影响工具结果,回退成"会话 <id 前 16 位>"。
    */
   const labelFor = (scope          , agent         )         => {
     if (scope === 'global') return '全局'
     if (scope.startsWith('project:')) return scope.slice('project:'.length)
     if (scope.startsWith('session:')) {
       const id = scope.slice('session:'.length)
-      const short = id.slice(0, 8)
+      const short = sessionShortId(id)
       try {
         const session = (agent                                             )?.session
         if (session?.id === id) {
@@ -108,7 +108,7 @@ export function apply(ctx     , config                   = {}) {
           if (typeof title === 'string' && title.length > 0) return `${title}(${short})`
         }
       } catch { /* 拿不到标题就用短 id */ }
-      return `会话 ${short}`
+      return sessionScopeLabel(scope)
     }
     return scope
   }
