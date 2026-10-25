@@ -447,6 +447,8 @@ test('0.23 工作区绑定:默认可见范围包含绑定作用域,新会话继�
   assert.deepEqual(svc.workspaceBindings(a), [])
   assert.deepEqual(svc.setWorkspaceBindings(a, ['global', 'handbook']), ['global', 'handbook'])
   assert.deepEqual(svc.workspaceBindings(a), ['global', 'handbook'])
+  // 0.25.13：绑定是工作区级设置，当前会话读什么并没有变 —— 不排「记忆权限已更新」提示。
+  assert.equal(svc.takeVisibilityNotice(a), undefined, '绑定变化不往上下文注入权限提示')
   assert.deepEqual(svc.defaultScopes(a), ['session:s1', CWD_PROJECT, 'global'], '默认基础范围不包含额外绑定')
 
   assert.deepEqual(

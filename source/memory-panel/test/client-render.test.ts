@@ -1709,10 +1709,22 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
     if (init === undefined || init.method === 'GET') {
       return { status: 200, json: async () => ({ ok: true, value: payload }) }
     }
-    const body = JSON.parse(String(init.body ?? '{}')) as { visibility: { scopes: unknown[]; level: string } | null }
+    const body = JSON.parse(String(init.body ?? '{}')) as { visibility?: { scopes: unknown[]; level: string } | null; bindings?: string[] }
+    // 0.25.13：绑定走独立的 /bindings，立即落盘，响应只回写绑定集合。
+    if (String(url).endsWith('/bindings')) {
+      return { status: 200, json: async () => ({ ok: true, value: { sessionId: 's1', bindings: body.bindings ?? [] } }) }
+    }
     return {
       status: 200,
-      json: async () => ({ ok: true, value: { ...payload, override: body.visibility, effective: body.visibility ?? payload.effective } }),
+      json: async () => ({
+        ok: true,
+        value: {
+          ...payload,
+          override: body.visibility ?? null,
+          effective: body.visibility ?? payload.effective,
+          bindings: body.bindings ?? [],
+        },
+      }),
     }
   }
   try {
@@ -1769,6 +1781,19 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
     assert.ok(bind, '额外作用域可绑定到工作区')
     assert.equal(bind!.props?.['aria-pressed'], false)
     ;(bind!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // 0.25.13：点「绑定」立即保存（不用再点「保存」），提交整份额外绑定。
+    const bindPost = calls.find((call) => call.init?.method === 'POST' && String(call.url).endsWith('/bindings'))
+    assert.ok(bindPost, '点绑定立刻 POST /bindings')
+    const bindBody = JSON.parse(String(bindPost?.init?.body ?? '{}')) as { session: string; bindings: string[] }
+    assert.equal(bindBody.session, 's1')
+    assert.deepEqual(bindBody.bindings, ['handbook'], '立即提交额外绑定(默认作用域不写入)')
+    assert.equal(
+      collect(current).filter((node) => node.tag === 'button' && String(node.props?.className ?? '').includes('mem-scope-state')
+        && textOf(node) === '绑定' && node.props?.['aria-pressed'] === true).length,
+      3,
+      '保存后额外作用域也显示为已绑定',
+    )
     const writable = stateButtons.filter((node) => textOf(node) === '可写' && node.props?.disabled !== true)
     assert.equal(writable.length, 2, '已勾选的两个作用域都能调可写状态')
     // 按行找全局作用域的「可写」:列表顺序跟着显示名走(本会话那行现在叫「当前会话」),
@@ -1788,8 +1813,8 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
     ;(save!.props!.onClick as () => void)()
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    const post = calls.find((call) => call.init?.method === 'POST')
-    assert.ok(post, '保存走 POST')
+    const post = calls.find((call) => call.init?.method === 'POST' && String(call.url).endsWith('/visibility'))
+    assert.ok(post, '保存走 POST /visibility')
     const posted = JSON.parse(String(post?.init?.body ?? '{}')) as { session: string; visibility: { scopes: Array<{ scope: string; read?: boolean; write?: boolean }>; level: string }; bindings: string[] }
     assert.equal(posted.session, 's1')
     assert.deepEqual(posted.visibility.scopes.map((item) => item.scope).sort(), ['global', 'session:s1'])
@@ -1799,6 +1824,93 @@ test('输入框记忆范围按钮:打开会话就显示数字、默认范围预�
     assert.equal(globalScope.write, false, '关掉可写后按 false 提交')
     assert.deepEqual(posted.bindings, ['handbook'], '只提交额外绑定(默认作用域不写入)')
     assert.equal(posted.visibility.level, 'normal')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
+})
+
+
+test('记忆权限浮窗:「绑定」点一下就落盘(再点一次解除),不用再点「保存」;失败回滚并报错', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const Button = (exports.__test as { MemoryVisibilityButton: (p: Record<string, unknown>) => unknown }).MemoryVisibilityButton
+  const calls: Array<{ url: string; init?: { method?: string; body?: string } }> = []
+  let bindFails = false
+  const payload = {
+    sessionId: 's1',
+    override: { level: 'normal', scopes: [{ scope: 'session:s1' }, { scope: 'global' }] },
+    effective: { level: 'normal', scopes: [{ scope: 'session:s1' }, { scope: 'global' }] },
+    source: 'explicit',
+    inherited: false,
+    defaults: ['session:s1', 'global'],
+    defaultScopes: ['session:s1', 'global'],
+    bindings: [],
+    scopes: [
+      { scope: 'session:s1', label: 'session:当前会话', records: 1 },
+      { scope: 'global', label: 'global:全局', records: 2 },
+      { scope: 'handbook', label: 'handbook', records: 1 },
+    ],
+  }
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string, init?: { method?: string; body?: string }) => {
+    calls.push({ url, init })
+    if (init === undefined || init.method === 'GET') {
+      return { status: 200, json: async () => ({ ok: true, value: payload }) }
+    }
+    const body = JSON.parse(String(init.body ?? '{}')) as { bindings?: string[] }
+    if (bindFails) {
+      return { status: 500, json: async () => ({ ok: false, error: { code: 'BIND_FAILED', message: '工作区绑定写入失败' } }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, value: { sessionId: 's1', bindings: body.bindings ?? [] } }) }
+  }
+  try {
+    let current: RenderNode | null = null
+    const element = () => hooks.React.createElement(Button, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const button = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-scope-btn'))
+    ;(button!.props!.onClick as (event: unknown) => void)({ currentTarget: { getBoundingClientRect: () => ({ left: 40, top: 500 }) } })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const handbookBind = () => {
+      const row = collect(current).find((n) => n.tag === 'div'
+        && String(n.props?.className ?? '').split(' ').includes('mem-scope-item')
+        && textOf(n).includes('handbook'))!
+      assert.ok(row, 'handbook 作用域行存在')
+      return collect(row).find((n) => n.tag === 'button'
+        && String(n.props?.className ?? '').includes('mem-scope-state') && textOf(n) === '绑定')!
+    }
+    const bindPostCount = () => calls.filter((call) => call.init?.method === 'POST' && String(call.url).endsWith('/bindings')).length
+
+    assert.equal(handbookBind().props?.['aria-pressed'], false)
+    ;(handbookBind().props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.equal(bindPostCount(), 1, '点一下就发一次 /bindings,没点「保存」')
+    const bindBody = JSON.parse(String(calls.filter((call) => String(call.url).endsWith('/bindings')).at(-1)?.init?.body ?? '{}')) as { session: string; bindings: string[] }
+    assert.equal(bindBody.session, 's1')
+    assert.deepEqual(bindBody.bindings, ['handbook'])
+    assert.equal(handbookBind().props?.['aria-pressed'], true, '按钮立刻变成已绑定')
+    assert.ok(!calls.some((call) => call.init?.method === 'POST' && String(call.url).endsWith('/visibility')), '没有顺带保存草稿')
+
+    // 再点一次 = 解除绑定:同样立即落盘,提交空数组。
+    ;(handbookBind().props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.equal(bindPostCount(), 2)
+    const unbound = JSON.parse(String(calls.filter((call) => String(call.url).endsWith('/bindings')).at(-1)?.init?.body ?? '{}')) as { bindings: string[] }
+    assert.deepEqual(unbound.bindings, [], '取消绑定 = 提交空数组')
+    assert.equal(handbookBind().props?.['aria-pressed'], false)
+
+    // 写入失败:回滚按钮状态,并把错误显示出来。
+    bindFails = true
+    ;(handbookBind().props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.equal(handbookBind().props?.['aria-pressed'], false, '失败回滚,不显示没落盘的绑定')
+    assert.ok(textOf(current).includes('工作区绑定写入失败'), '失败原因显示在浮窗里')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch
   }

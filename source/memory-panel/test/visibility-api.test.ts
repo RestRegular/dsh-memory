@@ -300,6 +300,57 @@ test('面板 /visibility:read/write 状态与工作区绑定落盘,默认范围�
   }
 })
 
+test('面板 /bindings:单独保存工作区绑定,不动会话可见范围,也不给会话注入权限提示', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-bindings-'))
+  const svc = makeService(dir)
+  const session = { id: 's1', header: { id: 's1', cwd: 'D:/w' } }
+  const agentLike = { session: { header: { id: 's1', cwd: 'D:/w' } } }
+  try {
+    await svc.save({ scope: 'handbook', kind: 'fact', content: '绑定作用域正文' })
+    // 先给会话设一份显式覆盖：绑定不应该把它清掉（这是和 /visibility 的关键区别）。
+    svc.setSessionVisibility('s1', { scopes: [{ scope: 'session:s1' }, { scope: 'global' }], level: 'normal' })
+    // 把「设置可见范围」时排队的提示取走，避免误判。
+    svc.takeVisibilityNotice(agentLike)
+
+    const res = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/bindings`, {
+      session: 's1',
+      bindings: ['handbook', 'handbook'],
+    }), res)
+    assert.equal(res.out.status, 200)
+    assert.deepEqual(res.out.body.value, { sessionId: 's1', bindings: ['handbook'] }, '重复项去重后返回落盘结果')
+    assert.deepEqual(svc.workspaceBindings(agentLike), ['handbook'], '绑定立即落盘')
+    assert.deepEqual(
+      svc.sessionVisibility('s1')?.scopes.map((rule) => rule.scope),
+      ['session:s1', 'global'],
+      '单独保存绑定不改会话可见范围',
+    )
+    assert.equal(svc.takeVisibilityNotice(agentLike), undefined, '绑定变化不注入「记忆权限已更新」提示')
+
+    // 空数组 = 解除全部绑定。
+    const cleared = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/bindings`, { session: 's1', bindings: [] }), cleared)
+    assert.equal(cleared.out.status, 200)
+    assert.deepEqual(cleared.out.body.value.bindings, [])
+    assert.deepEqual(svc.workspaceBindings(agentLike), [])
+
+    // 会话作用域 / 别名 / 非数组都按 400 拒绝。
+    for (const bad of [['session:s1'], ['all'], 'handbook']) {
+      const rejected = fakeRes()
+      await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/bindings`, { session: 's1', bindings: bad }), rejected)
+      assert.equal(rejected.out.status, 400, `非法绑定必须 400: ${JSON.stringify(bad)}`)
+      assert.equal(rejected.out.body.error.code, 'SCOPE_INVALID')
+    }
+    const noSession = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/bindings`, { bindings: ['handbook'] }), noSession)
+    assert.equal(noSession.out.status, 400)
+    assert.equal(noSession.out.body.error.code, 'SESSION_REQUIRED')
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('面板 /update:编辑新建修正版,旧记录保留且指向关系正确', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-update-'))
   const svc = makeService(dir)

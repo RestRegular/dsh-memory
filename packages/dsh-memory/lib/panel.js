@@ -596,6 +596,34 @@ function visibilityPayload(ctx, memory, sessionId) {
 }
 
 /**
+ * 校验并规范化「工作区绑定」提交（0.25.13）。
+ *
+ * `/visibility` 与 `/bindings` 共用同一套规则：只接受**具体作用域键**
+ * （不接受 `all` / 当前项目 / 当前会话这类别名），会话作用域不能绑定到工作区
+ * （它只属于某一次会话），重复项去重保序。
+ *
+ * @param rawBindings - 客户端提交的绑定数组（任意值都按非法处理）。
+ * @returns 规范化后的作用域键数组。
+ */
+function normalizeBindings(rawBindings) {
+  if (!Array.isArray(rawBindings)) throw new ApiError(400, 'SCOPE_INVALID', 'bindings 必须是字符串数组')
+  const bindings = []
+  for (const raw of rawBindings) {
+    if (typeof raw !== 'string' || raw.trim() === '') throw new ApiError(400, 'SCOPE_INVALID', '绑定项必须是非空字符串')
+    const normalized = normalizeScopeInput(raw)
+    if (!normalized.ok) throw new ApiError(400, normalized.code, normalized.message)
+    if (normalized.kind === 'all' || normalized.kind === 'current-project' || normalized.kind === 'current-session' || normalized.scope === undefined) {
+      throw new ApiError(400, 'SCOPE_INVALID', `绑定必须是具体作用域键: ${JSON.stringify(raw)}`)
+    }
+    if (normalized.scope.startsWith('session:')) {
+      throw new ApiError(400, 'SCOPE_INVALID', '会话作用域不能绑定到工作区')
+    }
+    if (!bindings.includes(normalized.scope)) bindings.push(normalized.scope)
+  }
+  return bindings
+}
+
+/**
  * 面板「记忆权限」的授权快照（0.25.0）。
  *
  * grants 由 Agent 通过 memory_scopes request 申请、用户批准产生；这里只暴露
@@ -753,29 +781,37 @@ async function handle(ctx, routePath, req, res) {
       // 工作区级绑定:省略 = 不改;数组 = 整体替换。与可见范围同一个保存动作提交。
       const rawBindings = body?.bindings
       if (rawBindings !== undefined) {
-        if (!Array.isArray(rawBindings)) throw new ApiError(400, 'SCOPE_INVALID', 'bindings 必须是字符串数组')
         if (typeof memory.setWorkspaceBindings !== 'function') {
           throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供工作区绑定接口（请升级 @restregular/dsh-memory）')
         }
-        const bindings = []
-        for (const raw of rawBindings) {
-          if (typeof raw !== 'string' || raw.trim() === '') throw new ApiError(400, 'SCOPE_INVALID', '绑定项必须是非空字符串')
-          const normalized = normalizeScopeInput(raw)
-          if (!normalized.ok) throw new ApiError(400, normalized.code, normalized.message)
-          if (normalized.kind === 'all' || normalized.kind === 'current-project' || normalized.kind === 'current-session' || normalized.scope === undefined) {
-            throw new ApiError(400, 'SCOPE_INVALID', `绑定必须是具体作用域键: ${JSON.stringify(raw)}`)
-          }
-          if (normalized.scope.startsWith('session:')) {
-            throw new ApiError(400, 'SCOPE_INVALID', '会话作用域不能绑定到工作区')
-          }
-          if (!bindings.includes(normalized.scope)) bindings.push(normalized.scope)
-        }
+        const bindings = normalizeBindings(rawBindings)
         let session
         try { session = ctx.get('sessions')?.get?.(sessionId) } catch { session = undefined }
         memory.setWorkspaceBindings({ session: session !== undefined ? session : { id: sessionId } }, bindings)
       }
       memory.setSessionVisibility(sessionId, next)
       writeJson(res, { ok: true, value: visibilityPayload(ctx, memory, sessionId) })
+      return
+    }
+
+    // 记忆权限浮窗的「绑定」按钮**单独保存**（0.25.13）:绑定是工作区级设置
+    // (本工作区新会话的默认可见范围),和「勾选范围 / 可读可写」的草稿无关,
+    // 所以点一下立即落盘,不需要用户再点「保存」;也不注入上下文提示。
+    if (method === 'POST' && path === '/bindings') {
+      if (typeof memory.setWorkspaceBindings !== 'function') {
+        throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供工作区绑定接口（请升级 @restregular/dsh-memory）')
+      }
+      const body = await readJsonBody(req)
+      const sessionId = typeof body?.session === 'string' ? body.session.trim() : ''
+      if (sessionId === '') throw new ApiError(400, 'SESSION_REQUIRED', 'session 不能为空')
+      const bindings = normalizeBindings(body?.bindings)
+      let session
+      try { session = ctx.get('sessions')?.get?.(sessionId) } catch { session = undefined }
+      const written = memory.setWorkspaceBindings({ session: session !== undefined ? session : { id: sessionId } }, bindings)
+      writeJson(res, {
+        ok: true,
+        value: { sessionId, bindings: Array.isArray(written) ? written : bindings },
+      })
       return
     }
 

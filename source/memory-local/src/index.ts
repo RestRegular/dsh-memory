@@ -1835,8 +1835,11 @@ export class LocalMemoryService implements MemoryServiceApi {
    * 面板:设置当前工作区绑定的作用域。
    *
    * 绑定只接受具体作用域键;会话作用域不能绑定(它属于某一次会话,不属于工作区)。
-   * 空数组 = 取消全部绑定。写入后给当前会话发一条可见域变更通知,下一次 pre-step
-   * 让 Agent 知道默认范围可能变了。
+   * 空数组 = 取消全部绑定。
+   *
+   * 0.25.13:绑定**不**注入「记忆权限已更新」上下文提示。绑定是工作区级设置
+   * (影响本工作区**新会话**的默认可见范围),当前会话自己读什么并没有变,给
+   * Agent 塞一条权限通知只会误导它以为自己刚刚被重新授权 / 撤销。
    */
   setWorkspaceBindings(agent: unknown, scopes: readonly string[]): MemoryScope[] {
     const workspace = this.workspaceKeyFor(agent)
@@ -1856,12 +1859,6 @@ export class LocalMemoryService implements MemoryServiceApi {
       out.push(scope)
     }
     const written = this.bindings.set(workspace, out)
-    const sessionId = this.rawSessionIdOf(agent)
-    if (sessionId !== undefined) {
-      // 通知的载荷是"本会话自己的覆盖";绑定变化不属于覆盖,但 Agent 需要知道
-      // 默认范围/状态变了,所以仍触发一次(配置取当前自己的覆盖)。
-      this.visibilityNotices.set(sessionId, { config: this.visibility.get(sessionId) ?? null, at: Date.now() })
-    }
     return written.map((scope) => this.canonicalScope(scope))
   }
 

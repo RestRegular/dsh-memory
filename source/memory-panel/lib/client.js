@@ -4649,10 +4649,20 @@ window.__ModuleLoader__.load({
      *   POST { session, visibility: { scopes: [{ scope, read?, write? }], level } | null,
      *          bindings: string[] } → 同上
      *
+     * 0.25.13 起还有只写绑定的 /bindings:
+     *   POST { session, bindings: string[] } → { sessionId, bindings }
+     *   绑定是工作区级设置（本工作区新会话的默认可见范围），点一下就落盘，
+     *   不等「保存」；也不需要给会话注入上下文提示。
+     *
      * 0.23.0:
      *   - 每个作用域有「绑定 / 可读 / 可写」状态按钮;绑定是工作区级(新会话默认可见),
      *     可读 / 可写是会话级,直接影响工具读到 / 写到该作用域时的结果与失败原因;
      *   - 保存时 read/write 只在关掉时提交 false,绑定整体提交。
+     *
+     * 0.25.13:
+     *   - 「绑定」按钮点一下立即保存（工作区级，POST /bindings），不再等「保存」；
+     *     勾选范围 / 可读 / 可写仍是草稿，点「保存」才生效。
+     *   - 绑定变化不注入「记忆权限已更新」上下文提示（当前会话读什么没变）。
      */
     function MemoryVisibilityButton({ sessionId } = {}) {
       const [open, setOpen] = React.useState(false)
@@ -4666,6 +4676,8 @@ window.__ModuleLoader__.load({
       const [pendingRevoke, setPendingRevoke] = React.useState({})
       const [perms, setPerms] = React.useState({})
       const [bound, setBound] = React.useState({})
+      // 0.25.13：绑定按钮是**即时保存**的，这里记正在提交的作用域键（空 = 空闲）。
+      const [bindBusy, setBindBusy] = React.useState('')
       const [defaultBound, setDefaultBound] = React.useState({})
       const [catalog, setCatalog] = React.useState([])
       const [search, setSearch] = React.useState('')
@@ -4916,7 +4928,37 @@ window.__ModuleLoader__.load({
 
       /** 切换某个作用域是否绑定到当前工作区（工作区级，新会话默认可见）。 */
       const toggleBound = (scope) => {
-        setBound((prev) => ({ ...prev, [scope]: !prev[scope] }))
+        // 0.25.13：绑定**点一下就落盘**，不再等「保存」。
+        // 理由：绑定是工作区级设置（本工作区新会话的默认可见范围），和浮窗里
+        // 「勾选范围 / 可读可写」那份会话级草稿互不相干；以前混在一次保存里，
+        // 用户点完「绑定」看不出任何反馈，还以为没生效。
+        if (typeof sessionId !== 'string' || sessionId === '') return
+        if (bindBusy !== '') return
+        if (defaultBound[scope] || String(scope).startsWith('session:')) return
+        const previous = { ...bound }
+        const nextBound = { ...bound, [scope]: !bound[scope] }
+        const bindings = catalog
+          .filter((item) => nextBound[item.scope] && !defaultBound[item.scope] && !String(item.scope).startsWith('session:'))
+          .map((item) => item.scope)
+        setBound(nextBound) // 乐观更新：按钮立刻变成已绑定 / 已解除
+        setBindBusy(scope)
+        setError('')
+        api('bindings', { session: sessionId, bindings })
+          .then((value) => {
+            // 以服务端返回的落盘结果为准（它会做去重 / 规范化）。
+            const saved = Array.isArray(value && value.bindings) ? value.bindings : bindings
+            const confirmed = {}
+            for (const item of catalog) {
+              confirmed[item.scope] = defaultBound[item.scope] === true || saved.includes(item.scope)
+            }
+            setBound(confirmed)
+            setData((prev) => (prev && typeof prev === 'object' ? { ...prev, bindings: saved } : prev))
+          })
+          .catch((e) => {
+            setBound(previous) // 失败回滚，别让按钮显示一个没落盘的状态
+            setError(String((e && e.message) || e))
+          })
+          .finally(() => setBindBusy(''))
       }
 
       const selectAll = () => {
@@ -4952,6 +4994,8 @@ window.__ModuleLoader__.load({
         setBusy(true)
         setError('')
         // 只提交**额外**绑定:默认范围自带的会话 / 项目 / global 不需要也不允许写入。
+        // 0.25.13 起绑定已经由 toggleBound **即时**写入 /bindings，这里再带上一次是
+        // 幂等的兜底（同一份状态，旧客户端 / 老服务端仍能按一次保存生效）。
         const bindings = catalog
           .filter((item) => bound[item.scope] && !defaultBound[item.scope] && !String(item.scope).startsWith('session:'))
           .map((item) => item.scope)
@@ -5130,6 +5174,9 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', className: 'linkbtn', onClick: selectAll }, '全选'),
             h('button', { type: 'button', className: 'linkbtn', onClick: clearAll }, '取消全选'),
           ),
+          // 0.25.13：两种设置的生命周期不同 —— 绑定是工作区级、点一下立即保存；
+          // 勾选范围 / 可读 / 可写是本会话的草稿，点「保存」才生效。
+          h('div', { className: 'hint' }, '「绑定」点一下立即保存（工作区级）；勾选范围与可读 / 可写点「保存」后生效。'),
           loading && data === null
             ? h('div', { className: 'hint' }, '读取中…')
             : h('div', { className: 'mem-scope-list' },
@@ -5190,12 +5237,13 @@ window.__ModuleLoader__.load({
                             type: 'button',
                             className: `mem-scope-state bind${defaultBound[item.scope] || bound[item.scope] ? ' on' : ''}${defaultBound[item.scope] ? ' locked' : ''}`,
                             'aria-pressed': Boolean(defaultBound[item.scope] || bound[item.scope]),
-                            disabled: Boolean(defaultBound[item.scope]),
+                            'aria-busy': bindBusy === item.scope,
+                            disabled: Boolean(defaultBound[item.scope]) || bindBusy !== '',
                             title: defaultBound[item.scope]
                               ? '默认可见范围已包含（会话 + 项目 + global 默认绑定），无需再绑定'
                               : (bound[item.scope]
-                                ? '已绑定到当前工作区：本工作区新会话的默认可见范围会包含它'
-                                : '绑定到当前工作区：本工作区新会话的默认可见范围会包含它'),
+                                ? '已绑定到当前工作区（点一下立即解除绑定）：本工作区新会话的默认可见范围会包含它'
+                                : '绑定到当前工作区（点一下立即保存，不用再点「保存」）：本工作区新会话的默认可见范围会包含它'),
                             onClick: () => { if (!defaultBound[item.scope]) toggleBound(item.scope) },
                           }, '绑定'),
                           h('span', { className: 'mem-scope-sep', 'aria-hidden': 'true' }),
