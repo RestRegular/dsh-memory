@@ -163,6 +163,73 @@ test('面板 /approvals:列待审批并回答一次', async () => {
   }
 })
 
+test('面板 /approvals?summary=1:只回审批身份与会话,不带条目正文', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-visibility-'))
+  const svc = makeService(dir)
+  const s1 = { id: 's1', header: { id: 's1', cwd: 'D:/w' } }
+  const s2 = { id: 's2', header: { id: 's2', cwd: 'D:/w' } }
+  const item = (id: string, content: string) => ({
+    id,
+    scope: 'global',
+    kind: 'rule',
+    content,
+    tags: ['release'],
+    importance: 0.8,
+    updatedAt: Date.now(),
+    reason: 'scope' as const,
+  })
+  try {
+    void svc.requestOutOfScope({ session: s1 }, {
+      tool: 'memory_search',
+      query: '发布流程',
+      description: '查发布流程是否踩过坑',
+      items: [item('aaaaaaaa1111', '范围外正文一')],
+    })
+    void svc.requestOutOfScope({ session: s2 }, {
+      tool: 'memory_get',
+      mode: 'grant',
+      query: '需要团队约定',
+      items: [item('bbbbbbbb2222', '范围外正文二')],
+    })
+
+    const all = fakeRes()
+    await handleRequest(ctxWith(svc, s1), ROUTE, get(`${ROUTE}/approvals?summary=1`), all)
+    assert.equal(all.out.status, 200)
+    assert.equal(all.out.body.value.approvals.length, 2, '摘要覆盖所有会话')
+    for (const approval of all.out.body.value.approvals) {
+      assert.equal(typeof approval.id, 'string')
+      assert.ok(approval.sessionId === 's1' || approval.sessionId === 's2')
+      assert.equal(approval.items, undefined, '摘要不带条目正文')
+      assert.equal(approval.query, undefined, '摘要不带查询语句')
+      assert.equal(approval.description, undefined, '摘要不带用途说明')
+    }
+    const s1Only = fakeRes()
+    await handleRequest(ctxWith(svc, s1), ROUTE, get(`${ROUTE}/approvals?summary=1&session=s1`), s1Only)
+    assert.deepEqual(s1Only.out.body.value.approvals.map((a) => a.sessionId), ['s1'], '可按会话过滤')
+    assert.equal(s1Only.out.body.value.approvals[0].mode, undefined, '普通条目审批不带 mode')
+
+    const s2Only = fakeRes()
+    await handleRequest(ctxWith(svc, s1), ROUTE, get(`${ROUTE}/approvals?summary=1&session=s2`), s2Only)
+    assert.equal(s2Only.out.body.value.approvals[0].mode, 'grant', 'grant 审批保留 mode')
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('面板 /approvals?summary=1:旧 provider 没有轻量方法时回退完整列表', async () => {
+  const session = { id: 's1', header: { id: 's1', cwd: 'D:/w' } }
+  const memory = {
+    store: {},
+    pendingVisibilityApprovals: () => [{ id: 'a1', sessionId: 's1', tool: 'memory_search', action: 'read', query: 'q', items: [], createdAt: 1, expiresAt: 2 }],
+  }
+  const res = fakeRes()
+  await handleRequest(ctxWith(memory, session), ROUTE, get(`${ROUTE}/approvals?summary=1`), res)
+  assert.equal(res.out.status, 200)
+  assert.equal(res.out.body.value.approvals.length, 1)
+  assert.equal(res.out.body.value.approvals[0].id, 'a1')
+})
+
 test('面板 /approvals:allowedIds 逐条允许,只返回勾选的条目', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-visibility-'))
   const svc = makeService(dir)

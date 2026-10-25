@@ -2,6 +2,13 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.25.14 — 侧边栏给等待记忆审批的会话显示黄点 /「待审批」
+
+- **问题**：范围外记忆审批以前只是插件自己画在 `conversation.input.dock` 的卡片；宿主的侧边栏会话列表并不认识它，所以工具在等审批时，那一行没有系统审批 / ask 工具那样的黄点，也不会被「待审批」水线自动顶出来。宿主这两类阻塞都来自 `ctx.uiSession` 的 pending-interaction 注册表（`dsh-client-ui-approval` 发 `kind:'approval'`，`dsh-client-ui-user-questions` 发 `kind:'question'`）。
+- **做法**：客户端新增 `installApprovalPresence`，通过 `ctx.inject(['uiSession'], …)`（等 `uiSession` 就绪，不在 apply 里一次性取样）注册一个 pending-interaction domain；轮询轻量审批摘要，为每条待审批发布一个**合成 interaction** `{ sessionId, kind:'approval', key:'memory-approval:<id>', toolName }`，回答 / 超时后撤销。它**不是** `PendingApproval` 实例，所以宿主的审批卡不会抢着渲染，我们自己的审批卡仍是唯一 UI；但侧边栏黄点、紧凑文案「待审批」、悬停「等待审批」、会话水线提升、以及其它插件对 `uiSession.sessionStatus` 的读取，都和系统审批完全同构。按审批 id 增删，同一会话多条审批互不顶掉；点「拒绝 / 允许」后立即同步一次，不必等下一次轮询。
+- **轻量接口**：`GET /memory/api/approvals?summary=1` 新增摘要口径，只回 `id / sessionId / tool / action / mode / createdAt / expiresAt`，不复制条目正文与查询语句；provider 新增 `pendingVisibilityApprovalPresence()`。旧 provider 没有该方法时回退完整列表，客户端只读 id + sessionId，兼容不破。
+- **测试**：客户端新增「待审批发布成 approval 类型、空 sessionId 跳过、同一会话多条、回答一条只撤一条、卸载清空」用例；面板新增 `/approvals?summary=1` 的「无正文 / 按会话过滤 / grant mode / 旧 provider 回退」用例。
+
 ## 0.25.13 — 「绑定」点一下立即保存；绑定不再往上下文注入提示
 
 - **绑定即存**：记忆权限浮窗里每个作用域的【绑定】按钮以前只是草稿，必须再点「保存」才落盘——用户点完绑定看不出任何反馈，很容易以为没生效。现在点一下就走新接口 `POST /memory/api/bindings` 立即保存（再点一次 = 解除绑定），按钮先乐观更新、失败回滚原状态并把错误显示在浮窗里；「绑定」按钮的 `title` 与浮窗提示行都写清「点一下就保存」。绑定是工作区级设置（本工作区新会话的默认可见范围），与浮窗里「勾选范围 / 可读 / 可写」那份会话级草稿无关，所以**不需要**先设草稿；点「保存」时仍会幂等带上一次绑定，旧客户端 / 老服务端按原逻辑照旧生效。

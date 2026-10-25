@@ -816,12 +816,18 @@ async function handle(ctx, routePath, req, res) {
     }
 
     // 普通限制下的范围外访问审批:客户端浮层轮询待审批,用户点「拒绝 / 允许一次」后回写。
+    // `summary=1` 是 0.25.14 新增的轻量口径:侧边栏阻塞提醒只需要 id + sessionId,
+    // 不带条目正文,避免全局 1.5s 轮询把审批内容一遍遍传一遍。
     if (method === 'GET' && path === '/approvals') {
       if (typeof memory.pendingVisibilityApprovals !== 'function') {
         throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供可见域审批接口（请升级 @restregular/dsh-memory）')
       }
       const sessionId = (url.searchParams.get('session') ?? '').trim()
-      writeJson(res, { ok: true, value: { approvals: memory.pendingVisibilityApprovals(sessionId === '' ? undefined : sessionId) } })
+      const summary = url.searchParams.get('summary') === '1'
+      const approvals = summary && typeof memory.pendingVisibilityApprovalPresence === 'function'
+        ? memory.pendingVisibilityApprovalPresence(sessionId === '' ? undefined : sessionId)
+        : memory.pendingVisibilityApprovals(sessionId === '' ? undefined : sessionId)
+      writeJson(res, { ok: true, value: { approvals } })
       return
     }
     if (method === 'POST' && path === '/approvals') {

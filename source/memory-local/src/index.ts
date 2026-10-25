@@ -620,6 +620,24 @@ export interface VisibilityApprovalView {
   expiresAt: number
 }
 
+/**
+ * 侧边栏「阻塞提醒」用的轻量待审批快照(0.25.14)。
+ *
+ * 客户端要模仿宿主 approval / question 的传播方式：把「某会话正在等用户审批」
+ * 发布成宿主 `uiSession` 的 pending interaction，侧边栏才会显示黄点。这个轮询
+ * 只需要审批的身份与会话，**不需要条目正文** —— 正文仍由完整 `/approvals` 接口
+ * 按会话取，避免每 1.5 秒把几十 KB 的条目内容传到客户端。
+ */
+export interface VisibilityApprovalPresence {
+  id: string
+  sessionId: string
+  tool: string
+  action: VisibilityAction
+  mode?: 'records' | 'grant'
+  createdAt: number
+  expiresAt: number
+}
+
 /** 一次审批的结局:允许(可只允许其中几条) / 拒绝 / 超时。 */
 export type VisibilityApprovalOutcome = 'allowed-once' | 'rejected' | 'timeout'
 
@@ -2028,6 +2046,30 @@ export class LocalMemoryService implements MemoryServiceApi {
           content: item.content.length > 1200 ? `${item.content.slice(0, 1200)}…` : item.content,
           tags: [...item.tags],
         })),
+        createdAt: pending.createdAt,
+        expiresAt: pending.expiresAt,
+      })
+    }
+    return out.sort((a, b) => a.createdAt - b.createdAt)
+  }
+
+  /**
+   * 侧边栏阻塞提醒用的轻量快照(0.25.14)：只要审批身份 + 会话。
+   *
+   * 与 `pendingVisibilityApprovals` 同一份内存真值，但**不复制条目正文**：
+   * 客户端全局轮询它来发布 `pendingInteraction`，让宿主侧边栏给等待审批的会话
+   * 显示黄色圆点 /「待审批」；完整 payload 仍由 dock 按当前会话拉取。
+   */
+  pendingVisibilityApprovalPresence(sessionId?: string): VisibilityApprovalPresence[] {
+    const out: VisibilityApprovalPresence[] = []
+    for (const pending of this.pendingApprovals.values()) {
+      if (sessionId !== undefined && sessionId !== '' && pending.sessionId !== sessionId) continue
+      out.push({
+        id: pending.id,
+        sessionId: pending.sessionId,
+        tool: pending.tool,
+        action: pending.action,
+        ...(pending.mode !== undefined ? { mode: pending.mode } : {}),
         createdAt: pending.createdAt,
         expiresAt: pending.expiresAt,
       })

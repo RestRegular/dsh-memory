@@ -2634,6 +2634,78 @@ test('审批卡:只在所属会话显示,读审批可逐条允许', async () => 
   hooks.resetAll()
 })
 
+test('侧边栏阻塞提示:把待审批发布成宿主 approval 类型的 pending interaction', async () => {
+  const { exports } = await loadBundle()
+  const testApi = exports.__test as {
+    installApprovalPresence: (ctx: unknown) => void
+    approvalPresenceSync: () => (() => void) | null
+  }
+  const published: Array<{ interaction: Record<string, unknown>; delegate: () => void }> = []
+  const removed: string[] = []
+  let effectDispose: (() => void) | null = null
+  const uiSession = {
+    registerPendingInteraction(precedence: (interaction: unknown) => number) {
+      assert.equal(typeof precedence, 'function')
+      assert.equal(precedence({ kind: 'approval' }), 0, '与宿主导入的 approval 同优先级')
+      return (interaction: Record<string, unknown>, delegate: () => void) => {
+        published.push({ interaction, delegate })
+        return () => { removed.push(String(interaction.key)) }
+      }
+    },
+  }
+  const ctx = {
+    inject(deps: string[], callback: (scope: unknown) => void) {
+      assert.deepEqual(deps, ['uiSession'])
+      callback({
+        uiSession,
+        effect(fn: () => unknown) {
+          const dispose = fn()
+          effectDispose = typeof dispose === 'function' ? dispose as () => void : null
+          return dispose
+        },
+      })
+      return () => {}
+    },
+  }
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  const calls: string[] = []
+  let payload: unknown[] = [
+    { id: 'a1', sessionId: 's1', tool: 'memory_search', action: 'read', createdAt: 1, expiresAt: 2 },
+    // 同一会话的第二条审批也要发布，回答其中一条时不能把另一条一起撤掉。
+    { id: 'a2', sessionId: 's1', tool: 'memory_get', action: 'read', createdAt: 2, expiresAt: 3 },
+    // 拿不到会话的旧审批（sessionId 为空）没有侧边栏行可标，跳过。
+    { id: 'a3', sessionId: '', tool: 'memory_search', action: 'read', createdAt: 3, expiresAt: 4 },
+  ]
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string) => {
+    calls.push(url)
+    return { status: 200, json: async () => ({ ok: true, value: { approvals: payload } }) }
+  }
+  try {
+    testApi.installApprovalPresence(ctx)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(calls, ['/memory/api/approvals?summary=1'], '只拉轻量摘要')
+    assert.equal(published.length, 2, '每个有会话的待审批发布一条')
+    const first = published[0].interaction
+    assert.equal(first.kind, 'approval', '侧边栏按 approval 类型显示黄点/待审批')
+    assert.equal(first.sessionId, 's1')
+    assert.equal(first.key, 'memory-approval:a1')
+    assert.equal(first.toolName, 'memory_search')
+    assert.deepEqual(published.map((entry) => entry.interaction.key), ['memory-approval:a1', 'memory-approval:a2'])
+
+    // 回答 a1 后，下一次同步只撤销 a1，a2 的黄点必须保留。
+    payload = [payload[1]]
+    testApi.approvalPresenceSync()?.()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(removed, ['memory-approval:a1'])
+    assert.equal(published.length, 2, 'a1 已经发布过，不重复发布')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+    if (effectDispose !== null) (effectDispose as () => void)()
+  }
+  assert.deepEqual(removed.sort(), ['memory-approval:a1', 'memory-approval:a2'], '插件卸载时清掉全部阻塞提示')
+  assert.equal(testApi.approvalPresenceSync(), null, '卸载后不再保留同步器')
+})
+
 test('审批卡:grant 模式默认只勾只读,允许后只提交只读权限', async () => {
   const { exports, hooks } = await loadBundle()
   hooks.resetAll()

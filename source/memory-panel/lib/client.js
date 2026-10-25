@@ -5308,6 +5308,100 @@ window.__ModuleLoader__.load({
           : (createPortal !== null && portalTarget !== null ? createPortal(popover, portalTarget) : popover),
       )
     }
+    /** 0.25.14：全局待审批快照的轮询周期。与审批卡同频，避免黄点比卡片晚太多。 */
+    const APPROVAL_PRESENCE_POLL_MS = 1500
+
+    /**
+     * 0.25.14：把「本会话正在等待记忆审批」传播成宿主的 pending interaction。
+     *
+     * 为什么需要它：`MemoryApprovalDock` 只是我们自己画的卡片（conversation.input.dock），
+     * 宿主的侧边栏会话列表并不认识它 —— 黄点 /「待审批」/ 自动把会话提到水线以上，
+     * 全部来自 `ctx.uiSession` 的 pending interaction 注册表。宿主自己的
+     * `dsh-client-ui-approval` 和 `dsh-client-ui-user-questions` 就是通过
+     * `registerPendingInteraction` 发布 `kind: 'approval' | 'question'` 的；
+     * 我们照抄同一条通道，发布一个**合成 interaction**（kind='approval'）：
+     *   - 侧边栏拿到 warning 状态 → 左上角黄点、紧凑文案「待审批」、悬停「等待审批」；
+     *   - 其它插件（包括宿主会话本体）也能从 `uiSession.sessionStatus` 读到这个阻塞，
+     *     和系统审批 / ask 工具完全同构；
+     *   - 它**不是** `PendingApproval` 实例，所以宿主的审批卡片不会抢着渲染它，
+     *     我们自己的 dock 仍然是唯一可见的审批 UI。
+     *
+     * 发布按审批 id 增删（一个会话可能同时有多条），回答 / 超时后由下一次轮询移除。
+     * `summary=1` 只拿 id + sessionId，不把正文搬来搬去。
+     */
+    let approvalPresenceSync = null
+
+    function installApprovalPresence(ctx) {
+      if (ctx === null || typeof ctx !== 'object' || typeof ctx.inject !== 'function') return
+      try {
+        // 不在 apply 里一次性 ctx.get('uiSession')：那会在服务尚未 provide 时拿到
+        // undefined 且永不重试（插件冷启动丢注册的老坑）。inject 等就绪后再挂。
+        ctx.inject(['uiSession'], (scope) => {
+          const uiSession = scope.uiSession
+          if (uiSession === null || typeof uiSession !== 'object'
+            || typeof uiSession.registerPendingInteraction !== 'function') return
+          const publish = uiSession.registerPendingInteraction(() => 0)
+          if (typeof publish !== 'function') return
+
+          // approval id → 撤销发布函数。按 id 增删，避免同一会话的多条审批互相顶掉。
+          const live = new Map()
+          let active = true
+
+          const sync = async () => {
+            let value
+            try { value = await api('approvals?summary=1') } catch { return }
+            if (!active) return
+            const list = value && Array.isArray(value.approvals) ? value.approvals : []
+            const seen = new Set()
+            for (const item of list) {
+              if (item === null || typeof item !== 'object') continue
+              const id = typeof item.id === 'string' ? item.id : ''
+              const sessionId = typeof item.sessionId === 'string' ? item.sessionId : ''
+              if (id === '' || sessionId === '' || seen.has(id)) continue
+              seen.add(id)
+              if (live.has(id)) continue
+              try {
+                const remove = publish({
+                  sessionId,
+                  kind: 'approval',
+                  key: `memory-approval:${id}`,
+                  toolName: typeof item.tool === 'string' && item.tool !== '' ? item.tool : 'memory',
+                }, () => {})
+                if (typeof remove === 'function') live.set(id, remove)
+              } catch { /* 单条发布失败不影响其它会话的提醒 */ }
+            }
+            for (const [id, remove] of [...live]) {
+              if (seen.has(id)) continue
+              live.delete(id)
+              try { remove() } catch { /* 组件/服务已释放 */ }
+            }
+          }
+
+          approvalPresenceSync = () => { void sync() }
+          void sync()
+          let timer
+          if (typeof setInterval === 'function') {
+            timer = setInterval(() => {
+              if (typeof document !== 'undefined' && document.hidden) return
+              void sync()
+            }, APPROVAL_PRESENCE_POLL_MS)
+            // Node 测试环境：不因为一个轮询句柄让进程永不退出；浏览器没有 unref。
+            if (timer && typeof timer.unref === 'function') timer.unref()
+          }
+          const stop = () => {
+            if (!active) return
+            active = false
+            if (timer !== undefined) clearInterval(timer)
+            timer = undefined
+            approvalPresenceSync = null
+            for (const remove of live.values()) { try { remove() } catch { /* 已释放 */ } }
+            live.clear()
+          }
+          try { scope.effect(() => stop, 'dsh-memory: approval presence') } catch { /* 旧宿主没有 effect 时随服务释放 */ }
+        })
+      } catch { /* 旧宿主没有 ctx.inject：少一个侧边栏提醒，绝不让 client apply 失败 */ }
+    }
+
     /**
      * 普通限制下的「范围外记忆访问审批」卡片(0.21.0)。
      *
@@ -5439,6 +5533,8 @@ window.__ModuleLoader__.load({
               delete next[pending.id]
               return next
             })
+            // 立刻撤销侧边栏黄点，不必等下一次 1.5s 轮询。
+            if (approvalPresenceSync !== null) approvalPresenceSync()
           })
           .catch((e) => setError(String((e && e.message) || e)))
           .finally(() => setBusy(''))
@@ -5619,6 +5715,9 @@ window.__ModuleLoader__.load({
         // 侧栏那一行的图标:宿主写死了齿轮,我们只改它 SVG 的孩子(见 wrapSettingsNav)
         const stopNavWatch = wrapSettingsNav()
         ctx.effect(() => () => { styleEl.remove(); stopNavWatch() }, 'dsh-memory: styles + nav icon')
+
+        // 0.25.14：侧边栏黄点提示（独立于 slots；旧宿主没有 uiSession 时静默跳过）。
+        installApprovalPresence(ctx)
 
         const slots = ctx.get('slots')
         if (slots === undefined) return
@@ -5883,6 +5982,9 @@ window.__ModuleLoader__.load({
       AuditTab: AuditTab,
       MemoryVisibilityButton: MemoryVisibilityButton,
       MemoryApprovalDock: MemoryApprovalDock,
+      // 0.25.14：侧边栏阻塞提示的发布器（测试直接驱动，不等真实 1.5s 定时器）。
+      installApprovalPresence: installApprovalPresence,
+      approvalPresenceSync: () => approvalPresenceSync,
       openMemoryRecordPanel: openMemoryRecordPanel,
       requestRecordFocus: requestRecordFocus,
       takeRecordFocus: takeRecordFocus,

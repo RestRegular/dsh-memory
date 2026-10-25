@@ -383,6 +383,11 @@ export class CordisMemoryService extends Service {
     return this.impl.pendingVisibilityApprovals(sessionId)
   }
 
+  /** 侧边栏阻塞提醒:待审批的轻量快照(不带条目正文)。 */
+  pendingVisibilityApprovalPresence(sessionId         )                                                                      {
+    return this.impl.pendingVisibilityApprovalPresence(sessionId)
+  }
+
   /** 面板:回答一条待审批(可带逐条勾选的 allowedIds)。 */
   answerVisibilityApproval(id        , outcome                             , allowedIds                    )          {
     return this.impl.answerVisibilityApproval(id, outcome, allowedIds)
