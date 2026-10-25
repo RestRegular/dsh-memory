@@ -16,7 +16,9 @@
  *   session:<id>           一个会话(同一个 projects/<sha1>.jsonl 体系)
  *   <自定义名>              自由命名,内部键仍是自定义名本身
  * 三者都由 `scopeFileName()` 映射到文件名,因此**自定义名里出现 ':' 一律拒绝**,否则
- * `foo:bar` 会与保留前缀撞成同一个键空间,用户也能靠它伪造 `project:` 键。
+ * `foo:bar` 会与保留前缀撞成同一个键空间,用户也能靠它伪造 `project:` 键。唯一的例外
+ * 是**展示前缀** `custom:`(0.26.0 起在 normalizeScopeInput 里剥掉一层再校验)——
+ * 它只会出现在工具输出 / 摘要 / 面板里,不属于键空间。
  */
 import { createHash } from 'node:crypto'
 import { posix, win32 } from 'node:path'
@@ -87,7 +89,9 @@ function normalizeCustomName(raw: string): { ok: true; name: string } | { ok: fa
   if (name === '..' || name === '.') return { ok: false, message: "scope name must not be '.' or '..'" }
   if (/^[. ]+$/u.test(name)) return { ok: false, message: 'scope name must contain more than dots and spaces' }
   if (name.includes('..')) return { ok: false, message: "scope name must not contain '..'" }
-  if (name.includes(':')) return { ok: false, message: "scope name must not contain ':'" }
+  if (name.includes(':')) {
+    return { ok: false, message: "scope name must not contain ':'; pass the bare scope name (e.g. 'dsh-plugin-dev')" }
+  }
   if (name.includes('/') || name.includes('\\')) {
     return { ok: false, message: 'scope name must not contain path separators' }
   }
@@ -128,6 +132,7 @@ export function normalizeScopeName(raw: string): { ok: true; name: string } | { 
  *   - 'global' | 'project' | 'session' → 各自的**种类**,不在这里解析 cwd/会话(纯函数拿不到);
  *   - 'all' | '*' → 跨所有作用域(仅读路径合法,写路径由 assertWritableScope 拒绝);
  *   - 'project:*' | 'session:*' → 原样放行(显式 pin 某个项目 / 某个会话);
+ *   - 'custom:*' → 归一成裸名(0.26.0:展示层就是这么渲染自定义作用域的);
  *   - 其余 → 自定义名,严格校验。
  *
  * 不合法**不再静默回退**,一律返回 SCOPE_INVALID。
@@ -154,10 +159,61 @@ export function normalizeScopeInput(raw: string | undefined | null): NormalizeSc
       ? { ok: true, kind: 'session', scope: prefixed.key }
       : { ok: false, code: 'SCOPE_INVALID', message: prefixed.message }
   }
+  // 展示形式 `custom:<名字>` 归一到裸名(0.26.0)。0.25.10 起工具输出、注入摘要、面板
+  // 全部用 `custom:<名字>` 渲染,而自定义作用域的**键本身没有前缀**;模型照抄回来时
+  // 不该落到另一个(永远匹配不到记录的)键上。这里只剥一层,剩下的部分仍按自定义名规则
+  // 严格校验 —— 所以 `custom:foo:bar` / `custom:` 依然是 SCOPE_INVALID。
+  if (lower.startsWith('custom:')) {
+    const bare = value.slice('custom:'.length).trim()
+    if (bare.length === 0) {
+      return { ok: false, code: 'SCOPE_INVALID', message: "custom: must be followed by a scope name (e.g. 'dsh-plugin-dev')" }
+    }
+    if (RESERVED_SCOPE_NAMES.has(bare.toLowerCase())) {
+      return { ok: false, code: 'SCOPE_INVALID', message: `custom: cannot wrap the reserved name "${bare.toLowerCase()}"; use the bare scope name instead` }
+    }
+    const custom = normalizeCustomName(bare)
+    return custom.ok
+      ? { ok: true, kind: 'custom', scope: custom.name }
+      : { ok: false, code: 'SCOPE_INVALID', message: custom.message }
+  }
   const custom = normalizeCustomName(value)
   return custom.ok
     ? { ok: true, kind: 'custom', scope: custom.name }
     : { ok: false, code: 'SCOPE_INVALID', message: custom.message }
+}
+
+/**
+ * 把"可能是展示形式"的作用域字符串归一到真实键(0.26.0)。
+ *
+ * 只剥**一层** `custom:`:自定义作用域的键本身没有前缀,`custom:` 是 `scopeDisplayName`
+ * 按类型补的展示前缀。用于读既有数据(grants / visibility / 面板旧键)与渲染兜底;
+ * 不做存在性检查,也不改 `project:` / `session:` 键。
+ */
+export function normalizeScopeKey(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed.toLowerCase().startsWith('custom:')) return trimmed
+  const bare = trimmed.slice('custom:'.length).trim()
+  return bare === '' ? trimmed : bare
+}
+
+/**
+ * 形态是否是一个合法的作用域键(不做存在性检查,0.26.0)。
+ *
+ * 用途:grant 落盘前拒绝"永远匹配不到任何记录"的幽灵键 —— 0.25.x 里
+ * `memory_scopes request` 接受过 `custom:dsh-plugin-dev` 并把它原样写进 grants,
+ * 结果授权看起来成功、检索时却重新弹审批。`custom:` 展示前缀不算合法键。
+ */
+export function isWellFormedScopeKey(value: string): boolean {
+  if (value === 'global') return true
+  if (value.startsWith('project:')) {
+    const path = value.slice('project:'.length).trim()
+    return path !== '' && !hasControlChar(value) && codePointLength(value) <= MAX_PREFIXED_SCOPE_CHARS
+  }
+  if (value.startsWith('session:')) {
+    const id = value.slice('session:'.length).trim()
+    return id !== '' && !hasControlChar(value) && codePointLength(value) <= MAX_PREFIXED_SCOPE_CHARS
+  }
+  return normalizeCustomName(value).ok
 }
 
 /** scope 的种类(用于命名空间 / 阈值 / 排序);未知形态按自定义处理。 */
@@ -218,7 +274,9 @@ export function scopeDefaultName(scope: ScopeKey): string {
   if (scope === 'global') return '全局'
   if (scope.startsWith('project:')) return scope.slice('project:'.length)
   if (scope.startsWith('session:')) return sessionShortId(scope.slice('session:'.length))
-  return String(scope)
+  // 兜底:输入侧已把 `custom:<名字>` 归一,但旧数据 / 外部调用仍可能带着它进来,
+  // 展示时绝不能叠成 `custom:custom:<名字>`。
+  return normalizeScopeKey(String(scope)) || String(scope)
 }
 
 /**

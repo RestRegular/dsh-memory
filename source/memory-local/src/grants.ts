@@ -19,6 +19,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
+import { isWellFormedScopeKey, normalizeScopeKey } from './scope.ts'
 
 export const GRANTS_VERSION = 1
 
@@ -70,9 +71,12 @@ function cleanPermissions(raw: unknown): GrantPermission[] {
 function parseGrant(raw: unknown, sessionId: string): ScopeGrant | undefined {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
   const value = raw as Record<string, unknown>
-  const scope = asString(value.scope)
+  const rawScope = asString(value.scope)
   const id = asString(value.id)
-  if (scope === undefined || id === undefined) return undefined
+  if (rawScope === undefined || id === undefined) return undefined
+  // 0.26.0:旧数据里可能有展示形式 `custom:<名字>`(0.25.x 的 request 未规范化),
+  // 读的时候折回真实键,否则这条授权永远匹配不到记录。
+  const scope = normalizeScopeKey(rawScope)
   const permissions = cleanPermissions(value.permissions)
   if (permissions.length === 0) return undefined
   return {
@@ -167,9 +171,15 @@ export class SessionGrantsStore {
   add(sessionId: string, input: ScopeGrantInput): ScopeGrant {
     const permissions = cleanPermissions(input.permissions)
     if (permissions.length === 0) throw new Error('grant requires at least one permission')
+    // 0.26.0:落盘前把形态卡死。这一层是最后的护栏 —— 带展示前缀 / 带非法字符的
+    // 键写进 grants 只会变成"看起来授权成功、检索时又弹审批"的幽灵授权。
+    const scope = normalizeScopeKey(input.scope)
+    if (!isWellFormedScopeKey(scope)) {
+      throw new Error(`grant scope key is malformed: ${JSON.stringify(input.scope)}`)
+    }
     const all = this.readAll(sessionId)
     const now = Date.now()
-    const existing = all.grants.find((grant) => grant.scope === input.scope
+    const existing = all.grants.find((grant) => grant.scope === scope
       && grant.revokedAt === undefined
       && (grant.expiresAt === undefined || grant.expiresAt > now)
       && (grant.scopeGeneration === input.scopeGeneration))
@@ -183,13 +193,13 @@ export class SessionGrantsStore {
     }
     // 同作用域但代次不同：旧代次的 grant 明确作废，避免“同名重建复活旧授权”。
     for (const grant of all.grants) {
-      if (grant.scope === input.scope && grant.revokedAt === undefined && grant.scopeGeneration !== input.scopeGeneration) {
+      if (grant.scope === scope && grant.revokedAt === undefined && grant.scopeGeneration !== input.scopeGeneration) {
         grant.revokedAt = now
       }
     }
     const grant: ScopeGrant = {
       id: randomUUID(),
-      scope: input.scope,
+      scope,
       permissions,
       duration: 'session',
       sessionId,

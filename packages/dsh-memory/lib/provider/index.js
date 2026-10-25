@@ -19,6 +19,7 @@ import {
   canonicalWorkspacePath,
   isCustomScope,
   normalizeScopeInput,
+  normalizeScopeKey,
   projectScopeIdentity,
   resolveCurrentScopes,
   scopeKind,
@@ -3208,7 +3209,8 @@ export class LocalMemoryService                             {
   }
 
   /**
-   * 作用域键归一:自定义名可能是别名 → 转回真实键;`project:<路径>` 统一路径写法。
+   * 作用域键归一:自定义名可能是别名 → 转回真实键;`project:<路径>` 统一路径写法;
+   * 展示前缀 `custom:` 剥掉(0.26.0)。
    *
    * 项目键必须过 `canonicalWorkspacePath`:工具层的 `path`、模型显式给的
    * `project:D:/x`、面板 HTTP 写入都从这里落盘,同一个目录不能因为 `/` 与 `\` 的差别
@@ -3222,6 +3224,10 @@ export class LocalMemoryService                             {
       const canonical = canonicalWorkspacePath(path)
       return (canonical === path ? scope : `project:${canonical}`)               
     }
+    // 0.26.0:展示形式 `custom:<名字>` 与裸名是同一个作用域。旧数据(grants / visibility /
+    // bindings)里若留下过带前缀的键,读的时候自动折回真实键,不再出现"幽灵授权"。
+    const bare = normalizeScopeKey(scope)
+    if (bare !== scope) return (this.names.scopeOf(bare)                           ) ?? (bare               )
     return (this.names.scopeOf(scope)                           ) ?? scope
   }
 

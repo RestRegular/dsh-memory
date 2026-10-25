@@ -142,6 +142,30 @@ test('memory_scopes request：缺少 scopes / 超过 5 个 scope 明确拒绝', 
   )
 })
 
+test('memory_scopes request：展示前缀 custom:<名字> 自动归一，重复写法合并', async () => {
+  const result = await tool.execute({
+    action: 'request',
+    scopes: ['custom:handbook', 'handbook'],
+    reason: '展示名直接粘进来',
+    description: '验归一',
+  }, agentExec)
+  assert.deepEqual(result.results, [
+    { scope: 'handbook', permission: 'read', status: 'granted' },
+  ])
+})
+
+test('memory_scopes request：非法名字 / all 明确报错，不落幽灵授权', async () => {
+  await assert.rejects(
+    tool.execute({ action: 'request', scopes: ['foo:bar'], description: '非法名' }, agentExec),
+    (error: Error & { code?: string; message?: string }) => error.code === 'SCOPE_INVALID'
+      && /bare scope name/.test(error.message ?? ''),
+  )
+  await assert.rejects(
+    tool.execute({ action: 'request', scopes: ['all'], description: '申请全部' }, agentExec),
+    (error: Error & { code?: string }) => error.code === 'SCOPE_NOT_WRITABLE',
+  )
+})
+
 test('老 provider 没有 scopeCatalog 时明确报不支持', async () => {
   const old = memoryScopesTool({ getService: () => ({ save: async () => ({ id: 'x', scope: 'global' }), search: async () => [], forget: async () => ({ removed: 0, ids: [] }), list: async () => [] }) })
   await assert.rejects(

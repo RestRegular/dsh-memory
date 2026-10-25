@@ -2,6 +2,14 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.26.0 — 作用域参数接受 `custom:` 展示前缀：自动归一，不再写「幽灵授权」
+
+- **问题（真机复现）**：0.25.10 / 0.25.11 把所有工具输出、注入摘要与面板统一改成展示名 `<类型>:<名字>` 后，自定义作用域在 Agent 眼里只以 `custom:dsh-plugin-dev` 出现；但参数层只放行 `project:` / `session:` 两种前缀，`custom:` 属于键空间之外。于是 `memory_scopes request({ scopes: ['custom:dsh-plugin-dev'] })` 被 `canonicalScope` 原样收下、`grants.add` 只校验权限不校验键形态 —— 一条永远匹配不到记录的 grant 就这样落盘：申请结果渲染成 `custom:custom:dsh-plugin-dev → 已授予`（`scopeDisplayName` 对未知键无条件补 `custom:`），目录里又查不到（`scopeCatalog` 不含 grants），下一次 `memory_search` 重新弹审批。本机 `grants/session-91f4b9f7….json` 里同时躺着 `custom:dsh-plugin-dev` 与 `dsh-plugin-dev` 两条，相隔 35 秒。根因还包括：`memory_scopes request` 是唯一跳过 `normalizeScopeInput` 的作用域入口（其余工具都过 `resolveScope`）。
+- **输入层归一**：`normalizeScopeInput` 新增 `custom:` 分支 —— 剥一层前缀后仍按自定义名严格校验（`custom:` / `custom:foo:bar` / `custom:global` 仍 `SCOPE_INVALID`，错误文案提示 `pass the bare scope name`）。`memory_scopes request` 现在和其他工具一样走 `resolveScope`：`custom:handbook` 与 `handbook` 合并成一条申请，`all` 与非法名在弹审批前就明确报错。
+- **兜住旧数据**：`canonicalScope` 与 grants 解析用 `normalizeScopeKey` 把 `custom:` 折回裸键，0.25.x 写下的幽灵授权读取时自动生效，不用手工清理；`SessionGrantsStore.add` 落盘前用 `isWellFormedScopeKey` 卡形态；`scopeDefaultName` 对已带前缀的键幂等，不再渲染成 `custom:custom:...`。
+- **讲清楚**：注入的「记忆系统」常驻段新增作用域写法说明；`scope` / `memory_scopes.scopes` 的参数说明补「自定义作用域传裸名，展示名会自动归一」；`scope name must not contain ':'` 的错误补可操作提示。README 第 4 节补同口径说明。
+- 测试：新增 scope 归一 / 展示幂等 / grants 形态守卫 / 旧数据折回 / 工具端到端归一 / 非法名与 `all` 拒绝等 8 个用例；全套 518 tests / 517 pass / 1 skipped（`multiprocess.test.ts` 需真起子进程）。
+
 ## 0.25.14 — 侧边栏给等待记忆审批的会话显示黄点 /「待审批」
 
 - **问题**：范围外记忆审批以前只是插件自己画在 `conversation.input.dock` 的卡片；宿主的侧边栏会话列表并不认识它，所以工具在等审批时，那一行没有系统审批 / ask 工具那样的黄点，也不会被「待审批」水线自动顶出来。宿主这两类阻塞都来自 `ctx.uiSession` 的 pending-interaction 注册表（`dsh-client-ui-approval` 发 `kind:'approval'`，`dsh-client-ui-user-questions` 发 `kind:'question'`）。

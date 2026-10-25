@@ -12,6 +12,8 @@ memory_search 只返回印象（ID、作用域、类型、标签和少量摘要�
 
 需要长期使用范围外作用域时，用 memory_scopes 的 action="request" 申请本会话权限：默认只读，写权限必须在 permissions 里显式列出；审批卡默认只勾只读。批准后本会话（及子 Agent）可直接读写该作用域，不必每次审批；一次性访问仍直接调用 memory_search / memory_get。
 
+作用域参数怎么写：自定义作用域用**裸名**（dsh-plugin-dev）。工具输出、注入摘要与面板里看到的是展示名——custom:dsh-plugin-dev / project:<路径> / session:<id>；其中 project: 与 session: 可以直接当参数，custom: 前缀也会被自动归一成裸名，不必自己加，更不要叠成 custom:custom:...。memory_scopes 目录行形如 custom:handbook（handbook），括号里就是该传的参数。传 all 只能读，不能用于申请权限。
+
 新建自定义作用域时，memory_save 必须带 scopeDescription（一句话用途）；可选带 scopeRule 写一条初始规则。已有作用域带上 scopeDescription 表示更新用途，不会写初始记忆。
 
 同一会话里已经出现过的记忆，memory_search / memory_list 只回 ID 并注明“摘要因上下文去重被省略”；那不是没找到，需要正文时直接用 memory_get 取。

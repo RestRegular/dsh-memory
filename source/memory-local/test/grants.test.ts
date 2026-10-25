@@ -1,9 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LocalMemoryService } from '../src/index.ts'
+import { SessionGrantsStore } from '../src/grants.ts'
 import { ScopeMetaStore } from '../src/scope-meta.ts'
 import { memoryScopesTool } from '../../tool-memory/src/index.ts'
 
@@ -323,5 +324,74 @@ test('子 Agent 也能收到父会话的权限变更通知', async () => {
     assert.equal(svc.takePermissionNotice(agent('s1')), undefined, '通知被取走一次')
   } finally {
     done()
+  }
+})
+
+test('0.26.0：展示前缀 custom:<名字> 归一，不再写幽灵 grant', async () => {
+  const { svc, done } = makeService()
+  try {
+    await seedScope(svc)
+    svc.requestOutOfScope = async () => ({ outcome: 'allowed-once' })
+    // provider 层（面板 / HTTP 也会走这里）
+    const viaService = await svc.requestScopeGrants(agent(), {
+      requests: [{ scope: 'custom:handbook', permissions: ['read'] }],
+      reason: '展示名直接粘进来',
+    })
+    assert.deepEqual(viaService.results, [{ scope: 'handbook', permission: 'read', status: 'granted' }])
+    assert.equal(viaService.grants[0]!.scope, 'handbook', '落盘的是裸键')
+    assert.equal(svc.authorize(agent(), { scope: 'handbook', action: 'read' }).allowed, true)
+
+    // 工具层：同一个作用域的两种写法合并成一条，不会申请两次
+    const tool = memoryScopesTool({ getService: () => svc as never })
+    const viaTool = await tool.execute({
+      action: 'request',
+      scopes: ['custom:handbook', 'handbook'],
+      reason: '再申请一次',
+      description: '归一路径',
+    } as never, { agent: agent() })
+    assert.deepEqual((viaTool as { results: unknown }).results, [
+      { scope: 'handbook', permission: 'read', status: 'already-granted' },
+    ])
+    assert.equal(svc.grantList(agent()).length, 1, '还是同一条 grant')
+  } finally {
+    done()
+  }
+})
+
+test('0.26.0：旧 grants 文件里的 custom: 前缀在读取时折回真实键', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-grants-legacy-'))
+  try {
+    mkdirSync(join(dir, 'grants'), { recursive: true })
+    writeFileSync(join(dir, 'grants', 's1.json'), `${JSON.stringify({
+      version: 1,
+      sessionId: 's1',
+      grants: [{
+        id: 'g-legacy',
+        scope: 'custom:handbook',
+        permissions: ['read'],
+        duration: 'session',
+        sessionId: 's1',
+        grantedBy: 'user',
+        grantedAt: Date.now(),
+      }],
+    }, null, 2)}\n`, 'utf8')
+    const svc = new LocalMemoryService({ storeDir: dir })
+    assert.deepEqual(svc.grantList(agent()).map((grant) => grant.scope), ['handbook'])
+    assert.equal(svc.authorize(agent(), { scope: 'handbook', action: 'read' }).allowed, true, '旧授权重新生效')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('0.26.0：grant 落盘前拒绝形态非法的键', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-grants-guard-'))
+  try {
+    const store = new SessionGrantsStore({ root: dir })
+    assert.throws(() => store.add('s1', { scope: 'foo:bar', permissions: ['read'] }), /malformed/)
+    assert.throws(() => store.add('s1', { scope: 'custom:  ', permissions: ['read'] }), /malformed/, '空名字不算合法键')
+    // 展示前缀本身是先归一再校验的，所以合法名字仍然能落盘
+    assert.equal(store.add('s1', { scope: 'custom:handbook', permissions: ['read'] }).scope, 'handbook')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })

@@ -9,7 +9,9 @@ import assert from 'node:assert/strict'
 import {
   MAX_SCOPE_NAME_CHARS,
   isCustomScope,
+  isWellFormedScopeKey,
   normalizeScopeInput,
+  normalizeScopeKey,
   resolveCurrentScopes,
   resolveScopeRef,
   scopeDisplayName,
@@ -235,4 +237,39 @@ test('作用域展示名带类型前缀(global / project / session / custom)', (
   for (const scope of ['global', 'project:/w', 'session:s1', 'handbook']) {
     assert.match(scopeDisplayName(scope), /^(global|project|session|custom):/)
   }
+})
+
+test('normalize: 展示前缀 custom:<名字> 归一成裸名(0.26.0)', () => {
+  // 0.25.10 起工具输出 / 注入摘要都用 custom:<名字> 渲染,模型照抄回来时必须落到
+  // 同一个键上,而不是造出一个永远匹配不到记录的 "custom:dsh-plugin-dev"。
+  assert.equal(ok('custom:handbook').scope, 'handbook')
+  assert.equal(ok('custom:handbook').kind, 'custom')
+  assert.equal(ok('Custom:Handbook').scope, 'handbook', '前缀大小写不敏感,名字仍折叠成小写')
+  assert.equal(ok('custom:  团队 笔记 ').scope, '团队 笔记')
+  // 只剥一层,剩下的部分仍按自定义名严格校验
+  bad('custom:', /followed by a scope name/)
+  bad('custom:foo:bar', /':'/)
+  bad('custom:a/b', /path separators/)
+  bad('custom:global', /reserved/)
+})
+
+test('normalizeScopeKey / isWellFormedScopeKey: 展示键 vs 真实键', () => {
+  assert.equal(normalizeScopeKey(' custom:handbook '), 'handbook')
+  assert.equal(normalizeScopeKey('handbook'), 'handbook')
+  assert.equal(normalizeScopeKey('project:/w'), 'project:/w', '不影响项目键')
+  assert.equal(normalizeScopeKey('session:s1'), 'session:s1')
+  assert.equal(normalizeScopeKey('custom:'), 'custom:', '空名字不猜,原样返回')
+
+  assert.equal(isWellFormedScopeKey('handbook'), true)
+  assert.equal(isWellFormedScopeKey('custom:handbook'), false, '展示前缀不是合法键')
+  assert.equal(isWellFormedScopeKey('global'), true)
+  assert.equal(isWellFormedScopeKey('project:/w'), true)
+  assert.equal(isWellFormedScopeKey('project:'), false)
+  assert.equal(isWellFormedScopeKey('session:'), false)
+  assert.equal(isWellFormedScopeKey('foo:bar'), false)
+})
+
+test('展示名对旧数据的 custom: 键是幂等的(不叠成 custom:custom:)', () => {
+  assert.equal(scopeDisplayName('custom:handbook'), 'custom:handbook')
+  assert.equal(scopeDisplayName('custom:handbook', '工作笔记'), 'custom:工作笔记')
 })

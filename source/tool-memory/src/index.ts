@@ -258,6 +258,8 @@ export interface MemoryToolsOptions {
 const SCOPE_DESCRIPTION =
   "省略=当前会话；'global'=所有项目共享；'project'=当前工作区；其他任意名称=自定义作用域"
   + "(memory_save 时不存在则自动创建；由 Agent 创建时必须同时提供 scopeDescription 说明用途)。"
+  + "自定义作用域按裸名传（如 'dsh-plugin-dev'）；工具输出 / 摘要里看到的展示名 "
+  + "'custom:<名字>' 会被自动归一成裸名，不用自己加前缀。"
   + "读取时可用 'all' 跨所有作用域。"
 
 export class MemoryToolError extends Error {
@@ -694,6 +696,15 @@ function readScopes(opts: MemoryToolsOptions, service: MemoryToolService, agent:
   // 服务没提供(测试 mock / 旧 provider):退回 defaultScope 口径
   const fallback = opts.defaultScope === 'global' ? 'global' : projectKey(opts, service, agent)
   return [...new Set([fallback, 'global'])]
+}
+
+/**
+ * 当前会话的 scope 键(拿不到会话就 undefined)。给显式写成裸 `session` 的
+ * 请求兜底 —— `resolveScope` 在读路径上会把它解析成"合并集合",申请权限时必须
+ * 落到一个具体键。
+ */
+function currentSessionScope(service: MemoryToolService, exec: unknown): MemoryScope | undefined {
+  return service.resolveReadScopes?.(agentOf(exec))?.find((scope) => scope.startsWith('session:'))
 }
 
 /** 写路径默认口径;provider 不支持时退回 project。 */
@@ -1420,7 +1431,7 @@ export function memoryScopesTool(opts: MemoryToolsOptions): ToolSpec<ScopesArgs,
       scopes: {
         type: 'array',
         items: { type: 'string' },
-        description: 'request：要申请的作用域键，最多 5 个（一次申请多个时共用同一组 permissions）',
+        description: 'request：要申请的作用域，最多 5 个（一次申请多个时共用同一组 permissions）；自定义作用域传裸名，如 "dsh-plugin-dev"（"custom:dsh-plugin-dev" 会自动归一）',
       },
       permissions: {
         type: 'array',
@@ -1439,15 +1450,31 @@ export function memoryScopesTool(opts: MemoryToolsOptions): ToolSpec<ScopesArgs,
         if (typeof service.requestScopeGrants !== 'function') {
           throw new MemoryToolError('SCOPES_UNAVAILABLE', '当前 provider 不支持作用域权限申请（请升级 @restregular/dsh-memory）')
         }
-        const scopes = Array.isArray(args.scopes)
-          ? [...new Set(args.scopes.map((scope) => String(scope).trim()).filter((scope) => scope !== ''))]
+        const rawScopes = Array.isArray(args.scopes)
+          ? args.scopes.map((scope) => String(scope).trim()).filter((scope) => scope !== '')
           : []
-        if (scopes.length === 0) {
+        if (rawScopes.length === 0) {
           throw new MemoryToolError('REQUESTS_REQUIRED', 'action="request" 需要 scopes 数组（要申请的作用域键）')
         }
-        if (scopes.length > 5) {
+        // 0.26.0:作用域参数先过与其他 memory_* 相同的规范层。展示形式 `custom:<名字>`
+        // 归一成裸名;非法名 / 'all' 在这里明确报错,而不是把 "custom:dsh-plugin-dev"
+        // 这类键原样写进 grants —— 那种授权永远匹配不到记录,却会显示"已授予"。
+        const normalizedScopes: string[] = []
+        for (const raw of rawScopes) {
+          const resolved = resolveScope(opts, service, exec, raw, 'read')
+          if (resolved.all === true) {
+            throw new MemoryToolError('SCOPE_NOT_WRITABLE', "scope 'all' cannot be requested; name one scope")
+          }
+          const scope = resolved.scope ?? currentSessionScope(service, exec)
+          if (scope === undefined) {
+            throw new MemoryToolError('SCOPE_INVALID', `scope "${raw}" could not be resolved; use a concrete scope name (e.g. 'dsh-plugin-dev')`)
+          }
+          if (!normalizedScopes.includes(scope)) normalizedScopes.push(scope)
+        }
+        if (normalizedScopes.length > 5) {
           throw new MemoryToolError('REQUESTS_TOO_MANY', '一次最多申请 5 个作用域；请分批申请')
         }
+        const scopes = normalizedScopes
         const permissions = Array.isArray(args.permissions)
           ? [...new Set(args.permissions.filter((permission): permission is 'read' | 'write' => permission === 'read' || permission === 'write'))]
           : ['read' as const]

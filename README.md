@@ -39,7 +39,7 @@ JSONL 落盘 · 本机向量检索 · 五个模型工具 · 自动召回 · 硬�
 
 | 能力 | 说明 |
 | --- | --- |
-| **六个工具** | `memory_save` / `memory_search` / `memory_list` / `memory_get` / `memory_forget` / `memory_scopes`。`memory_search` 只回印象（8 位 id / 作用域 / 类型 / 标签 / 短摘要），正文和元数据用 `memory_get` 的 `fields` 按需取；同一会话里已出现过的条目只回 id。`description` 字段在普通限制下必填，审批卡会展示它。`memory_scopes` 只读目录：给作用域名字 / 用途 / 当前可读可写状态，不返回任何正文 |
+| **六个工具** | `memory_save` / `memory_search` / `memory_list` / `memory_get` / `memory_forget` / `memory_scopes`。`memory_search` 只回印象（8 位 id / 作用域 / 类型 / 标签 / 短摘要），正文和元数据用 `memory_get` 的 `fields` 按需取；同一会话里已出现过的条目只回 id。`description` 字段在普通限制下必填，审批卡会展示它。`memory_scopes` 只读目录：给作用域名字 / 用途 / 当前可读可写状态，不返回任何正文。**作用域参数传裸名**（`handbook`）：0.26.0 起工具输出里的展示名 `custom:handbook` 粘进参数会被自动归一，`project:` / `session:` 本来就直接可用 |
 | **四种作用域** | 会话 / 项目 / `global` / 自定义名。默认写进当前会话，读默认合并会话 + 项目 + global；项目作用域可起别名。自定义作用域**首次由 Agent 创建时必须带 `scopeDescription`**（一句话用途），可选带 `scopeRule` 写一条初始规则；元数据存在 `<storeDir>/scope-meta/`，删光记录也不会丢 |
 | **作用域目录与绝对隔离** | `memory_scopes` 列出范围内 / 范围外的名字与用途；normal / none 下还带**初始化记录正文**（每个作用域最多 3 条，方便 Agent 直接读到“这个作用域主要放什么”）。绝对限制下范围外作用域**仍可发现**，但正文（含初始记录）永不可读、不可写、不可申请（没有任何审批放行路径）；普通限制下范围外条目可申请，`memory_scopes request` 走审批后写入**本会话**授权（默认只读，写权限必须单独申请），子 Agent 沿父会话继承 |
 | **会话授权（grants）** | Agent 申请、用户批准的例外单独存在 `<storeDir>/grants/<session>.json`，不并入可见域策略；只读 / 可写独立、可撤销、只在本会话（及子 Agent）生效；`absolute` 下授权不生效，作用域被删除重建后按创建代次自动失效 |
@@ -93,6 +93,7 @@ JSONL 落盘 · 本机向量检索 · 五个模型工具 · 自动召回 · 硬�
 - **默认范围**：没有显式设置时（新会话）按默认设置生效 —— **当前会话 + 当前项目 + global + 已绑定的作用域** + **普通限制**；面板按同一份默认范围预选，不会出现空面板。
 - **本会话那一行的名字**（0.25.8）：本会话 `session:<id>` 那一行固定显示「**当前会话**」（0.25.10 起叫 `session:当前会话`，原始 scope 键仍在 `title` 里），别的会话的 scope 仍按标题 / 短 id 显示；搜索也按显示名匹配，输入「当前会话」即可筛到这一行。
 - **作用域名字带类型前缀**（0.25.10）：所有展示名都以 `global:` / `project:` / `session:` / `custom:` 开头 —— `global:全局`、`project:D:\repositories\dsh-memory`、`session:session-1a2b3c4d`、`custom:handbook`。**global 与自定义作用域最容易被漏掉**：它们的 scope 键本身没有前缀（`global` 是个关键字、自定义就是裸名字），前缀必须按类型补。项目 / 自定义作用域有别名时是 `project:<别名>` / `custom:<别名>`，会话有标题时是 `session:<标题>(session-1a2b3c4d)`。
+- **参数仍传裸名**（0.26.0）：展示名只用于显示。Agent 把 `custom:handbook` 直接粘进作用域参数时会被**自动归一**成 `handbook`（不再是另一条永远匹配不到记录的授权）；`custom:` 后面仍必须是合法自定义名，`custom:` / `custom:foo:bar` / `custom:global` 都会被 `SCOPE_INVALID` 拒绝。旧 grants 文件里遗留的 `custom:` 键在读取时也会折回裸键。
 - **会话作用域的短 id**（0.25.9）：会话 id 取**前 16 位**（`session-` + 8 位 uuid）。以前取前 8 位，而真机会话 id 恰好以 `session-` 开头（正好 8 个字符），结果所有会话作用域都显示成同一个名字——等于没给 id。
 - **浮窗里能直接看到真实键**（0.25.11）：显示名与真实键不一致时（项目别名 → 完整路径、会话短 id → 完整 uuid、自定义名 → 裸键），每行名称下面多一行等宽的完整键；**不做手工截断**，放不下就按容器宽度用 CSS 省略号收尾，窗口宽就多显示几个字符。键行是等宽小字、和勾选框左对齐。记录卡 / 记忆树 / 审批卡的作用域徽标都在 `title` 里给出「显示名 → 真实键」。
 - **搜索与批量**：顶部可搜索作用域，支持「全选 / 取消全选」；列表最大高度受限，作用域多时在浮窗内滚动。**整张作用域卡片都能点**（0.25.7 起）——点名称、记录数或行内留白等同点勾选框，只有行内的按钮（勾选框 / 绑定 / 可读 / 可写）各管各的，点它们不会再多切换一次。
@@ -242,6 +243,13 @@ memory_forget({ "id": "3f2a9c1d", "description": "删除过期的临时结论" }
 | `handbook`、`项目笔记` … | 自定义作用域，首次 `memory_save` 自动创建（Agent 创建时必须带 `scopeDescription`） |
 | `session:<id>` / `project:<path>` | 显式钉住某个会话 / 工作区 |
 | `all` / `*` | **只在读取时可用**：跨所有已发现作用域 |
+
+**参数写法与展示名（0.26.0）**：自定义作用域传**裸名**（`handbook`）。工具输出 / 注入摘要 / 面板里看到的
+`custom:handbook` 是展示名——直接粘进参数也会被自动归一（剥一层 `custom:`），不会再写成一条匹配不到记录的
+「幽灵授权」；归一后剩下的部分仍按自定义名严格校验（`custom:foo:bar`、`custom:` 都是 `SCOPE_INVALID`，
+`custom:global` 这种包保留名的写法同样拒绝）。`project:` / `session:` 本来就既是展示名也是参数键。
+`memory_scopes` 目录行形如 `custom:handbook（handbook）`，括号里就是该传的键；旧 grants 文件里遗留的
+`custom:` 键在读取时也会自动折回裸键，不需要手工清理。
 
 项目作用域的身份永远是 `project:<绝对路径>`，别名只影响显示与引用，不迁移数据。
 同一路径重复用同一个名字是幂等的；换名字会覆盖原别名；另一个路径抢同一个名字会被拒绝
@@ -456,6 +464,8 @@ retrieval:
 scope 键有三种形态：`global`、`project:<cwd>`、`session:<会话 id>`，其余是自定义名
 （小写折叠、内部空白折成一个空格、最长 64 字符，禁止 `:`、路径分隔符、控制字符、`..`
 与保留名 `global/project/session/all`）。**没有任何数据迁移**：旧的 `project:<cwd>` 文件继续原样读写。
+展示用的 `custom:<名字>` 不是键：0.26.0 起参数里粘进来会被自动剥掉一层前缀（`custom:` 后面仍是
+合法自定义名才行），旧的 grants / 可见范围里遗留的 `custom:` 键读取时也折回裸键。
 
 `installRoot` 默认 `~/.dsh/memory-vector`；显式配了 `storeDir` 时取它的父目录。
 
