@@ -130,7 +130,7 @@ test('0.19.1 起记忆类型不再细化:提交的 kinds 被忽略,同 scope 的
   assert.equal(got.records.length, 1, '同 scope 的事实仍可读')
 })
 
-test('普通限制:范围外命中会发起一次审批;允许后返回、拒绝后隐藏', async () => {
+test('普通限制:范围外命中默认只给索引;requestApproval=true 才审批', async () => {
   await svc.save({ scope: 'global', kind: 'fact', content: '全局发布流程 beta' })
   await svc.save({ scope: PROJECT, kind: 'fact', content: '项目发布流程 beta' })
   svc.setSessionVisibility('s1', { scopes: [{ scope: PROJECT }], level: 'normal' })
@@ -142,7 +142,15 @@ test('普通限制:范围外命中会发起一次审批;允许后返回、拒绝
     calls.push(input)
     return 'allowed-once'
   }
-  const allowed = await search.execute({ query: 'beta' }, agentCtx)
+  // 0.27.0:默认不发审批,global 命中以索引给出(withheld=out-of-scope)。
+  const indexed = await search.execute({ query: 'beta' }, agentCtx)
+  assert.deepEqual([...new Set(indexed.records.map((r) => r.scope))].sort(), [PROJECT].sort())
+  assert.deepEqual(indexed.outOfScope?.scopes, [{ scope: 'global', records: 1 }])
+  assert.equal(indexed.withheld?.reason, 'out-of-scope')
+  assert.equal(calls.length, 0)
+
+  // 显式要求审批:允许后 global 并入 records(0.26 及以前的行为)。
+  const allowed = await search.execute({ query: 'beta', requestApproval: true }, agentCtx)
   assert.deepEqual([...new Set(allowed.records.map((r) => r.scope))].sort(), ['global', PROJECT].sort())
   assert.equal(calls.length, 1)
   assert.equal((calls[0] as { tool: string }).tool, 'memory_search')
@@ -150,10 +158,11 @@ test('普通限制:范围外命中会发起一次审批;允许后返回、拒绝
   assert.equal(allowed.withheld, undefined)
 
   svc.requestOutOfScope = async () => 'rejected'
-  const denied = await search.execute({ query: 'beta' }, agentCtx)
+  const denied = await search.execute({ query: 'beta', requestApproval: true }, agentCtx)
   assert.deepEqual([...new Set(denied.records.map((r) => r.scope))], [PROJECT])
   assert.equal(denied.withheld?.reason, 'rejected')
   assert.ok((denied.withheld?.count ?? 0) >= 1)
+  assert.deepEqual(denied.outOfScope?.scopes, [{ scope: 'global', records: 1 }], '被拒的命中仍以索引给出')
 })
 
 test('无限制:不做范围过滤,也不发起审批', async () => {
@@ -240,16 +249,23 @@ test('新会话默认可见域:会话 + 项目 + global,普通限制;范围外�
   assert.deepEqual(plain.records.map((r) => r.scope), ['global'])
   assert.equal(asked, 0, '默认检索不主动搜范围外')
 
-  // 显式 all 才会碰到范围外;拒绝时把真实原因告诉模型。
+  // 显式 all 会碰到范围外:默认只给索引,不发审批。
   const denied = await search.execute({ query: '默认策略', scope: 'all' }, agentCtx)
   assert.deepEqual(denied.records.map((r) => r.scope), ['global'])
+  assert.equal(asked, 0, '0.27.0 起范围外命中默认不弹审批')
+  assert.deepEqual(denied.withheld, { count: 1, reason: 'out-of-scope' })
+  assert.deepEqual(denied.outOfScope?.scopes, [{ scope: 'other-project', records: 1 }])
+
+  // requestApproval=true → 拒绝时把真实原因告诉模型。
+  const rejected = await search.execute({ query: '默认策略', scope: 'all', requestApproval: true }, agentCtx)
+  assert.deepEqual(rejected.records.map((r) => r.scope), ['global'])
   assert.equal(asked, 1)
-  assert.equal(denied.withheld?.reason, 'rejected')
-  assert.ok((denied.withheld?.count ?? 0) >= 1)
+  assert.equal(rejected.withheld?.reason, 'rejected')
+  assert.ok((rejected.withheld?.count ?? 0) >= 1)
 
   // 允许一次 → 范围外记录也返回。
   svc.requestOutOfScope = async () => 'allowed-once'
-  const allowed = await search.execute({ query: '默认策略', scope: 'all' }, agentCtx)
+  const allowed = await search.execute({ query: '默认策略', scope: 'all', requestApproval: true }, agentCtx)
   assert.deepEqual(
     [...new Set(allowed.records.map((r) => r.scope))].sort(),
     ['global', 'other-project'].sort(),

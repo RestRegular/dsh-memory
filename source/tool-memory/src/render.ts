@@ -8,6 +8,8 @@
  * 0.20.0：范围外命中被挡住时，把**真实原因**（用户拒绝 / 审批超时 / 无法审批）
  * 写进渲染文本。
  * 0.23.0：绝对限制与「不可读」开关也会被说明（不再假装"不存在"），并提示怎么调整。
+ * 0.27.0：普通限制下范围外命中不再自动弹审批 —— 检索结果带 outOfScope 索引
+ * （命中作用域聚合 + 条目印象，不含正文），审批改为 Agent 显式发起。
  */
 import type { GetResult, GetField, ListResult, ScopesResult, ScopesToolResult, SearchResult, WithheldReason } from './index.ts'
 import { scopeDisplayName } from '../../memory-local/src/scope.ts'
@@ -40,6 +42,8 @@ export function renderWithheldNote(withheld: WithheldInfo | undefined): string {
   if (withheld === undefined || withheld.count <= 0) return ''
   const count = withheld.count
   switch (withheld.reason) {
+    case 'out-of-scope':
+      return `另有 ${count} 条记忆在本会话的可见域外（限制等级：普通限制）。本次没有弹审批，它们的索引已列在下方 outOfScope 里；确认其中确有需要的内容后，用 memory_search 带 requestApproval=true 显式发起审批，或用 memory_scopes 申请该作用域的会话权限。`
     case 'rejected':
       return `另有 ${count} 条记忆在本会话的可见域外，用户拒绝了本次访问（限制等级：普通限制），未返回。如确实需要，请让用户调整「记忆范围」后重试。`
     case 'timeout':
@@ -59,12 +63,39 @@ export function renderWithheldNote(withheld: WithheldInfo | undefined): string {
   }
 }
 
+/**
+ * 范围外索引的尾部说明(0.27.0)。告诉模型这块是「目录印象」不是可读正文,
+ * 以及想读时该走哪条路。
+ */
+export const OUT_OF_SCOPE_INDEX_NOTE =
+  '以上为范围外记忆的索引（不含正文）。需要正文时：用 memory_search 带 requestApproval=true 重新发起同一次搜索（会弹审批），或用 memory_scopes(action="request") 申请该作用域的本会话权限。'
+
+/**
+ * 范围外索引块：命中作用域聚合 + 条目印象。刻意与可见域内的结果分开排版,
+ * 模型一眼能分清「哪些已返回、哪些只是线索」。
+ */
+function renderOutOfScopeIndex(
+  outOfScope: NonNullable<SearchResult['outOfScope']>,
+  label: ScopeLabel,
+): string {
+  const scopes = outOfScope.scopes.map((item) => `${label(item.scope)}(${item.records})`).join('、')
+  const lines = outOfScope.records.map((entry) => {
+    const tags = joinList(entry.tags)
+    const meta = `${label(entry.scope)}/${entry.kind}${tags === '' ? '' : ` · ${tags}`}`
+    return `[${entry.score.toFixed(3)}] ${shortId(entry.id)} (${meta}) ${entry.summary}`
+  })
+  return [`范围外命中：${scopes}`, ...lines, '', OUT_OF_SCOPE_INDEX_NOTE].join('\n')
+}
+
 /** 「[得分] id (作用域/类型 · 标签) 摘要」；没有任何一条命中时给明确空结果。 */
 export function renderSearchResult(value: SearchResult, label: ScopeLabel): string {
   const note = renderWithheldNote(value.withheld)
+  const index = value.outOfScope !== undefined && (value.outOfScope.records.length > 0 || value.outOfScope.scopes.length > 0)
+    ? renderOutOfScopeIndex(value.outOfScope, label)
+    : ''
   if (value.records.length === 0) {
-    if (note === '') return '没有找到相关记忆。'
-    return `没有找到可见范围内的相关记忆。\n${note}`
+    if (note === '' && index === '') return '没有找到相关记忆。'
+    return [`没有找到可见范围内的相关记忆。`, index, note].filter((part) => part !== '').join('\n\n')
   }
   // 已出现过的条目(上下文去重)只回 id：不带作用域/类型/标签/摘要。
   // 它们单独成块、与带摘要的条目之间空一行 —— 否则一串裸 id 看起来像上一条的
@@ -81,7 +112,7 @@ export function renderSearchResult(value: SearchResult, label: ScopeLabel): stri
     shown.push(`[${hit.score.toFixed(3)}] ${shortId(hit.id)} (${meta}) ${hit.summary}`)
   }
   const body = [shown.join('\n'), bare.join('\n')].filter((part) => part !== '').join('\n\n')
-  const tail = [bare.length > 0 ? DEDUPE_NOTE : '', note].filter((part) => part !== '').join('\n\n')
+  const tail = [bare.length > 0 ? DEDUPE_NOTE : '', index, note].filter((part) => part !== '').join('\n\n')
   return tail === '' ? body : `${body}\n\n${tail}`
 }
 

@@ -292,6 +292,20 @@ export function scopeDisplayName(scope: ScopeKey, humanName?: string): string {
   return `${scopeTypePrefix(scope)}${name}`
 }
 
+/**
+ * 0.27.0：内置作用域的**默认用途描述**。scope-meta 里没写过 description 时，
+ * 作用域目录（memory_scopes list）用它兜底，让每类作用域条目都带一句
+ * 「这个域是干什么的」，而不是统一的「（未填写用途）」。
+ * 自定义作用域的用途应该由创建者写（memory_save 的 scopeDescription），
+ * 这里只给最通用的说明。
+ */
+export function defaultScopeDescription(scope: ScopeKey): string {
+  if (scope === 'global') return '全局作用域：跨项目共享的通用事实与偏好；适合放与具体仓库无关的长期记忆。'
+  if (scope.startsWith('project:')) return '项目作用域：绑定当前工作区路径的共享记忆；同一路径下的所有会话可读写。'
+  if (scope.startsWith('session:')) return '会话作用域：仅本会话可见的过程记忆；换会话后经目录发现、不默认读取。'
+  return '自定义作用域：按名字聚合的跨会话记忆；创建时建议用 memory_save 的 scopeDescription 写明用途。'
+}
+
 /** 写路径遇到只读 scope 时的错误码('all' 不能写)。 */
 export const SCOPE_NOT_WRITABLE = 'SCOPE_NOT_WRITABLE'
 

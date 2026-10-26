@@ -262,7 +262,7 @@ test('默认检索合并会话 + 项目 + global,并按 record id 去重', async
   }
 })
 
-test('scope:all 跨全部已发现 scope;显式 scope 只查那一个', async () => {
+test('scope:all 跨全部已发现 scope;范围外只给索引,显式审批后可读', async () => {
   const dir = tempDir()
   const svc = newService(dir)
   try {
@@ -270,9 +270,21 @@ test('scope:all 跨全部已发现 scope;显式 scope 只查那一个', async ()
     await svc.save({ scope: SESSION, kind: 'note', content: 'sqlite 迁移 会话' })
     await svc.save({ scope: 'handbook', kind: 'note', content: 'sqlite 迁移 手册' })
     const tools = toolsFor(svc)
+    // 0.27.0:范围外命中默认不弹审批,只回索引(withheld=out-of-scope)。
     const all = await tools.memory_search.execute({ query: 'sqlite 迁移', scope: 'all' }, { agent: agent('sess-1') })
-    assert.deepEqual(all.records.map((r) => r.scope).sort(), [SESSION, 'handbook'].sort())
-    const pinned = await tools.memory_search.execute({ query: 'sqlite 迁移', scope: 'handbook' }, { agent: agent('sess-1') })
+    assert.deepEqual(all.records.map((r) => r.scope), [SESSION])
+    assert.deepEqual(all.outOfScope?.scopes, [{ scope: 'handbook', records: 1 }])
+    assert.deepEqual(all.withheld, { count: 1, reason: 'out-of-scope' })
+    // 显式要求审批(0.26 及以前的行为):provider 的 mock 放行 → 命中并入 records。
+    const approved = await tools.memory_search.execute(
+      { query: 'sqlite 迁移', scope: 'all', requestApproval: true },
+      { agent: agent('sess-1') },
+    )
+    assert.deepEqual(approved.records.map((r) => r.scope).sort(), [SESSION, 'handbook'].sort())
+    const pinned = await tools.memory_search.execute(
+      { query: 'sqlite 迁移', scope: 'handbook', requestApproval: true },
+      { agent: agent('sess-1') },
+    )
     assert.deepEqual(pinned.records.map((r) => r.scope), ['handbook'])
   } finally {
     svc.flushSync()

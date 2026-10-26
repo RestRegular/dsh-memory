@@ -76,15 +76,28 @@ test('absolute：search 不发起审批，withheld=absolute', async () => {
   assert.equal(h.asked, 0, 'absolute 下不能弹审批')
 })
 
-test('normal：范围外 search 会发起一次审批，拒绝后 withheld=rejected', async () => {
+test('normal：范围外 search 默认只给索引，不发起审批（0.27.0）', async () => {
   const h = harness(NORMAL, {
     'read:global': { allowed: true, requestable: false },
     'read:handbook': { allowed: false, reason: 'SCOPE_NOT_IN_RANGE', requestable: true },
   }, 'search')
   const result = await h.tool.execute({ query: '记忆', description: '查记忆' }, agentExec)
   assert.equal(result.records.length, 1)
+  assert.deepEqual(result.withheld, { count: 1, reason: 'out-of-scope' })
+  assert.equal(h.asked, 0, '默认不弹审批')
+  assert.deepEqual(result.outOfScope?.scopes, [{ scope: 'handbook', records: 1 }])
+})
+
+test('normal：requestApproval=true 发起审批，拒绝后 withheld=rejected 且索引保留', async () => {
+  const h = harness(NORMAL, {
+    'read:global': { allowed: true, requestable: false },
+    'read:handbook': { allowed: false, reason: 'SCOPE_NOT_IN_RANGE', requestable: true },
+  }, 'search')
+  const result = await h.tool.execute({ query: '记忆', description: '查记忆', requestApproval: true }, agentExec)
+  assert.equal(result.records.length, 1)
   assert.deepEqual(result.withheld, { count: 1, reason: 'rejected' })
   assert.equal(h.asked, 1)
+  assert.deepEqual(result.outOfScope?.scopes, [{ scope: 'handbook', records: 1 }], '被拒的命中仍以索引给出')
 })
 
 test('absolute：memory_save 直接拒绝，不弹审批', async () => {

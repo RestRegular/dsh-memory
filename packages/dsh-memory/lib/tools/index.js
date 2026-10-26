@@ -62,11 +62,12 @@ import { canonicalWorkspacePath, normalizeScopeInput, resolveScopeRef } from '..
 
 /**
  * 被可见域挡住、没有返回给模型的原因。
+ *   - out-of-scope = 普通限制下「作用域不在范围内」，检索默认不自动弹审批（0.27）;
  *   - rejected / timeout / unavailable / partial = 普通限制审批的结局;
  *   - absolute = 绝对限制下作用域根本不在范围内(0.23 起不再假装"不存在");
  *   - read-disabled = 作用域在范围内但「可读」开关被关掉(0.23)。
  */
-                                                                                                                                 
+                                                                                                                                                  
 
                                      
                
@@ -459,6 +460,27 @@ function withheldReasonFor(
   if (reasons.includes('absolute')) return 'absolute'
   if (reasons.includes('scope-disabled')) return 'scope-disabled'
   return 'read-disabled'
+}
+
+/**
+ * 0.27.0：普通限制下**没有发起审批**的范围外命中给模型的原因。
+ * 与 withheldReasonFor 的差别：「整个作用域不在范围内」（普通限制下本可审批、
+ * 现在只给索引）不再报成 read-disabled，而是 'out-of-scope'；
+ * absolute / read-disabled / scope-disabled 照旧如实聚合。
+ */
+function outOfScopeReason(
+  decide              ,
+  policy                                  ,
+  denied                                                ,
+)                             {
+  if (denied.length === 0) return undefined
+  const reasons = denied.map((item) => readDenyReason(decide, policy, item.scope, item.kind))
+  if (reasons.includes('absolute')) return 'absolute'
+  if (reasons.includes('scope-disabled')) return 'scope-disabled'
+  // readDenyReason 把「SCOPE_NOT_IN_RANGE + 普通限制」也归成 read-disabled；
+  // 这里按"作用域是否在范围里"细分：不在范围 = out-of-scope（可申请）。
+  const hasOutOfScope = denied.some((item) => !scopeInPolicy(policy, item.scope))
+  return hasOutOfScope ? 'out-of-scope' : 'read-disabled'
 }
 
 /**
@@ -973,6 +995,12 @@ function applySummaryDedupe(opts                    , exec         , records    
                        
                                       
                       
+     
+                                              
+                                              
+                                          
+     
+                           
  
 
                             
@@ -991,6 +1019,22 @@ function applySummaryDedupe(opts                    , exec         , records    
                    
  
 
+/**
+ * 0.27.0：范围外命中的**记忆索引**（不含正文）。普通限制下检索不再自动弹审批，
+ * 而是给模型一个「范围外有哪些作用域、命中了什么条目」的目录印象；
+ * 要读正文时由 Agent 用 requestApproval=true 显式发起审批，或走 memory_scopes request。
+ */
+                                       
+            
+               
+               
+              
+                
+                   
+                                  
+                 
+ 
+
                                
                       
      
@@ -998,12 +1042,17 @@ function applySummaryDedupe(opts                    , exec         , records    
                                           
      
                                                       
+     
+                                  
+                                    
+     
+                                                                                                     
  
 
 export function memorySearchTool(opts                    )                                     {
   return {
     name: 'memory_search',
-    description: 'Search saved memories by keyword or meaning (lexical + local vector recall). Returns id/scope/kind/tags and a short summary; use memory_get for full content.',
+    description: 'Search saved memories by keyword or meaning (lexical + local vector recall). Returns id/scope/kind/tags and a short summary; use memory_get for full content. Out-of-scope hits return an index (outOfScope field) instead of auto-raising approval; pass requestApproval=true only after confirming the index holds what you need.',
     parameters: {
       query: { type: 'string', required: true },
       scope: { type: 'string', description: SCOPE_DESCRIPTION },
@@ -1011,6 +1060,7 @@ export function memorySearchTool(opts                    )                      
       includeSuperseded: { type: 'boolean', description: '默认 false；true 时把已被 supersede 的旧版本也返回（历史核对）' },
       summaryChars: { type: 'number', description: `每条摘要的字数上限（默认 ${DEFAULT_SUMMARY_CHARS}，20~2000）` },
       description: { type: 'string', description: DESCRIPTION_PARAM_DESCRIPTION },
+      requestApproval: { type: 'boolean', description: '默认 false：范围外命中只返回索引（outOfScope 字段），不自动弹审批；true = 立即向用户发起审批，允许的条目并入 records。确认索引里有值得读的内容后再传 true。' },
     },
     async execute(args            , exec          )                        {
       const service = svc(opts)
@@ -1059,8 +1109,12 @@ export function memorySearchTool(opts                    )                      
         const outside = hits.filter((hit) => !recordAllowed(decide, policy, hit.record.scope, hit.record.kind))
         // 只有“作用域不在范围里”才可能审批;absolute 与 read:false 都不 requestable。
         const needsApproval = outside.filter((hit) => recordRequestable(decide, policy, hit.record.scope, hit.record.kind))
+        // 0.27.0：普通限制下范围外命中**不再自动弹审批**。先把索引交给模型
+        //（outOfScope 字段），要读正文时由 Agent 显式传 requestApproval=true。
+        // 绝对限制 / 不可读 / 已关闭作用域照旧只进 withheld（它们没有审批路径）。
+        const wantsApproval = args.requestApproval === true
         let verdict                             
-        if (needsApproval.length > 0 && level === 'normal') {
+        if (needsApproval.length > 0 && level === 'normal' && wantsApproval) {
           verdict = await askOutOfScope(
             service,
             agent,
@@ -1100,8 +1154,35 @@ export function memorySearchTool(opts                    )                      
         if (denied > 0) {
           const approvedIds = new Set(approvedOutside.map((hit) => hit.record.id))
           const deniedRecords = outside.filter((hit) => !approvedIds.has(hit.record.id))
-          const reason = withheldReasonFor(decide, policy, deniedRecords.map((hit) => ({ scope: hit.record.scope, kind: hit.record.kind })), verdict)
+          // 0.27.0：普通限制下没发起审批的范围外命中 = 'out-of-scope'（索引已在
+          // outOfScope 字段给出）；审批后的结局（partial/rejected/timeout）与
+          // absolute / read-disabled / scope-disabled 沿用原口径。
+          const reason = verdict !== undefined
+            ? withheldReasonFor(decide, policy, deniedRecords.map((hit) => ({ scope: hit.record.scope, kind: hit.record.kind })), verdict)
+            : outOfScopeReason(decide, policy, deniedRecords.map((hit) => ({ scope: hit.record.scope, kind: hit.record.kind })))
           if (reason !== undefined) result.withheld = { count: denied, reason }
+        }
+        // 0.27.0：范围外索引（不含正文）——命中了哪些作用域、各几条、条目印象。
+        // 只在普通限制下给出：absolute 没有任何审批放行路径，索引只会引诱越权尝试。
+        // 未发起审批（默认）或审批没全过时都会给出，模型据此决定要不要显式发起。
+        const pendingOutside = outside.filter((hit) => !approvedOutsideIds.has(hit.record.id))
+        if (pendingOutside.length > 0 && level === 'normal') {
+          const scopeCounts = new Map                ()
+          for (const hit of pendingOutside) {
+            scopeCounts.set(hit.record.scope, (scopeCounts.get(hit.record.scope) ?? 0) + 1)
+          }
+          result.outOfScope = {
+            scopes: [...scopeCounts].map(([scope, count]) => ({ scope, records: count })),
+            records: pendingOutside.map((h) => ({
+              id: h.record.id,
+              score: h.score,
+              scope: h.record.scope,
+              kind: h.record.kind,
+              tags: Array.isArray(h.record.tags) ? h.record.tags : [],
+              updatedAt: h.record.updatedAt,
+              summary: summarize(h.record.content, chars),
+            })),
+          }
         }
         if (wantedTopK !== undefined) result.records = result.records.slice(0, wantedTopK)
         // 上下文去重:同一条记忆同版本已经出现过 → 只回 id,摘要让 memory_get 按需取。

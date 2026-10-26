@@ -17,6 +17,7 @@
 import { MemoryStore, newId, scopeFileName,                 } from './store.js'
 import {
   canonicalWorkspacePath,
+  defaultScopeDescription,
   isCustomScope,
   normalizeScopeInput,
   normalizeScopeKey,
@@ -3329,10 +3330,13 @@ export class LocalMemoryService                             {
               : 'restricted'
       const name = meta?.name ?? this.names.nameOf(scope)
       const initialRecords = policy.level === 'absolute' ? undefined : this.initialRecordsOf(scope)
+      // 0.27.0：scope-meta 没写用途时按作用域类型给默认描述，
+      // 让目录里每一条都自带「这个域是干什么的」。
+      const description = meta?.description ?? defaultScopeDescription(scope)
       out.push({
         scope,
         ...(name !== undefined ? { name } : {}),
-        ...(meta !== undefined ? { description: meta.description } : {}),
+        ...(description !== '' ? { description } : {}),
         origin: meta?.origin ?? scopeKind(scope),
         ...(inScope ? { records: stat?.records ?? 0 } : {}),
         inScope,

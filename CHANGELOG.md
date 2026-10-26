@@ -2,6 +2,15 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.27.0 — 范围外命中「先索引后审批」：检索不再自动弹审批；作用域目录默认描述
+
+- **问题**：普通限制下 `memory_search` 撞到范围外命中会**立刻弹审批**，Agent 完全没有判断依据——它还不知道范围外有什么、值不值得读，用户就要先回答一次「允许 / 拒绝」。一次跨作用域的检索动辄打断用户；而审批卡上列的正文快照又太重，多数时候用户看完只是拒绝。反过来，`scopeCatalog` 里的作用域描述全靠创建者手写，没写过的目录条目一律「（未填写用途）」，Agent 想靠目录判断「这个域是干什么的」时没有信息。
+- **检索默认只给索引**：范围外命中不再触发审批，改为在结果里新增 `outOfScope` 字段——命中了哪些作用域、各几条（`scopes` 聚合），加上每条的**记忆索引**（`records`：id / score / 作用域 / 类型 / 标签 / 更新时间 / 短摘要，**不含正文**）。渲染上索引独立成块，尾部注明这是「目录印象」并给出取正文的路径。`withheld` 的口径同步细分：未发起审批的范围外命中报 `out-of-scope`（新原因，提示「索引已列出，确认后再显式申请」），审批后的结局（partial / rejected / timeout）与 absolute / read-disabled / scope-disabled 沿用原口径。
+- **审批改为显式发起**：`memory_search` 新增 `requestApproval` 参数（默认 false）。Agent 看完索引确认确有需要的内容后，带 `requestApproval=true` 重发同一次查询——这时才向用户发起审批，允许的条目照旧并入 `records`（0.26 行为），没被允许的继续留在索引里。`memory_get` 拿范围外 id 读正文**本来就是显式访问**，审批路径不变；`memory_scopes request` 申请作用域会话权限的路径也不变。绝对限制下**不返回任何索引**（没有审批放行路径，索引只会引诱越权尝试）；普通限制下的 description 必填校验照旧——校验的是「这次调用的用途」，与要不要弹审批无关。
+- **作用域目录默认描述**：`memory_scopes list` 里没写过用途的作用域不再显示「（未填写用途）」，按类型给一句默认说明——global「跨项目共享的通用事实与偏好」、project「绑定当前工作区路径的共享记忆」、session「仅本会话可见的过程记忆」、custom「按名字聚合的跨会话记忆（建议创建时写明用途）」。Agent 手写过的 `scopeDescription` 永远优先，默认描述不落盘、不写进 scope-meta。
+- **讲清楚**：注入的「记忆系统」常驻段新增两步口径（先看索引 → 确认后再 requestApproval=true / memory_scopes request，并提醒「不要凭索引摘要直接引用范围外内容」）；可见域等级说明里 normal 的描述同步改写；`memory_search` 的工具说明与参数说明同步。
+- 测试：改写 4 处断言旧行为的用例（tools / access / scope-service / session-visibility），新增「默认只给索引不弹审批」「requestApproval=true 恢复审批」「absolute 无索引」「拒绝后索引保留」「默认描述 + 手写优先」等用例；`source/memory-local/test/multiprocess.test.ts` 按惯例未在受限沙箱跑（需真起子进程）。
+
 ## 0.26.0 — 作用域参数接受 `custom:` 展示前缀：自动归一，不再写「幽灵授权」
 
 - **问题（真机复现）**：0.25.10 / 0.25.11 把所有工具输出、注入摘要与面板统一改成展示名 `<类型>:<名字>` 后，自定义作用域在 Agent 眼里只以 `custom:dsh-plugin-dev` 出现；但参数层只放行 `project:` / `session:` 两种前缀，`custom:` 属于键空间之外。于是 `memory_scopes request({ scopes: ['custom:dsh-plugin-dev'] })` 被 `canonicalScope` 原样收下、`grants.add` 只校验权限不校验键形态 —— 一条永远匹配不到记录的 grant 就这样落盘：申请结果渲染成 `custom:custom:dsh-plugin-dev → 已授予`（`scopeDisplayName` 对未知键无条件补 `custom:`），目录里又查不到（`scopeCatalog` 不含 grants），下一次 `memory_search` 重新弹审批。本机 `grants/session-91f4b9f7….json` 里同时躺着 `custom:dsh-plugin-dev` 与 `dsh-plugin-dev` 两条，相隔 35 秒。根因还包括：`memory_scopes request` 是唯一跳过 `normalizeScopeInput` 的作用域入口（其余工具都过 `resolveScope`）。

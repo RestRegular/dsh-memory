@@ -139,6 +139,31 @@ test('删除最后一条记忆不删除作用域元数据，目录仍能看到�
   }
 })
 
+test('0.27.0 默认描述：scope-meta 没写用途时，目录按作用域类型给一句话说明', async () => {
+  const { svc, done } = makeService()
+  try {
+    const a = agent('s1', 'D:/w')
+    const items = svc.scopeCatalog(a)
+    const globalItem = items.find((item) => item.scope === 'global')
+    assert.ok(globalItem?.description?.includes('跨项目共享'), 'global 有默认描述')
+    const project = items.find((item) => item.scope.startsWith('project:'))
+    assert.ok(project?.description?.includes('绑定当前工作区'), 'project 有默认描述')
+    const session = items.find((item) => item.scope === 'session:s1')
+    assert.ok(session?.description?.includes('仅本会话可见'), 'session 有默认描述')
+
+    // Agent 写过的 description 永远优先于默认描述。
+    await svc.save({
+      scope: 'handbook', content: '内容', kind: 'fact',
+      scopeDescription: '手写用途', agent: a, visibilityApproved: true,
+    } as never)
+    const after = svc.scopeCatalog(a)
+    assert.equal(after.find((item) => item.scope === 'handbook')!.description, '手写用途')
+    assert.ok(after.find((item) => item.scope === 'global')!.description!.includes('跨项目共享'), '默认描述不落盘,不影响 meta')
+  } finally {
+    done()
+  }
+})
+
 test('关闭自定义作用域：目录里不出现自定义条目；元数据文件保留', async () => {
   const first = makeService()
   try {
