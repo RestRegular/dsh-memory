@@ -211,16 +211,68 @@ test('initial 正文：normal 下随目录可见，absolute 下不返回', async
   }
 })
 
-test('describeScope：校验空描述并更新用途', () => {
+test('describeScope：更新用途；空白描述 = 清空（保留元数据与 generation，目录回退默认描述）', () => {
   const { svc, done } = makeService()
   try {
-    assert.throws(
-      () => svc.describeScope('handbook', '   ', 'user'),
-      (error: Error & { code?: string }) => error.code === 'SCOPE_DESCRIPTION_EMPTY',
-    )
     svc.describeScope('handbook', '手工补写的用途', 'user')
     assert.equal(svc.scopeMeta('handbook')?.description, '手工补写的用途')
     assert.equal(svc.scopeMeta('handbook')?.origin, 'custom')
+    const generation = svc.scopeMeta('handbook')?.generation
+    const createdAt = svc.scopeMeta('handbook')?.createdAt
+
+    const cleared = svc.describeScope('handbook', '   ', 'user')
+    assert.equal(cleared.description, '', '空白描述按清空处理')
+    assert.equal(svc.scopeMeta('handbook')?.generation, generation, '清空不能换 generation（否则会话授权全失效）')
+    assert.equal(svc.scopeMeta('handbook')?.createdAt, createdAt, 'createdAt 保留')
+    const entry = svc.scopeCatalog(agent()).find((item) => item.scope === 'handbook')!
+    assert.match(entry.description ?? '', /自定义作用域/, '清空后目录回退到按类型的默认描述')
+  } finally {
+    done()
+  }
+})
+
+test('renameScope：设置 / 移除别名，重名与非法名明确报错，global / session 不支持', () => {
+  const { svc, done } = makeService()
+  try {
+    svc.setProjectScope('project:D:/w')
+    // Windows 上 project 键会被规范成反斜杠：从 provider 解析出的键出发，别写死写法。
+    const projectKey = svc.resolveReadScopes(agent()).find((scope) => scope.startsWith('project:'))!
+    assert.deepEqual(svc.renameScope(projectKey, 'dsh-memory'), { scope: projectKey, name: 'dsh-memory' })
+    assert.equal(svc.scopeName(projectKey), 'dsh-memory')
+    // 目录行用别名做显示名（带类型前缀），键不变。
+    const project = svc.scopeCatalog(agent()).find((item) => item.scope === projectKey)!
+    assert.equal(project.name, 'dsh-memory')
+    // 别名可以直接当作用域键用（读路径的历史行为）。
+    assert.equal(svc.scopeKeyForName('dsh-memory'), projectKey)
+
+    // 自定义作用域也能起别名（只是显示名，键仍是裸名）。
+    svc.renameScope('handbook', '工作手册')
+    assert.equal(svc.scopeName('handbook'), '工作手册')
+    assert.equal(svc.scopeKeyForName('工作手册'), 'handbook')
+
+    // 同一个名字不能被两个作用域抢。
+    assert.throws(
+      () => svc.renameScope('notes', '工作手册'),
+      (error: Error & { code?: string }) => error.code === 'SCOPE_NAME_TAKEN',
+    )
+    // 非法名字（路径分隔符 / 冒号）沿用作用域名规则。
+    assert.throws(
+      () => svc.renameScope('notes', 'a/b'),
+      (error: Error & { code?: string }) => error.code === 'SCOPE_NAME_INVALID',
+    )
+    // global / session 的显示名跟随类型与会话 id，不接受别名。
+    for (const scope of ['global', 'session:s1']) {
+      assert.throws(
+        () => svc.renameScope(scope, 'whatever'),
+        (error: Error & { code?: string }) => error.code === 'SCOPE_NAME_UNSUPPORTED',
+      )
+    }
+
+    // 空串 = 移除别名，显示名回退到键本身。
+    assert.deepEqual(svc.renameScope(projectKey, ''), { scope: projectKey })
+    assert.equal(svc.scopeName(projectKey), undefined)
+    assert.equal(svc.scopeKeyForName('dsh-memory'), undefined)
+    assert.deepEqual(svc.renameScope('handbook', undefined), { scope: 'handbook' }, 'undefined 也是移除，幂等')
   } finally {
     done()
   }

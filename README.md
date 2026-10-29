@@ -39,9 +39,9 @@ JSONL 落盘 · 本机向量检索 · 五个模型工具 · 自动召回 · 硬�
 
 | 能力 | 说明 |
 | --- | --- |
-| **六个工具** | `memory_save` / `memory_search` / `memory_list` / `memory_get` / `memory_forget` / `memory_scopes`。`memory_search` 只回印象（8 位 id / 作用域 / 类型 / 标签 / 短摘要），正文和元数据用 `memory_get` 的 `fields` 按需取；同一会话里已出现过的条目只回 id。范围外命中默认只给**作用域清单**（`outOfScope` 字段：名字 / 条数 / 用途，0.28.0 起不再带条目摘要），确认后带 `requestApproval: true` 重发才弹审批。`description` 字段在普通限制下必填，审批卡会展示它。`memory_scopes` 只读目录：给作用域名字 / 用途 / 当前可读可写状态，不返回任何正文。**作用域参数传裸名**（`handbook`）：0.26.0 起工具输出里的展示名 `custom:handbook` 粘进参数会被自动归一，`project:` / `session:` 本来就直接可用 |
+| **六个工具** | `memory_save` / `memory_search` / `memory_list` / `memory_get` / `memory_forget` / `memory_scopes`。`memory_search` 只回印象（8 位 id / 作用域 / 类型 / 标签 / 短摘要），正文和元数据用 `memory_get` 的 `fields` 按需取；同一会话里已出现过的条目只回 id。范围外命中默认只给**作用域清单**（`outOfScope` 字段：名字 / 条数 / 用途，0.28.0 起不再带条目摘要），确认后带 `requestApproval: true` 重发才弹审批。`description` 字段在普通限制下必填，审批卡会展示它。`memory_scopes` 管目录：`action="list"` 给作用域名字 / 用途 / 当前可读可写状态，`action="edit"` 编辑某个作用域的**用途 / 别名**（0.29.0），`action="request"` 申请范围外权限；目录本身不返回任何正文。**作用域参数传裸名**（`handbook`）：0.26.0 起工具输出里的展示名 `custom:handbook` 粘进参数会被自动归一，`project:` / `session:` 本来就直接可用 |
 | **四种作用域** | 会话 / 项目 / `global` / 自定义名。默认写进当前会话，读默认合并会话 + 项目 + global；项目作用域可起别名。自定义作用域**首次由 Agent 创建时必须带 `scopeDescription`**（一句话用途），可选带 `scopeRule` 写一条初始规则；元数据存在 `<storeDir>/scope-meta/`，删光记录也不会丢 |
-| **作用域目录与绝对隔离** | `memory_scopes` 列出范围内 / 范围外的名字与用途；normal / none 下还带**初始化记录正文**（每个作用域最多 3 条，方便 Agent 直接读到“这个作用域主要放什么”）。绝对限制下范围外作用域**仍可发现**，但正文（含初始记录）永不可读、不可写、不可申请（没有任何审批放行路径）；普通限制下范围外条目可申请，`memory_scopes request` 走审批后写入**本会话**授权（默认只读，写权限必须单独申请），子 Agent 沿父会话继承 |
+| **作用域目录与绝对隔离** | `memory_scopes` 列出范围内 / 范围外的名字与用途（`action="edit"` 可改用途与别名）；normal / none 下还带**初始化记录正文**（每个作用域最多 3 条，方便 Agent 直接读到“这个作用域主要放什么”）。绝对限制下范围外作用域**仍可发现**，但正文（含初始记录）永不可读、不可写、不可申请（没有任何审批放行路径）；普通限制下范围外条目可申请，`memory_scopes request` 走审批后写入**本会话**授权（默认只读，写权限必须单独申请），子 Agent 沿父会话继承 |
 | **会话授权（grants）** | Agent 申请、用户批准的例外单独存在 `<storeDir>/grants/<session>.json`，不并入可见域策略；只读 / 可写独立、可撤销、只在本会话（及子 Agent）生效；`absolute` 下授权不生效，作用域被删除重建后按创建代次自动失效 |
 | **双通道检索** | 词法（IDF + 中文 bigram）**+** 向量（本机 llama-server 的 OpenAI 兼容 `/v1/embeddings`）。向量缺席自动降级，不报错、不阻塞 |
 | **自动召回** | 每轮按用户问题召回；新会话第一步注入项目 / global 摘要；发布、部署、工具失败等行为按标签触发定向召回 |
@@ -53,7 +53,7 @@ JSONL 落盘 · 本机向量检索 · 五个模型工具 · 自动召回 · 硬�
 | **上下文去重** | `memory_search` / `memory_list` 返回过的条目记进会话上下文状态；同一版本再次命中只回记忆 ID（`memory_search` 的裸 ID 与带摘要条目之间空一行），并提示用 `memory_get` 取全文（内容更新后重新给摘要） |
 | **状态记忆** | `kind: state` 默认 7 天 TTL；注入带「状态，使用前验证」；过期后默认不进检索 / 摘要 / 召回，但 `memory_get` 与面板仍可取 |
 | **流程索引** | `kind: procedure` 的目录进系统提示：按当前工作区 + 触发词（工具名 / 关键词）列 `id · 触发词 → 标题`，需要时再用 `memory_get` 取全文 |
-| **可视化管理** | 记录页分「**记忆** / **作用域**」两个子标签页：记忆侧浏览 / 搜索 / 新建 / 编辑 / 删除（编辑生成修正版），并**可主动做语义检索**（与 `memory_search` 同一套排序）、有「是否被修正」筛选；作用域侧列出每个域的名称、**用途**、记忆条数与最近更新（与 `memory_scopes` 目录同源），可一键跳到该域的记忆列表；记忆树展示作用域、类型与修正链；设置改完即存；导入导出 |
+| **可视化管理** | 记录页分「**记忆** / **作用域**」两个子标签页：记忆侧浏览 / 搜索 / 新建 / 编辑 / 删除（编辑生成修正版），并**可主动做语义检索**（与 `memory_search` 同一套排序）、有「是否被修正」筛选；作用域侧列出每个域的名称、**用途**、记忆条数与最近更新（与 `memory_scopes` 目录同源），**可直接编辑用途与别名**（0.29.0，别名可选、留空即移除），可一键跳到该域的记忆列表；记忆树展示作用域、类型与修正链；设置改完即存；导入导出 |
 | **一键向量后端** | 面板里下载 llama.cpp 运行时与内置模型，按 CPU / 内存 / 显卡推荐；换模型自动重建向量 |
 | **跨进程安全** | 每个作用域一把写锁，锁内重新读盘再合并；多个 DSH 实例或 MCP server 共用一个 store 不丢数据 |
 
@@ -256,6 +256,13 @@ memory_forget({ "id": "3f2a9c1d", "description": "删除过期的临时结论" }
 项目作用域的身份永远是 `project:<绝对路径>`，别名只影响显示与引用，不迁移数据。
 同一路径重复用同一个名字是幂等的；换名字会覆盖原别名；另一个路径抢同一个名字会被拒绝
 （`SCOPE_NAME_TAKEN`）。
+
+**编辑用途与别名（0.29.0）**：Agent 用 `memory_scopes({ action: "edit", scope, scopeDescription?, scopeName? })`
+—— `scopeDescription` 是那句用途（空串 = 清空，回退到按类型的默认描述），`scopeName` 是别名（空串 = 移除；
+省略 = 不改）；两者至少给一个，且需要该作用域**可写**（范围外先 `action: "request"` 申请写权限）。用户在
+面板「记录 → 作用域」每行的「编辑」里改同样两项：用途编辑框只预填**自己写的**那句（按类型补的默认描述
+不预填，免得一保存就固化），别名留空保存即移除。`global` / `session` 不支持别名（显示名跟随类型与会话 id）；
+别名与用途都存在 `<storeDir>/scope-meta/` 与 `scopes.json` 里，删光记录也不会丢。
 
 **新建自定义作用域（0.24.0）**：Agent 必须说明用途，可选写一条初始规则；两者在同一次
 `memory_save` 里原子写入（元数据先落 `pending`，记录与规则写完后转 `ready`，中途失败下次保存会续上）：
@@ -614,6 +621,7 @@ npm run verify  # 构建到 .verify/，不落 packages/
 
 ## 更新日志
 
+- **0.29.0** —— 作用域用途 / 别名可编辑：`memory_scopes` 新增 `action="edit"`（`scope` + `scopeDescription?` / `scopeName?`，空串分别表示清空用途 / 移除别名，至少给一个，需要该作用域可写，范围外先走 `request` 申请写权限）；面板「记录 → 作用域」每行新增「编辑」，用途编辑框只预填手写的那句，默认描述不预填；`describeScope` 的空描述从报错改为**清空**（保留元数据与 generation，目录回退按类型默认描述），新增 `renameScope`（项目 / 自定义作用域可设别名，global / session 拒绝，重名 `SCOPE_NAME_TAKEN`）；`/memory/api/status` 新增 `descriptionSource`（custom / default）与别名 `name`，新增 `POST /memory/api/scope-meta`。
 - **0.28.0** —— 范围外命中只列作用域：`memory_search` 的 `outOfScope` 去掉条目索引（id / score / 标签 / 短摘要），改为只给命中的作用域、各几条、`description`（作用域用途，`scope-meta` 手写优先、没写过按类型补默认描述）与 `requestable`（该域能否走审批）；渲染成「名称（条数 · 可申请性）：用途」的独立清单，不再重复 `withheld` 说明。面板「记录」页新增「记忆 / 作用域」两个子标签页，作用域页展示名称、用途、条数、待嵌入与最近更新，可一键跳到该域的记忆列表；`/memory/api/status` 每项新增 `description`（无记录但写过用途的作用域也列出）。
 - **0.27.0** —— 范围外命中「先索引后审批」：普通限制下 `memory_search` 不再自动弹审批，结果新增 `outOfScope` 索引（作用域聚合 + 条目印象，不含正文），`requestApproval: true` 显式发起审批；`withheld` 新增 `out-of-scope` 原因；`memory_scopes` 目录给没写用途的作用域按类型补默认描述。
 - **0.22.3** —— 审批卡高度与宿主审批卡同口径（去掉额外的 `46vh` 上限），矮窗口下详情行固定后条目列表仍有滚动空间。

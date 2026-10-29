@@ -191,6 +191,15 @@ import { canonicalWorkspacePath, defaultScopeDescription, normalizeScopeInput, r
                                                                
                                                         
      
+                                                          
+     
+                                                                                                        
+     
+                                          
+                                 
+     
+                                                                                     
+     
                               
                                                            
      
@@ -288,6 +297,20 @@ function toolError(error         )                  {
 /** 供 apply.ts 使用的实例内 agent(宿主 exec.agent)。 */
 function agentOf(exec         )          {
   return (exec                                   )?.agent
+}
+
+/**
+ * agent → 会话 id(只给需要"这是谁改的"的元数据写入用,如作用域用途的 createdBy)。
+ * 与 provider 的 rawSessionIdOf 同口径:header.id 优先,其次 session.id。
+ */
+function sessionIdOf(agent         )                     {
+  try {
+    const session = (agent                                                                         )?.session
+    const id = session?.header?.id ?? session?.id
+    return typeof id === 'string' && id !== '' ? id : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -1485,7 +1508,7 @@ export function memoryListTool(opts                    )                        
 }
 
                              
-                             
+                                      
                                      
                              
                 
@@ -1499,6 +1522,15 @@ export function memoryListTool(opts                    )                        
                                        
                                           
                  
+                                                                        
+                
+     
+                                                 
+                                    
+     
+                           
+                                              
+                    
                                
                       
  
@@ -1511,7 +1543,17 @@ export function memoryListTool(opts                    )                        
                  
  
 
-                                                                         
+/**
+ * action='edit' 的结果（0.29.0）：只回「改成了什么」，不回记忆内容。
+ * 字段缺省 = 这次没动它；空串 = 已清空（用途）或已移除（别名）。
+ */
+                                      
+               
+                      
+               
+ 
+
+                                                                                               
 
 /**
  * 作用域目录 / 权限申请工具（0.24.0）。
@@ -1525,9 +1567,9 @@ export function memoryListTool(opts                    )                        
 export function memoryScopesTool(opts                    )                                         {
   return {
     name: 'memory_scopes',
-    description: 'List memory scopes with their purpose and access status (metadata only, no content), or request session access to out-of-scope scopes. action="request" defaults to read-only and requires a reason; absolute restriction never grants access.',
+    description: 'List memory scopes with their purpose and access status (metadata only, no content), request session access to out-of-scope scopes, or edit a scope\'s purpose and alias. action="edit" updates the scope description (empty = clear, falls back to the type default) and/or alias (empty = remove); the scope must be writable in this session. action="request" defaults to read-only and requires a reason; absolute restriction never grants access.',
     parameters: {
-      action: { type: 'string', enum: ['list', 'request'], description: 'list = 目录；request = 申请范围外作用域的会话权限（默认只读）' },
+      action: { type: 'string', enum: ['list', 'request', 'edit'], description: 'list = 目录；request = 申请范围外作用域的会话权限（默认只读）；edit = 编辑某个作用域的描述 / 别名（需要该作用域可写）' },
       includeOutOfScope: { type: 'boolean', description: 'list：默认 true；false 时只列当前可见域内的作用域。' },
       limit: { type: 'number', description: 'list：1~200，默认 50' },
       scopes: {
@@ -1541,12 +1583,75 @@ export function memoryScopesTool(opts                    )                      
         description: 'request：申请哪些权限，省略 = 只读；写权限必须显式加 "write"',
       },
       reason: { type: 'string', description: 'request：一句话申请理由，展示在审批卡上' },
+      scope: { type: 'string', description: 'edit：要编辑的作用域键（目录里显示的那个，如 handbook / project:<路径>）。当前会话范围外时先用 action="request" 申请写权限' },
+      scopeDescription: { type: 'string', description: 'edit：新的用途（一句话，最多 500 字）。空串 = 清空并回退到按类型的默认描述；与本参数一起省略 scopeName 则报错。' },
+      scopeName: { type: 'string', description: 'edit：新的别名（只影响显示与引用，不改作用域键；项目 / 自定义作用域支持）。空串 = 移除别名；省略 = 这次不改别名。' },
       description: { type: 'string', description: DESCRIPTION_PARAM_DESCRIPTION },
     },
     async execute(args            , exec          )                            {
       const service = svc(opts)
       const agent = agentOf(exec)
       requireDescription(service, agent, args.description)
+
+      // ---- action='edit'：编辑作用域描述 / 别名（0.29.0）----
+      // 只改**目录元数据**，不碰任何记忆记录；需要该作用域可写（范围外先用
+      // action='request' 拿写权限，不走隐式审批 —— 审批卡里没有"一条记忆"可展示）。
+      if (args.action === 'edit') {
+        const rawScope = typeof args.scope === 'string' ? args.scope.trim() : ''
+        if (rawScope === '') throw new MemoryToolError('SCOPE_REQUIRED', 'action="edit" 需要 scope（要编辑的作用域键，目录里显示的那个）')
+        const wantDescription = typeof args.scopeDescription === 'string'
+        const wantName = typeof args.scopeName === 'string'
+        if (!wantDescription && !wantName) {
+          throw new MemoryToolError('EDIT_NOTHING_TO_UPDATE', 'action="edit" 至少要给 scopeDescription 或 scopeName 之一（想清空用途传空串，想移除别名传空串）')
+        }
+        if (typeof service.describeScope !== 'function' && wantDescription) {
+          throw new MemoryToolError('SCOPES_UNAVAILABLE', '当前 provider 不支持编辑作用域用途（请升级 @restregular/dsh-memory）')
+        }
+        if (typeof service.renameScope !== 'function' && wantName) {
+          throw new MemoryToolError('SCOPES_UNAVAILABLE', '当前 provider 不支持编辑作用域别名（请升级 @restregular/dsh-memory）')
+        }
+        const resolved = resolveScope(opts, service, exec, rawScope, 'write')
+        if (resolved.all === true) {
+          throw new MemoryToolError('SCOPE_NOT_WRITABLE', "scope 'all' cannot be edited; name one scope")
+        }
+        const scope = resolved.scope ?? currentSessionScope(service, exec)
+        if (scope === undefined) {
+          throw new MemoryToolError('SCOPE_INVALID', `scope "${rawScope}" could not be resolved; use the concrete scope key shown by action="list"`)
+        }
+        // 可写护栏：与写入记忆同一把锁（write 开关 / absolute / 范围外）。
+        const policy = visibilityPolicy(service, agent)
+        const decide = decisionMaker(service, agent)
+        const level = policy?.level ?? 'none'
+        if (level !== 'none' && !scopeWritableBy(decide, service, agent, policy, scope)) {
+          const decision = decide('write', scope)
+          if (decision !== undefined) {
+            if (!decision.requestable) throw writeDecisionError(decision, scope, 'write')
+            throw new MemoryToolError(
+              'SCOPE_NOT_WRITABLE',
+              `作用域 ${scope} 不在本会话的可写范围内；编辑作用域信息需要写权限，先用 memory_scopes({ action: "request", scopes: ["${scope}"], permissions: ["write"] }) 申请，批准后重试。`,
+            )
+          }
+          if (policy?.level === 'normal') {
+            // 老 provider 没有统一判定：普通限制下范围外就是"可申请"，别报成绝对限制。
+            throw new MemoryToolError(
+              'SCOPE_NOT_WRITABLE',
+              `作用域 ${scope} 不在本会话的可写范围内；编辑作用域信息需要写权限，先用 memory_scopes({ action: "request", scopes: ["${scope}"], permissions: ["write"] }) 申请，批准后重试。`,
+            )
+          }
+          throw scopeWriteBlockedError(policy, scope, 'write')
+        }
+        const description = wantDescription ? String(args.scopeDescription) : undefined
+        const name = wantName ? String(args.scopeName) : undefined
+        const by = sessionIdOf(agent) ?? 'agent'
+        try {
+          const edited                      = { scope }
+          if (description !== undefined) edited.description = service.describeScope (scope, description, by).description
+          if (name !== undefined) edited.name = service.renameScope (scope, name).name ?? ''
+          return edited
+        } catch (error) {
+          throw toolError(error)
+        }
+      }
 
       if (args.action === 'request') {
         if (typeof service.requestScopeGrants !== 'function') {

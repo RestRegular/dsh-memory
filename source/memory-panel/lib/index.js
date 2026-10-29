@@ -9,6 +9,7 @@
  *
  * 提供管理员 API(前缀路由 /memory/api):
  *   GET  /status    各 scope 记录数 + 待嵌入数 + 展示标签 + 用途描述(0.28.0)
+ *   POST /scope-meta {scope, description?, name?}  编辑作用域用途 / 别名(0.29.0)
  *   GET  /records   ?scope=&q=  枚举/过滤记录
  *   GET  /search    ?scope=&q=&topK=  语义检索(向量 + 词法,provider 排序)
  *   POST /update    {id, content?, kind?, importance?, tags?, triggers?, expiresAt?/ttlMs?}
@@ -42,6 +43,8 @@ const CLIENT_ERROR_CODES = new Set([
   'SCOPE_INVALID', 'SCOPE_DISABLED', 'CONTENT_EMPTY', 'CONTENT_TOO_LONG',
   'SECRET_DETECTED', 'IMPORT_INVALID', 'IMPORT_TOO_LARGE', 'KIND_INVALID',
   'QUERY_EMPTY', 'QUERY_INVALID', 'SESSION_REQUIRED', 'SCOPE_EMPTY', 'SCOPE_NOT_VISIBLE',
+  // 0.29.0：作用域用途 / 别名的编辑错误（名字非法 / 重名 / 不支持 / 用途过长）
+  'SCOPE_NAME_INVALID', 'SCOPE_NAME_TAKEN', 'SCOPE_NAME_UNSUPPORTED', 'SCOPE_DESCRIPTION_TOO_LONG',
 ])
 
 function writeError(res, error) {
@@ -895,17 +898,31 @@ async function handle(ctx, routePath, req, res) {
       } catch { /* 目录是增强：拿不到就只有名称与条数 */ }
       // 会话标题是尽力而为的增强,而且要读会话事件日志:只给最近活跃的前 N 个查,
       // 其余直接用「会话 <id 前 16 位>」。列表本身**始终**完整(不受这个上限影响)。
+      // 手写用途与默认描述的区分(0.29.0)：面板要能编辑「用途」，就得知道现在显示的是
+      // 自己写的那句，还是按类型补的默认描述 —— 编辑框只预填手写的，否则一保存就把
+      // 默认文案固化成手写内容。`descriptionSource` 就是给这个用的。
+      const customDescriptionOf = (scope) => {
+        try {
+          const meta = typeof memory.scopeMeta === 'function' ? memory.scopeMeta(scope) : undefined
+          return typeof meta?.description === 'string' ? meta.description.trim() : ''
+        } catch {
+          return ''
+        }
+      }
       const scopes = stats.map((s, index) => {
         const entry = catalog.get(s.scope)
+        const custom = customDescriptionOf(s.scope)
         return {
           ...s,
           // 别名(项目 / 自定义作用域)也要带类型前缀;没有别名时退回按类型算的展示名。
           label: typeof s.name === 'string' && s.name !== ''
             ? scopeDisplayName(s.scope, s.name)
             : (index < TITLE_LOOKUP_LIMIT ? scopeLabel(ctx, s.scope) : fallbackScopeLabel(s.scope)),
-          ...(entry !== undefined && typeof entry.description === 'string' && entry.description.trim() !== ''
-            ? { description: entry.description.trim() }
-            : {}),
+          ...(custom !== ''
+            ? { description: custom, descriptionSource: 'custom' }
+            : entry !== undefined && typeof entry.description === 'string' && entry.description.trim() !== ''
+              ? { description: entry.description.trim(), descriptionSource: 'default' }
+              : {}),
           ...(entry !== undefined && typeof entry.origin === 'string' ? { origin: entry.origin } : {}),
         }
       })
@@ -923,10 +940,12 @@ async function handle(ctx, routePath, req, res) {
           records: 0,
           pendingEmbeds: 0,
           updatedAt: entry.updatedAt,
+          ...(typeof entry.name === 'string' && entry.name !== '' ? { name: entry.name } : {}),
           label: typeof entry.name === 'string' && entry.name !== ''
             ? scopeDisplayName(key, entry.name)
             : fallbackScopeLabel(key),
           description: entry.description.trim(),
+          descriptionSource: customDescriptionOf(key) !== '' ? 'custom' : 'default',
           ...(typeof entry.origin === 'string' ? { origin: entry.origin } : {}),
         })
       }
@@ -936,6 +955,47 @@ async function handle(ctx, routePath, req, res) {
       let rules = null
       try { rules = typeof memory.ruleStats === 'function' ? memory.ruleStats() : null } catch { rules = null }
       writeJson(res, { ok: true, value: { scopes, embedServer, rules } })
+      return
+    }
+    if (method === 'POST' && path === '/scope-meta') {
+      // 用户编辑作用域的描述 / 别名(0.29.0)。面板是用户本人的操作,不带会话可见域;
+      // 但只允许改**目录里看得见**的作用域,免得手滑把用途写到一条永远读不到的元数据上。
+      if (typeof memory.describeScope !== 'function' && typeof memory.renameScope !== 'function') {
+        throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供作用域编辑接口（请升级 @restregular/dsh-memory）')
+      }
+      const body = await readJsonBody(req)
+      const scope = typeof body?.scope === 'string' ? body.scope.trim() : ''
+      if (scope === '') throw new ApiError(400, 'SCOPE_INVALID', 'scope 不能为空')
+      const wantDescription = typeof body?.description === 'string'
+      const wantName = typeof body?.name === 'string'
+      if (!wantDescription && !wantName) {
+        throw new ApiError(400, 'SCOPE_NOTHING_TO_UPDATE', '至少提供 description（用途）或 name（别名）之一')
+      }
+      if (typeof memory.scopeCatalog === 'function') {
+        let known = false
+        try {
+          known = (memory.scopeCatalog(undefined) ?? []).some((item) => item?.scope === scope)
+        } catch { known = true /* 目录不可用时不拦：让 provider 自己校验 */ }
+        if (!known) throw new ApiError(404, 'SCOPE_UNKNOWN', `目录里没有作用域 ${scope}（可能刚被删除或改名）`)
+      }
+      let description
+      if (wantDescription) {
+        if (typeof memory.describeScope !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供作用域用途编辑接口')
+        description = memory.describeScope(scope, String(body.description), 'user').description
+      }
+      let name
+      if (wantName) {
+        if (typeof memory.renameScope !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供作用域别名编辑接口')
+        name = memory.renameScope(scope, String(body.name)).name ?? ''
+      }
+      writeJson(res, {
+        ok: true,
+        value: {
+          scope,
+          ...(wantDescription ? { description } : {}),
+          ...(wantName ? { name } : {}),
+        },
+      })
       return
     }
     if (method === 'GET' && path === '/settings') {

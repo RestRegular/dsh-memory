@@ -2,6 +2,16 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.29.0 — 作用域用途 / 别名可编辑（用户 + Agent）
+
+- **问题**：0.28.0 之后「作用域用途」成了检索范围外清单里唯一的信息来源，但它**只能写不能改**——Agent 想补一句用途只能靠 `memory_save` 的 `scopeDescription`（还要顺带写一条记忆），面板则完全没有编辑入口；别名更只在 `memory_save({ path })` 那一瞬间能设，设错了只能改文件。于是第一次随手写的用途会一直错下去。
+- **Agent：`memory_scopes` 新增 `action="edit"`**：`scope` 必填，`scopeDescription` / `scopeName` 至少给一个（省略 = 这次不动它，空串 = 清空用途 / 移除别名）。写权限与写入记忆同一把锁（`write` 开关 / 绝对限制 / 范围外），**范围外不弹隐式审批**——编辑元数据不是一条可勾选的记忆，改为明确提示先用 `action="request", permissions:["write"]` 申请。结果只回「改成了什么」（`{ scope, description?, name? }`），渲染成「用途：… / 别名：…」，空串分别渲染成「已清空（回退到按类型的默认描述）」「已移除」。
+- **用户：面板「记录 → 作用域」每行「编辑」**：用途 textarea + 别名输入框（global / session 不显示别名字段，并说明原因）+ 保存 / 取消；保存走新增的 `POST /memory/api/scope-meta`，成功后重新拉 `/status`（别名会影响展示名与下拉）。用途编辑框**只预填手写的那句**：`/status` 新增 `descriptionSource: 'custom' | 'default'`，按类型补的默认描述不预填（否则一保存就把默认文案固化成手写内容）；别名留空保存即移除。
+- **provider**：`describeScope` 的空白描述从「报错」改成「清空」（写空串，**保留 createdAt / generation / createdBy** —— 删元数据会让按 generation 绑定的会话授权失效）；`scopeCatalog` 对空描述回退到按类型的默认描述，与「从没写过」展示一致。新增 `renameScope(scope, name)`：非空走 `ScopeNames.claim`（统一校验、重名 `SCOPE_NAME_TAKEN`），空串 / undefined = 移除；`global` / `session` 拒绝（`SCOPE_NAME_UNSUPPORTED`，显示名跟随类型与会话 id）；别名仍可当作用域参数用（`scopeKeyForName`）。
+- **接口**：`POST /memory/api/scope-meta { scope, description?, name? }`——只允许改目录里看得见的作用域（未知作用域 404，避免把用途写到一条永远读不到的元数据上），什么都没给 400，旧 provider 501；`/memory/api/status` 每项新增 `descriptionSource` 与 `name`（别名），「删光记录但写过用途」的行也带别名。
+- **讲清楚**：注入的「记忆系统」常驻段新增一条「用途与别名可以改」；`memory_scopes` 的工具说明与三个 editing 参数的说明同步。
+- 测试：新增 provider「清空保留 generation / 目录回退默认描述」「别名设置 / 移除 / 重名 / 非法名 / global、session 拒绝」、工具「edit 更新两项 / 只改一项 / 空串清空 / 两个都没给报错 / 范围外要求先申请写权限」、面板「POST /scope-meta 往返 / 404 / 400 / 501」「作用域页编辑保存与默认描述不预填」等用例；全套 533 tests / 532 pass / 1 skipped（`multiprocess.test.ts` 需真起子进程）。
+
 ## 0.28.0 — 范围外命中只列作用域；面板「记录」页拆成记忆 / 作用域两个子标签页
 
 - **问题（真机工具结果）**：0.27.0 的 `outOfScope` 给的是**条目索引**（id / score / 类型 / 标签 / 短摘要），于是 `memory_search` 的结果里会跟出一大段范围外记忆的摘要——它们既不是可见结果的延续，又长得跟普通命中一样，模型很容易把这段摘要当成「已经读到的内容」直接引用。同一段文字还出现两次：清单头写「范围外命中：…（各几条）」，末尾的 `withheld` 说明又写「另有 N 条…索引已列在**下方**」——实际它排在最后，结构和顺序都是乱的。

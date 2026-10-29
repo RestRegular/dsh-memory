@@ -166,6 +166,102 @@ test('memory_scopes request：非法名字 / all 明确报错，不落幽灵授�
   )
 })
 
+test('memory_scopes edit：更新用途 / 别名（都可省略、空串表示清空），别名字段不影响描述', async () => {
+  const calls: Array<Record<string, unknown>> = []
+  const editService = {
+    ...service,
+    // 无限制：编辑只看"能不能写"，这里不需要可见域判定。
+    visibilityPolicy: () => ({ level: 'none' as const, scopes: [], source: 'explicit' as const }),
+    describeScope: (scope: string, description: string, by: string) => {
+      calls.push({ kind: 'describe', scope, description, by })
+      return { scope, description }
+    },
+    renameScope: (scope: string, name?: string | null) => {
+      calls.push({ kind: 'rename', scope, name })
+      return { scope, ...(typeof name === 'string' && name !== '' ? { name } : {}) }
+    },
+  }
+  const editTool = memoryScopesTool({ getService: () => editService })
+
+  const both = await editTool.execute({
+    action: 'edit',
+    scope: 'global',
+    scopeDescription: '所有项目共享的事实与偏好',
+    scopeName: '共享',
+    description: '更新 global 的用途与别名',
+  }, agentExec)
+  assert.deepEqual(both, { scope: 'global', description: '所有项目共享的事实与偏好', name: '共享' })
+  assert.deepEqual(calls, [
+    { kind: 'describe', scope: 'global', description: '所有项目共享的事实与偏好', by: 's1' },
+    { kind: 'rename', scope: 'global', name: '共享' },
+  ], '会话 id 作为 createdBy 传给 provider')
+  const text = renderScopesResult(both, (scope) => scope)
+  assert.match(text, /作用域已更新：global:共享（global）/)
+  assert.match(text, /用途：所有项目共享的事实与偏好/)
+  assert.match(text, /别名：共享/)
+
+  // 只给用途：别名一点都不碰（不产生 rename 调用）。
+  calls.length = 0
+  const onlyDescription = await editTool.execute({
+    action: 'edit', scope: 'global', scopeDescription: '只改用途', description: '只改用途',
+  }, agentExec)
+  assert.deepEqual(onlyDescription, { scope: 'global', description: '只改用途' })
+  assert.deepEqual(calls.map((call) => call.kind), ['describe'])
+
+  // 只给别名：空串 = 移除。
+  calls.length = 0
+  const onlyName = await editTool.execute({
+    action: 'edit', scope: 'global', scopeName: '', description: '移除别名',
+  }, agentExec)
+  assert.deepEqual(onlyName, { scope: 'global', name: '' })
+  assert.deepEqual(calls.map((call) => call.kind), ['rename'])
+  assert.match(renderScopesResult(onlyName, (scope) => scope), /别名：已移除/)
+
+  // 用途清空：空串原样交给 provider（由它写成空描述并回退默认描述）。
+  calls.length = 0
+  const cleared = await editTool.execute({
+    action: 'edit', scope: 'global', scopeDescription: '', description: '清空用途',
+  }, agentExec)
+  assert.deepEqual(cleared, { scope: 'global', description: '' })
+  assert.match(renderScopesResult(cleared, (scope) => scope), /用途：已清空/)
+
+  // 两个字段都没给 / 没给 scope：明确报错，不写任何东西。
+  await assert.rejects(
+    () => editTool.execute({ action: 'edit', scope: 'global', description: '啥也没改' }, agentExec),
+    (error: Error & { code?: string }) => error.code === 'EDIT_NOTHING_TO_UPDATE',
+  )
+  await assert.rejects(
+    () => editTool.execute({ action: 'edit', scopeDescription: 'x', description: '没给作用域' }, agentExec),
+    (error: Error & { code?: string }) => error.code === 'SCOPE_REQUIRED',
+  )
+})
+
+test('memory_scopes edit：范围外作用域要求先申请写权限，不写元数据、不弹审批', async () => {
+  let writes = 0
+  const editService = {
+    ...service,
+    // handbook 在范围外且可申请（普通限制）：编辑需要写权限，先走 action=request。
+    accessEvaluator: () => (request: { scope: string }) => (request.scope === 'handbook'
+      ? { allowed: false, reason: 'SCOPE_NOT_IN_RANGE', requestable: true }
+      : { allowed: true, requestable: false }),
+    describeScope: (scope: string, description: string) => {
+      writes += 1
+      return { scope, description }
+    },
+    renameScope: (scope: string, name?: string | null) => {
+      writes += 1
+      return { scope, ...(typeof name === 'string' && name !== '' ? { name } : {}) }
+    },
+  }
+  const editTool = memoryScopesTool({ getService: () => editService })
+  await assert.rejects(
+    () => editTool.execute({ action: 'edit', scope: 'handbook', scopeDescription: '团队约定', description: '编辑 handbook' }, agentExec),
+    (error: Error & { code?: string; message?: string }) => error.code === 'SCOPE_NOT_WRITABLE'
+      && /action: "request"/.test(error.message ?? ''),
+  )
+  assert.equal(writes, 0, '没权限时一条元数据都不写')
+})
+
 test('老 provider 没有 scopeCatalog 时明确报不支持', async () => {
   const old = memoryScopesTool({ getService: () => ({ save: async () => ({ id: 'x', scope: 'global' }), search: async () => [], forget: async () => ({ removed: 0, ids: [] }), list: async () => [] }) })
   await assert.rejects(

@@ -149,7 +149,8 @@ export function renderListResult(value: ListResult, label: ScopeLabel): string {
 
 /**
  * memory_scopes 的渲染：list 只讲“有什么、干什么、能不能碰”；request 讲每个
- * scope + 权限的申请结局。两者共用同一个工具入口，但文案完全分开。
+ * scope + 权限的申请结局；edit（0.29.0）讲这次改了描述 / 别名的什么。
+ * 三者共用同一个工具入口，但文案完全分开。
  */
 export function renderScopesResult(value: ScopesToolResult, label: ScopeLabel): string {
   if ('results' in value) {
@@ -180,6 +181,20 @@ export function renderScopesResult(value: ScopesToolResult, label: ScopeLabel): 
       `- ${label(item.scope)}：${item.permission === 'read' ? '只读' : '写入 / 删除'} → ${statusText(item.status)}${reasonText(item.reason)}`,
     ).join('\n')
     return `作用域权限申请结果：\n${body}`
+  }
+  // edit（0.29.0）：只回「改成了什么」。没动过的字段不出现，空串表示清空 / 移除。
+  if ('scope' in value) {
+    const name = value.name !== undefined && value.name !== '' ? scopeDisplayName(value.scope, value.name) : label(value.scope)
+    const lines = [`作用域已更新：${name}（${value.scope}）`]
+    if (value.description !== undefined) {
+      lines.push(value.description === ''
+        ? '- 用途：已清空（回退到按类型的默认描述）'
+        : `- 用途：${value.description}`)
+    }
+    if (value.name !== undefined) {
+      lines.push(value.name === '' ? '- 别名：已移除（显示名回退到作用域键）' : `- 别名：${value.name}`)
+    }
+    return lines.join('\n')
   }
   if (value.scopes.length === 0) return '当前没有可列出的作用域。'
   const body = value.scopes.map((item) => {

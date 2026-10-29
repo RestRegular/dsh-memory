@@ -18,6 +18,8 @@ memory_search 只返回印象（ID、作用域、类型、标签和少量摘要�
 
 新建自定义作用域时，memory_save 必须带 scopeDescription（一句话用途）；可选带 scopeRule 写一条初始规则。已有作用域带上 scopeDescription 表示更新用途，不会写初始记忆。
 
+作用域的**用途**和**别名**可以改（用户也能在面板「记录 → 作用域」里改）：memory_scopes({ action: "edit", scope, scopeDescription?, scopeName? }) —— scopeDescription 是那句用途（空串 = 清空，回退到按类型的默认描述），scopeName 是别名（空串 = 移除；只影响显示与引用，不改作用域键；项目 / 自定义作用域支持，global / session 不支持）。两者至少给一个，且需要该作用域可写（范围外先用 action="request" 申请写权限）。把用途写清楚，后续检索的「范围外清单」会直接告诉接手的人这个域是干什么的。
+
 同一会话里已经出现过的记忆，memory_search / memory_list 只回 ID 并注明“摘要因上下文去重被省略”；那不是没找到，需要正文时直接用 memory_get 取。
 
 本会话「记忆范围」为普通限制时（默认），调用任一 memory_* 工具都必须带 description 字段：用一句话说明这次调用要做什么（例如「查发布流程的坑」）。它只用于范围外访问的审批弹窗，不写进记忆；漏了会被工具直接拒绝。绝对限制 / 无限制下可省略。

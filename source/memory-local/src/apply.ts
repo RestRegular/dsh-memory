@@ -201,9 +201,14 @@ export class CordisMemoryService extends Service {
     return this.impl.scopeMeta(scope)
   }
 
-  /** 写入 / 更新作用域用途(不创建记录)。 */
+  /** 写入 / 更新 / 清空作用域用途(不创建记录)。 */
   describeScope(scope: MemoryScope, description: string, by: string): ReturnType<LocalMemoryService['describeScope']> {
     return this.impl.describeScope(scope, description, by)
+  }
+
+  /** 设置 / 移除作用域别名(只影响显示与引用,不改变作用域键)。 */
+  renameScope(scope: MemoryScope, name: string | undefined | null): ReturnType<LocalMemoryService['renameScope']> {
+    return this.impl.renameScope(scope, name)
   }
 
   /** 作用域目录:名字 / 用途 / 当前可读可写状态(工具 memory_scopes 与面板共用)。 */

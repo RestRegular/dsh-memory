@@ -41,6 +41,16 @@ function get(url) {
   return { url, method: 'GET', headers: LOOPBACK }
 }
 
+/** POST + JSON body：面板的写接口只认这一种形状。 */
+function post(url, body) {
+  return {
+    url,
+    method: 'POST',
+    headers: LOOPBACK,
+    async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify(body)) },
+  }
+}
+
 function makeService(dir, config = {}) {
   return new LocalMemoryService({ storeDir: dir, scopes: { global: true, project: true }, ...config })
 }
@@ -163,6 +173,99 @@ test('面板 /status:删光记录但写过用途的作用域仍然列出', async
     assert.ok(row, '没有记录、但有元数据的作用域也在清单里')
     assert.equal(row.description, '只留用途的空作用域')
     assert.equal(row.records, 0)
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('面板 /scope-meta:用户编辑作用域用途与别名(0.29.0)', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-scope-meta-'))
+  const svc = makeService(dir)
+  svc.setProjectScope('project:/w')
+  try {
+    await svc.save({ scope: 'handbook', kind: 'note', content: 'x', scopeDescription: '旧用途' })
+    svc.store.flush()
+
+    // 只改用途
+    let res = fakeRes()
+    await handleRequest(ctxWith(svc), ROUTE, post(`${ROUTE}/scope-meta`, { scope: 'handbook', description: '团队约定与发布流程' }), res)
+    assert.equal(res.out.status, 200)
+    assert.deepEqual(res.out.body.value, { scope: 'handbook', description: '团队约定与发布流程' })
+    assert.equal(svc.scopeMeta('handbook')?.description, '团队约定与发布流程')
+
+    // 只改别名
+    res = fakeRes()
+    await handleRequest(ctxWith(svc), ROUTE, post(`${ROUTE}/scope-meta`, { scope: 'handbook', name: '工作手册' }), res)
+    assert.equal(res.out.status, 200)
+    assert.deepEqual(res.out.body.value, { scope: 'handbook', name: '工作手册' })
+    assert.equal(svc.scopeName('handbook'), '工作手册')
+
+    // 空串 = 移除别名
+    res = fakeRes()
+    await handleRequest(ctxWith(svc), ROUTE, post(`${ROUTE}/scope-meta`, { scope: 'handbook', name: '' }), res)
+    assert.equal(res.out.status, 200)
+    assert.deepEqual(res.out.body.value, { scope: 'handbook', name: '' })
+    assert.equal(svc.scopeName('handbook'), undefined)
+
+    // 保存后 /status 能看到新用途（面板编辑后重新拉列表就是这个口径）
+    res = fakeRes()
+    await handleRequest(ctxWith(svc), ROUTE, get(`${ROUTE}/status`), res)
+    const row = res.out.body.value.scopes.find((item) => item.scope === 'handbook')
+    assert.equal(row.description, '团队约定与发布流程')
+    assert.equal(row.descriptionSource, 'custom')
+    // 没写过用途的作用域标成默认描述，编辑框据此不预填
+    await svc.save({ scope: 'global', kind: 'note', content: 'g' })
+    svc.store.flush()
+    res = fakeRes()
+    await handleRequest(ctxWith(svc), ROUTE, get(`${ROUTE}/status`), res)
+    const globalRow = res.out.body.value.scopes.find((item) => item.scope === 'global')
+    assert.equal(globalRow.descriptionSource, 'default')
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('面板 /scope-meta:不存在的 scope / 什么都没改 / 非法别名都明确拒绝', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-scope-meta-'))
+  const svc = makeService(dir)
+  svc.setProjectScope('project:/w')
+  try {
+    await svc.save({ scope: 'handbook', kind: 'note', content: 'x', scopeDescription: '旧用途' })
+    svc.store.flush()
+    const request = async (body) => {
+      const res = fakeRes()
+      await handleRequest(ctxWith(svc), ROUTE, post(`${ROUTE}/scope-meta`, body), res)
+      return res
+    }
+    assert.equal((await request({ scope: 'no-such-scope', description: 'x' })).out.status, 404, '目录里没有的 scope 不写元数据')
+    assert.equal((await request({ scope: 'handbook' })).out.status, 400, '两个字段都没给')
+    assert.equal((await request({ scope: '', description: 'x' })).out.status, 400)
+    const invalid = await request({ scope: 'handbook', name: 'a/b' })
+    assert.equal(invalid.out.status, 400)
+    assert.equal(invalid.out.body.error.code, 'SCOPE_NAME_INVALID')
+    assert.equal(svc.scopeName('handbook'), undefined, '非法别名不落盘')
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('面板 /scope-meta:旧 provider 没有编辑接口时 501', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-scope-meta-'))
+  const svc = makeService(dir)
+  try {
+    const res = fakeRes()
+    // 只实现只读能力的最小 provider
+    const old = {
+      scopeStats: () => [],
+      scopeCatalog: () => [],
+      store: svc.store,
+    }
+    await handleRequest(ctxWith(old), ROUTE, post(`${ROUTE}/scope-meta`, { scope: 'global', description: 'x' }), res)
+    assert.equal(res.out.status, 501)
+    assert.equal(res.out.body.error.code, 'NOT_SUPPORTED')
   } finally {
     svc.flushSync()
     rmSync(dir, { recursive: true, force: true })

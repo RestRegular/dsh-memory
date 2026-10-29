@@ -592,6 +592,74 @@ test('记录页:记忆 / 作用域 子标签页;作用域页展示名称 · 条�
   hooks.resetAll()
 })
 
+test('作用域页:编辑用途 / 别名(别名可选),保存走 /scope-meta 并刷新;默认描述不预填', async () => {
+  const { hooks } = await loadBundle()
+  hooks.resetAll()
+  const state = {
+    scopes: [
+      { scope: 'handbook', records: 2, pendingEmbeds: 0, label: 'custom:handbook', name: '工作手册', description: '团队约定与发布流程', descriptionSource: 'custom', updatedAt: 3 },
+      { scope: 'global', records: 1, pendingEmbeds: 0, label: 'global:全局', description: '全局作用域：跨项目共享', descriptionSource: 'default', updatedAt: 2 },
+      { scope: 'session:sess-1', records: 0, pendingEmbeds: 0, label: 'session:sess-1', description: '会话作用域：仅本会话可见', descriptionSource: 'default', updatedAt: 1 },
+    ],
+    embedServer: null,
+  }
+  const tree = await mountPanel(hooks, state)
+  ;(collect(tree()).find((n) => n.tag === 'button' && textOf(n).trim() === '作用域')!.props!.onClick as () => void)()
+  hooks.runEffects()
+
+  const rows = () => collect(tree()).filter((n) => String(n.props?.className ?? '') === 'scope-row')
+  const rowOf = (needle: string) => rows().find((n) => textOf(n).includes(needle))!
+  const buttonOf = (node: RenderNode, label: string) => collect(node).find((n) => n.tag === 'button' && textOf(n).trim() === label)!
+  const textarea = () => collect(tree()).find((n) => n.tag === 'textarea')
+  const aliasInput = () => collect(tree()).find((n) => n.tag === 'input' && String(n.props?.placeholder ?? '').includes('移除别名'))
+
+  // 默认描述的行：编辑框不预填，保存时不允许把默认文案固化成手写内容。
+  ;(buttonOf(rowOf('global:全局'), '编辑').props!.onClick as () => void)()
+  assert.equal(textarea()!.props?.value, '', '默认描述不预填')
+  assert.ok(textOf(tree()).includes('默认描述'), '默认描述有标注')
+  ;(buttonOf(rows().find((n) => textOf(n).includes('global:全局'))!, '取消').props!.onClick as () => void)()
+
+  // global / session 不支持别名：编辑框里不给别名字段，只说明一句。
+  ;(buttonOf(rowOf('session:sess-1'), '编辑').props!.onClick as () => void)()
+  assert.equal(aliasInput(), undefined, 'session 作用域没有别名字段')
+  assert.ok(textOf(tree()).includes('不支持别名'), '说明为什么不给别名')
+  ;(buttonOf(rows().find((n) => textOf(n).includes('session:sess-1'))!, '取消').props!.onClick as () => void)()
+
+  // 手写用途 + 别名：都预填，改完保存 → POST /scope-meta。
+  ;(buttonOf(rowOf('custom:handbook'), '编辑').props!.onClick as () => void)()
+  assert.equal(textarea()!.props?.value, '团队约定与发布流程', '手写用途预填')
+  ;(textarea()!.props!.onChange as (e: unknown) => void)({ target: { value: '团队约定、发布与回滚流程' } })
+  assert.equal(aliasInput()!.props?.value, '工作手册', '别名预填')
+  ;(aliasInput()!.props!.onChange as (e: unknown) => void)({ target: { value: '团队手册' } })
+
+  const calls: Array<{ url: string; body: string | undefined }> = []
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string, init?: { body?: string }) => {
+    calls.push({ url: String(url), body: init?.body })
+    // 保存后组件会重新拉 /status 与 /records：两个形状都得给全，否则列表拿到 undefined。
+    return {
+      status: 200,
+      json: async () => ({ ok: true, value: String(url).includes('/status') ? state : { records: [] } }),
+    }
+  }
+  try {
+    ;(buttonOf(rows().find((n) => textOf(n).includes('custom:handbook'))!, '保存').props!.onClick as () => void)()
+    for (let i = 0; i < 8; i++) await Promise.resolve()
+    const call = calls.find((item) => item.url.endsWith('/scope-meta'))
+    assert.ok(call, `应该 POST /scope-meta（实际:${calls.map((c) => c.url).join(', ')}）`)
+    assert.deepEqual(JSON.parse(String(call!.body)), {
+      scope: 'handbook',
+      description: '团队约定、发布与回滚流程',
+      name: '团队手册',
+    })
+    assert.equal(textarea(), undefined, '保存后编辑框关闭')
+    assert.ok(textOf(tree()).includes('已保存'), '保存后有反馈')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
+})
+
 test('会话作用域展示名:客户端也取会话 id 前 16 位(前 8 位恒为 session-)', async () => {
   const { exports } = await loadBundle()
   const helpers = exports.__test as {

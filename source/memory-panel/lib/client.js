@@ -197,6 +197,13 @@ window.__ModuleLoader__.load({
       '.memp .scope-row-desc{font-size:11.5px;line-height:1.55;color:var(--dsw-alias-label-secondary)}',
       '.memp .scope-row-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:10.5px;color:var(--dsw-alias-label-secondary)}',
       '.memp .scope-row-key{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10.5px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      // 作用域编辑(0.29.0):用途 textarea + 可选别名输入,动作行只有保存 / 取消
+      '.memp .scope-edit{display:flex;flex-direction:column;gap:5px;padding:2px 0 4px}',
+      '.memp .scope-edit label{font-size:10.5px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .scope-edit textarea{width:100%;min-height:46px;resize:vertical;font-size:12px;line-height:1.5}',
+      '.memp .scope-edit input[type=text]{width:100%;font-size:12px}',
+      '.memp .scope-edit-actions{display:flex;gap:6px;padding-top:2px}',
+      '.memp .scope-edit-actions button{padding:3px 12px;font-size:11.5px}',
       // 记录视图:各区块之间留出呼吸感(之前全贴在一起)
       '.memp .memp-body > * + *{margin-top:14px}',
       '.memp .stats{margin-bottom:0}',
@@ -3552,6 +3559,14 @@ window.__ModuleLoader__.load({
       // 两个视图共用 /status 的那次拉取，切换不重新请求。
       const [dataView, setDataView] = React.useState('memories')
       const [scopeQuery, setScopeQuery] = React.useState('')
+      // 作用域编辑（0.29.0）：同一时间只编辑一行 —— 描述 / 别名都是全局共享的元数据，
+      // 同时开多个编辑框只会让人不确定保存的是哪一条。
+      const [editingScope, setEditingScope] = React.useState('')
+      const [scopeDraftDescription, setScopeDraftDescription] = React.useState('')
+      const [scopeDraftName, setScopeDraftName] = React.useState('')
+      const [scopeBusy, setScopeBusy] = React.useState(false)
+      const [scopeError, setScopeError] = React.useState('')
+      const [scopeSaved, setScopeSaved] = React.useState('')
       const [pendingTick, setPendingTick] = React.useState(0)
       const [creating, setCreating] = React.useState(false)
 
@@ -3631,6 +3646,42 @@ window.__ModuleLoader__.load({
         setSemantic(false)
         setSearchInfo(null)
         load('', scope, false)
+      }
+      /**
+       * 编辑作用域的描述 / 别名(0.29.0)。
+       *
+       * 用途只预填**自己写的**那句：`descriptionSource==='default'` 是按类型补的默认
+       * 描述，预填进去再保存等于把默认文案固化成手写内容。
+       * 别名字段对 global / session 不显示 —— provider 也不接受（显示名跟随类型/会话 id）。
+       */
+      const beginScopeEdit = (row) => {
+        setEditingScope(row.scope)
+        setScopeDraftDescription(row.descriptionSource === 'custom' ? row.description : '')
+        setScopeDraftName(row.name === undefined ? '' : row.name)
+        setScopeError('')
+        setScopeSaved('')
+      }
+      const cancelScopeEdit = () => {
+        setEditingScope('')
+        setScopeError('')
+      }
+      const saveScopeEdit = async (row) => {
+        setScopeBusy(true); setScopeError(''); setScopeSaved('')
+        try {
+          await api('scope-meta', {
+            scope: row.scope,
+            description: scopeDraftDescription.trim(),
+            ...(row.canAlias ? { name: scopeDraftName.trim() } : {}),
+          })
+          setEditingScope('')
+          setScopeSaved(row.scope)
+          // 重新拉 /status：用途、别名与展示名都由服务端算（别名影响 label 与下拉）。
+          await load()
+        } catch (e) {
+          setScopeError(String(e.message || e))
+        } finally {
+          setScopeBusy(false)
+        }
       }
       // 审批浮层 / 其它入口点击记忆 ID:挂载时消费一次 pending,之后靠同一事件。
       React.useEffect(() => {
@@ -4039,6 +4090,10 @@ window.__ModuleLoader__.load({
             scope: s.scope,
             label: scopeLabel(s.scope, labels),
             description: typeof s.description === 'string' ? s.description.trim() : '',
+            descriptionSource: s.descriptionSource === 'custom' ? 'custom' : (s.descriptionSource === 'default' ? 'default' : 'none'),
+            name: typeof s.name === 'string' && s.name !== '' ? s.name : undefined,
+            // global / session 的显示名跟随类型与会话 id，provider 也不接受别名。
+            canAlias: !(String(s.scope) === 'global' || String(s.scope).startsWith('session:')),
             records: Number(s.records) || 0,
             pendingEmbeds: Number(s.pendingEmbeds) || 0,
             updatedAt: Number(s.updatedAt) || 0,
@@ -4046,7 +4101,8 @@ window.__ModuleLoader__.load({
           .filter((row) => needle === ''
             || row.label.toLowerCase().includes(needle)
             || row.scope.toLowerCase().includes(needle)
-            || row.description.toLowerCase().includes(needle))
+            || row.description.toLowerCase().includes(needle)
+            || (row.name !== undefined && row.name.toLowerCase().includes(needle)))
           .sort((a, b) => b.records - a.records || b.updatedAt - a.updatedAt || a.label.localeCompare(b.label))
       })()
       const viewSwitch = h('div', { className: 'row' },
@@ -4074,31 +4130,71 @@ window.__ModuleLoader__.load({
       const scopeListBody = !loading && !error && scopeRows.length === 0
         ? h('div', { className: 'empty' }, scopeQuery.trim() !== '' ? '没有匹配的作用域' : '还没有作用域')
         : h('div', { className: 'list' },
-            scopeRows.map((row) => h('div', { className: 'scope-row', key: row.scope },
-              h('div', { className: 'scope-row-head' },
-                h('span', { className: 'scope-row-name', title: scopeTitle(row.scope, row.label) }, row.label),
-                h('span', { className: 'badge' }, `${row.records} 条记忆`),
-                row.pendingEmbeds > 0
-                  ? h('span', { className: 'pending', title: '待嵌入向量：向量服务就绪后会自动补上' }, `待嵌入 ${row.pendingEmbeds}`)
-                  : null,
-                h('span', {
-                  className: 'time',
-                  title: row.updatedAt > 0 ? `最近更新 ${fmtTime(row.updatedAt)}` : '还没有记录',
-                }, row.updatedAt > 0 ? fmtTime(row.updatedAt) : '—'),
-              ),
-              h('div', { className: 'scope-row-desc' }, row.description === '' ? '（未填写用途）' : row.description),
-              h('div', { className: 'scope-row-foot' },
-                h('span', { className: 'scope-row-key', title: '作用域键：工具参数直接用它（自定义作用域传裸名）' }, row.scope),
-                h('span', { style: { flex: 1 } }),
-                row.records > 0
-                  ? h('button', {
-                      className: 'linkbtn',
-                      title: '切到「记忆」并只看这个作用域',
-                      onClick: () => openScopeRecords(row.scope),
-                    }, '查看记忆')
-                  : null,
-              ),
-            )),
+            scopeRows.map((row) => {
+              const editing = editingScope === row.scope
+              return h('div', { className: 'scope-row', key: row.scope },
+                h('div', { className: 'scope-row-head' },
+                  h('span', { className: 'scope-row-name', title: scopeTitle(row.scope, row.label) }, row.label),
+                  h('span', { className: 'badge' }, `${row.records} 条记忆`),
+                  row.pendingEmbeds > 0
+                    ? h('span', { className: 'pending', title: '待嵌入向量：向量服务就绪后会自动补上' }, `待嵌入 ${row.pendingEmbeds}`)
+                    : null,
+                  scopeSaved === row.scope ? h('span', { className: 'meta-done' }, '已保存') : null,
+                  h('span', {
+                    className: 'time',
+                    title: row.updatedAt > 0 ? `最近更新 ${fmtTime(row.updatedAt)}` : '还没有记录',
+                  }, row.updatedAt > 0 ? fmtTime(row.updatedAt) : '—'),
+                ),
+                editing
+                  ? h('div', { className: 'scope-edit' },
+                      h('label', null, '用途'),
+                      h('textarea', {
+                        rows: 2,
+                        value: scopeDraftDescription,
+                        placeholder: '一句话说明这个作用域放什么；留空保存 = 清空，回退到按类型的默认描述',
+                        onChange: (e) => setScopeDraftDescription(e.target.value),
+                      }),
+                      row.canAlias
+                        ? h('label', null, '别名（可选）')
+                        : h('div', { className: 'hint' }, 'global / session 作用域不支持别名：显示名跟随类型与会话 id。'),
+                      row.canAlias
+                        ? h('input', {
+                            type: 'text',
+                            value: scopeDraftName,
+                            placeholder: '只影响显示与引用；留空保存 = 移除别名。不改作用域键本身。',
+                            onChange: (e) => setScopeDraftName(e.target.value),
+                          })
+                        : null,
+                      scopeError !== '' ? h('div', { className: 'err' }, scopeError) : null,
+                      h('div', { className: 'scope-edit-actions' },
+                        h('button', { disabled: scopeBusy, onClick: () => saveScopeEdit(row) }, scopeBusy ? '保存中…' : '保存'),
+                        h('button', { disabled: scopeBusy, onClick: cancelScopeEdit }, '取消'),
+                      ),
+                    )
+                  : h('div', { className: 'scope-row-desc' },
+                      row.description === '' ? '（未填写用途）' : row.description,
+                      row.descriptionSource === 'default' ? h('span', { className: 'muted' }, ' · 默认描述') : null,
+                    ),
+                editing
+                  ? null
+                  : h('div', { className: 'scope-row-foot' },
+                      h('span', { className: 'scope-row-key', title: '作用域键：工具参数直接用它（自定义作用域传裸名）' }, row.scope),
+                      h('span', { style: { flex: 1 } }),
+                      row.records > 0
+                        ? h('button', {
+                            className: 'linkbtn',
+                            title: '切到「记忆」并只看这个作用域',
+                            onClick: () => openScopeRecords(row.scope),
+                          }, '查看记忆')
+                        : null,
+                      h('button', {
+                        className: 'linkbtn',
+                        title: '编辑这个作用域的用途与别名（别名可选）',
+                        onClick: () => beginScopeEdit(row),
+                      }, '编辑'),
+                    ),
+              )
+            }),
           )
       // 旧 provider 没有 scope-meta 用途：说明一句，而不是让人以为作用域都没有用途。
       const scopeDescriptionMissing = scopes.length > 0

@@ -3189,19 +3189,46 @@ export class LocalMemoryService implements MemoryServiceApi {
   }
 
   /**
-   * 写入 / 更新作用域用途。**不会**创建记录，也不触发初始化；给面板与
-   * memory_save 的 scopeDescription 补写用。
+   * 写入 / 更新 / 清空作用域用途。**不会**创建记录，也不触发初始化；给面板、
+   * `memory_scopes` 的 edit 动作与 memory_save 的 scopeDescription 用。
+   *
+   * 0.29.0：空白描述 = **清空**（保留元数据与 generation —— 删元数据会让按
+   * generation 绑定的会话授权失效，所以清空只把 description 写成空串）。
+   * 清空后目录按类型补默认描述，与"从没写过"的展示一致。
    */
   describeScope(scope: MemoryScope, description: string, by: string): ScopeMeta {
     const key = this.canonicalScope(scope)
     this.assertScopeAllowed(key)
     this.assertCustomScopeBudget(key)
     const text = typeof description === 'string' ? description.replace(/\s+/g, ' ').trim() : ''
-    if (text === '') throw memoryError('SCOPE_DESCRIPTION_EMPTY', '作用域用途不能为空')
     if (text.length > MAX_SCOPE_DESCRIPTION_CHARS) {
       throw memoryError('SCOPE_DESCRIPTION_TOO_LONG', `作用域用途最多 ${MAX_SCOPE_DESCRIPTION_CHARS} 字`)
     }
     return this.meta.put(key, { description: text, createdBy: by, status: 'ready' })
+  }
+
+  /**
+   * 设置 / 移除作用域别名（0.29.0）。别名只影响**显示与引用**，不改变作用域键：
+   * 项目作用域的身份永远是 `project:<绝对路径>`，自定义作用域永远是名字本身。
+   *
+   * - 非空名字 → `ScopeNames.claim`（统一校验、去重；重名报 SCOPE_NAME_TAKEN）；
+   * - 空串 / undefined → 移除别名，显示名回退到键本身（项目路径 / 自定义名）；
+   * - global 与 session 不支持别名：它们的显示名跟随类型与会话 id，改名只会让
+   *   同一个域出现两种叫法，没有收益。
+   */
+  renameScope(scope: MemoryScope, name: string | undefined | null): { scope: MemoryScope; name?: string } {
+    const key = this.canonicalScope(scope)
+    this.assertScopeAllowed(key)
+    const kind = scopeKind(key)
+    if (kind === 'global' || kind === 'session') {
+      throw memoryError('SCOPE_NAME_UNSUPPORTED', 'global 与 session 作用域不支持别名：它们的显示名跟随类型与会话 id（项目 / 自定义作用域可以设别名）')
+    }
+    const text = typeof name === 'string' ? name.replace(/\s+/g, ' ').trim() : ''
+    if (text === '') {
+      this.names.release(key)
+      return { scope: key }
+    }
+    return { scope: key, name: this.names.claim(key, text) }
   }
 
   /** 名字 → 作用域键：读路径允许直接用别名找作用域。 */
@@ -3332,7 +3359,9 @@ export class LocalMemoryService implements MemoryServiceApi {
       const initialRecords = policy.level === 'absolute' ? undefined : this.initialRecordsOf(scope)
       // 0.27.0：scope-meta 没写用途时按作用域类型给默认描述，
       // 让目录里每一条都自带「这个域是干什么的」。
-      const description = meta?.description ?? defaultScopeDescription(scope)
+      // 0.29.0：被显式清空（描述为空串）与从没写过同样处理，都回退到默认描述。
+      const written = typeof meta?.description === 'string' ? meta.description.trim() : ''
+      const description = written !== '' ? written : defaultScopeDescription(scope)
       out.push({
         scope,
         ...(name !== undefined ? { name } : {}),
