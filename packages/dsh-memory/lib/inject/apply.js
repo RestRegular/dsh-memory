@@ -131,7 +131,7 @@ const NUDGE_TEXT =
 
 const VISIBILITY_LEVEL_TEXT                                                  = {
   absolute: '绝对限制：可见域外的记忆一律查不到，即使工具内部命中也不会返回；范围外也写不进去。',
-  normal: '普通限制：可见域外的记忆命中时默认只返回索引（outOfScope 字段），不自动弹审批；Agent 确认需要正文后带 requestApproval=true 才向用户发起一次审批。写入 / 删除范围外同样需要审批。',
+  normal: '普通限制：可见域外的记忆命中时默认只返回作用域清单（outOfScope 字段：名字 / 条数 / 用途，不含记忆内容），不自动弹审批；Agent 确认这些作用域确实相关后带 requestApproval=true 才向用户发起一次审批。写入 / 删除范围外同样需要审批。',
   none: '无限制：可以读写所有作用域（当前选择仅作为下次切换的偏好保留）。',
 }
 

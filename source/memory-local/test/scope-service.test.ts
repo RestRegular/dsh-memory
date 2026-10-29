@@ -273,7 +273,7 @@ test('scope:all 跨全部已发现 scope;范围外只给索引,显式审批后�
     // 0.27.0:范围外命中默认不弹审批,只回索引(withheld=out-of-scope)。
     const all = await tools.memory_search.execute({ query: 'sqlite 迁移', scope: 'all' }, { agent: agent('sess-1') })
     assert.deepEqual(all.records.map((r) => r.scope), [SESSION])
-    assert.deepEqual(all.outOfScope?.scopes, [{ scope: 'handbook', records: 1 }])
+    assert.deepEqual(all.outOfScope?.scopes.map((entry) => [entry.scope, entry.records]), [['handbook', 1]])
     assert.deepEqual(all.withheld, { count: 1, reason: 'out-of-scope' })
     // 显式要求审批(0.26 及以前的行为):provider 的 mock 放行 → 命中并入 records。
     const approved = await tools.memory_search.execute(

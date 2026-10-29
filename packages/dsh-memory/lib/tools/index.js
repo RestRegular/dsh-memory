@@ -12,7 +12,7 @@
  */
                                              
 import { isAbsolute, resolve } from 'node:path'
-import { canonicalWorkspacePath, normalizeScopeInput, resolveScopeRef } from '../provider/scope.js'
+import { canonicalWorkspacePath, defaultScopeDescription, normalizeScopeInput, resolveScopeRef } from '../provider/scope.js'
 
 /** Shape each tool shares: JSON-schema parameters + canonical output value. */
                                  
@@ -1020,19 +1020,20 @@ function applySummaryDedupe(opts                    , exec         , records    
  
 
 /**
- * 0.27.0：范围外命中的**记忆索引**（不含正文）。普通限制下检索不再自动弹审批，
- * 而是给模型一个「范围外有哪些作用域、命中了什么条目」的目录印象；
- * 要读正文时由 Agent 用 requestApproval=true 显式发起审批，或走 memory_scopes request。
+ * 0.28.0：范围外命中的**作用域级**索引——只给「命中了哪个作用域、几条、这个作用域
+ * 是干什么的」，**不再给条目摘要**。
+ *
+ * 为什么收窄：0.27.0 的条目索引会带短摘要，模型很容易把那段摘要当成「已经读到的东西」
+ * 直接引用；而它其实是可见域外的内容。现在范围外只暴露作用域用途，模型据此判断
+ * 要不要为某个作用域显式发起审批（requestApproval / memory_scopes request）。
  */
                                        
-            
                
-               
-              
-                
-                   
-                                  
                  
+                                             
+                     
+                                                 
+                      
  
 
                                
@@ -1043,16 +1044,34 @@ function applySummaryDedupe(opts                    , exec         , records    
      
                                                       
      
-                                  
-                                    
+                                          
+                         
      
-                                                                                                     
+                                                 
  
+
+/**
+ * 范围外清单要展示的作用域用途：优先取 provider 目录里手写过的 description，
+ * 拿不到（旧 provider / 目录里没有这个 scope）时按类型给默认描述。
+ */
+function scopeDescriptions(service                   , agent         )                      {
+  const out = new Map                ()
+  if (typeof service.scopeCatalog !== 'function') return out
+  try {
+    for (const entry of service.scopeCatalog(agent)) {
+      const description = typeof entry.description === 'string' ? entry.description.trim() : ''
+      if (description !== '') out.set(entry.scope, description)
+    }
+  } catch {
+    // 目录是增强：拿不到就退回类型默认描述，不让检索因此失败。
+  }
+  return out
+}
 
 export function memorySearchTool(opts                    )                                     {
   return {
     name: 'memory_search',
-    description: 'Search saved memories by keyword or meaning (lexical + local vector recall). Returns id/scope/kind/tags and a short summary; use memory_get for full content. Out-of-scope hits return an index (outOfScope field) instead of auto-raising approval; pass requestApproval=true only after confirming the index holds what you need.',
+    description: 'Search saved memories by keyword or meaning (lexical + local vector recall). Returns id/scope/kind/tags and a short summary; use memory_get for full content. Out-of-scope hits return only the list of scopes (name, hit count, purpose — no record summaries) in the outOfScope field instead of auto-raising approval; pass requestApproval=true only when those scopes are genuinely relevant.',
     parameters: {
       query: { type: 'string', required: true },
       scope: { type: 'string', description: SCOPE_DESCRIPTION },
@@ -1060,7 +1079,7 @@ export function memorySearchTool(opts                    )                      
       includeSuperseded: { type: 'boolean', description: '默认 false；true 时把已被 supersede 的旧版本也返回（历史核对）' },
       summaryChars: { type: 'number', description: `每条摘要的字数上限（默认 ${DEFAULT_SUMMARY_CHARS}，20~2000）` },
       description: { type: 'string', description: DESCRIPTION_PARAM_DESCRIPTION },
-      requestApproval: { type: 'boolean', description: '默认 false：范围外命中只返回索引（outOfScope 字段），不自动弹审批；true = 立即向用户发起审批，允许的条目并入 records。确认索引里有值得读的内容后再传 true。' },
+      requestApproval: { type: 'boolean', description: '默认 false：范围外命中只返回作用域清单（scope + 条数 + 用途，不含任何记忆内容），不自动弹审批；true = 立即向用户发起审批，允许的条目并入 records。确认这些作用域的用途确实与本次任务相关后再传 true。' },
     },
     async execute(args            , exec          )                        {
       const service = svc(opts)
@@ -1162,25 +1181,27 @@ export function memorySearchTool(opts                    )                      
             : outOfScopeReason(decide, policy, deniedRecords.map((hit) => ({ scope: hit.record.scope, kind: hit.record.kind })))
           if (reason !== undefined) result.withheld = { count: denied, reason }
         }
-        // 0.27.0：范围外索引（不含正文）——命中了哪些作用域、各几条、条目印象。
-        // 只在普通限制下给出：absolute 没有任何审批放行路径，索引只会引诱越权尝试。
-        // 未发起审批（默认）或审批没全过时都会给出，模型据此决定要不要显式发起。
+        // 0.28.0：范围外清单（不含任何记忆内容）——命中了哪些作用域、各几条、
+        // 这些作用域是干什么的。只在普通限制下给出：absolute 没有任何审批放行路径，
+        // 清单只会引诱越权尝试。未发起审批（默认）或审批没全过时都会给出。
+        // 条目摘要刻意**不再**返回：范围外的内容不进入上下文，避免模型把摘要当正文引用。
         const pendingOutside = outside.filter((hit) => !approvedOutsideIds.has(hit.record.id))
         if (pendingOutside.length > 0 && level === 'normal') {
-          const scopeCounts = new Map                ()
+          const requestableIds = new Set(needsApproval.map((hit) => hit.record.id))
+          const byScope = new Map                                                   ()
           for (const hit of pendingOutside) {
-            scopeCounts.set(hit.record.scope, (scopeCounts.get(hit.record.scope) ?? 0) + 1)
+            const entry = byScope.get(hit.record.scope) ?? { records: 0, requestable: false }
+            entry.records += 1
+            if (requestableIds.has(hit.record.id)) entry.requestable = true
+            byScope.set(hit.record.scope, entry)
           }
+          const descriptions = scopeDescriptions(service, agent)
           result.outOfScope = {
-            scopes: [...scopeCounts].map(([scope, count]) => ({ scope, records: count })),
-            records: pendingOutside.map((h) => ({
-              id: h.record.id,
-              score: h.score,
-              scope: h.record.scope,
-              kind: h.record.kind,
-              tags: Array.isArray(h.record.tags) ? h.record.tags : [],
-              updatedAt: h.record.updatedAt,
-              summary: summarize(h.record.content, chars),
+            scopes: [...byScope].map(([scope, entry]) => ({
+              scope,
+              records: entry.records,
+              description: descriptions.get(scope) ?? defaultScopeDescription(scope),
+              requestable: entry.requestable,
             })),
           }
         }

@@ -8,8 +8,10 @@
  * 0.20.0：范围外命中被挡住时，把**真实原因**（用户拒绝 / 审批超时 / 无法审批）
  * 写进渲染文本。
  * 0.23.0：绝对限制与「不可读」开关也会被说明（不再假装"不存在"），并提示怎么调整。
- * 0.27.0：普通限制下范围外命中不再自动弹审批 —— 检索结果带 outOfScope 索引
- * （命中作用域聚合 + 条目印象，不含正文），审批改为 Agent 显式发起。
+ * 0.27.0：普通限制下范围外命中不再自动弹审批 —— 检索结果带 outOfScope 清单
+ * （作用域聚合），审批改为 Agent 显式发起。
+ * 0.28.0：范围外清单只给作用域（名字 / 条数 / 用途），**不再给条目摘要**；清单与
+ * withheld 说明不再重复讲同一件事（「索引已列在下方」那句直接去掉）。
  */
                                                                                                                                
 import { scopeDisplayName } from '../provider/scope.js'
@@ -43,7 +45,7 @@ export function renderWithheldNote(withheld                          )         {
   const count = withheld.count
   switch (withheld.reason) {
     case 'out-of-scope':
-      return `另有 ${count} 条记忆在本会话的可见域外（限制等级：普通限制）。本次没有弹审批，它们的索引已列在下方 outOfScope 里；确认其中确有需要的内容后，用 memory_search 带 requestApproval=true 显式发起审批，或用 memory_scopes 申请该作用域的会话权限。`
+      return `另有 ${count} 条记忆在本会话的可见域外（限制等级：普通限制），本次没有弹审批。要看正文需要显式发起：用 memory_search 带 requestApproval=true 重发同一次搜索（会弹审批），或用 memory_scopes(action="request") 申请该作用域的会话权限。`
     case 'rejected':
       return `另有 ${count} 条记忆在本会话的可见域外，用户拒绝了本次访问（限制等级：普通限制），未返回。如确实需要，请让用户调整「记忆范围」后重试。`
     case 'timeout':
@@ -64,35 +66,44 @@ export function renderWithheldNote(withheld                          )         {
 }
 
 /**
- * 范围外索引的尾部说明(0.27.0)。告诉模型这块是「目录印象」不是可读正文,
- * 以及想读时该走哪条路。
+ * 范围外清单的尾部说明(0.27.0 / 0.28.0)。告诉模型这块**只有作用域**，不含任何
+ * 记忆内容；真要读时该走哪条路。
  */
 export const OUT_OF_SCOPE_INDEX_NOTE =
-  '以上为范围外记忆的索引（不含正文）。需要正文时：用 memory_search 带 requestApproval=true 重新发起同一次搜索（会弹审批），或用 memory_scopes(action="request") 申请该作用域的本会话权限。'
+  '以上只列了作用域，不含任何记忆内容。需要正文时：用 memory_search 带 requestApproval=true 重新发起同一次搜索（会弹审批），或用 memory_scopes(action="request") 申请该作用域的本会话权限。'
 
 /**
- * 范围外索引块：命中作用域聚合 + 条目印象。刻意与可见域内的结果分开排版,
- * 模型一眼能分清「哪些已返回、哪些只是线索」。
+ * 范围外清单：每个作用域一行「名称（条数 · 可申请性）：用途」。
+ * 刻意与可见域内的结果分开排版，并且**不出现任何条目 id / 摘要** ——
+ * 范围外的内容不该有机会被当成「已经读到的记忆」引用。
  */
 function renderOutOfScopeIndex(
   outOfScope                                         ,
   label            ,
 )         {
-  const scopes = outOfScope.scopes.map((item) => `${label(item.scope)}(${item.records})`).join('、')
-  const lines = outOfScope.records.map((entry) => {
-    const tags = joinList(entry.tags)
-    const meta = `${label(entry.scope)}/${entry.kind}${tags === '' ? '' : ` · ${tags}`}`
-    return `[${entry.score.toFixed(3)}] ${shortId(entry.id)} (${meta}) ${entry.summary}`
+  const total = outOfScope.scopes.reduce((sum, entry) => sum + entry.records, 0)
+  const lines = outOfScope.scopes.map((entry) => {
+    const text = typeof entry.description === 'string' ? entry.description.trim() : ''
+    const description = text === '' ? '（未填写用途）' : text
+    const meta = [`${entry.records} 条`]
+    if (entry.requestable === false) meta.push('不可申请')
+    return `- ${label(entry.scope)}（${meta.join(' · ')}）：${description}`
   })
-  return [`范围外命中：${scopes}`, ...lines, '', OUT_OF_SCOPE_INDEX_NOTE].join('\n')
+  const head = `范围外命中（只列作用域与用途，不含条目内容）：${outOfScope.scopes.length} 个作用域 / ${total} 条`
+  return [head, ...lines, '', OUT_OF_SCOPE_INDEX_NOTE].join('\n')
 }
 
 /** 「[得分] id (作用域/类型 · 标签) 摘要」；没有任何一条命中时给明确空结果。 */
 export function renderSearchResult(value              , label            )         {
-  const note = renderWithheldNote(value.withheld)
-  const index = value.outOfScope !== undefined && (value.outOfScope.records.length > 0 || value.outOfScope.scopes.length > 0)
+  const index = value.outOfScope !== undefined && value.outOfScope.scopes.length > 0
     ? renderOutOfScopeIndex(value.outOfScope, label)
     : ''
+  // 0.28.0：清单自己已经把「几条 / 为什么没返回 / 怎么取」讲清楚了，
+  // 再叠一段 'out-of-scope' 的 withheld 说明就是同一件事说两遍（而且旧文案还
+  // 写着「索引已列在下方」，实际排在最后 —— 结构更乱）。有清单时不重复。
+  const note = index !== '' && value.withheld?.reason === 'out-of-scope'
+    ? ''
+    : renderWithheldNote(value.withheld)
   if (value.records.length === 0) {
     if (note === '' && index === '') return '没有找到相关记忆。'
     return [`没有找到可见范围内的相关记忆。`, index, note].filter((part) => part !== '').join('\n\n')

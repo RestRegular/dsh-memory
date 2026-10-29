@@ -85,7 +85,8 @@ test('normal：范围外 search 默认只给索引，不发起审批（0.27.0）
   assert.equal(result.records.length, 1)
   assert.deepEqual(result.withheld, { count: 1, reason: 'out-of-scope' })
   assert.equal(h.asked, 0, '默认不弹审批')
-  assert.deepEqual(result.outOfScope?.scopes, [{ scope: 'handbook', records: 1 }])
+  assert.deepEqual(result.outOfScope?.scopes.map((entry) => [entry.scope, entry.records]), [['handbook', 1]])
+  assert.ok(result.outOfScope?.scopes.every((entry) => typeof entry.description === 'string' && entry.description.length > 0), '范围外清单带作用域用途')
 })
 
 test('normal：requestApproval=true 发起审批，拒绝后 withheld=rejected 且索引保留', async () => {
@@ -97,7 +98,7 @@ test('normal：requestApproval=true 发起审批，拒绝后 withheld=rejected �
   assert.equal(result.records.length, 1)
   assert.deepEqual(result.withheld, { count: 1, reason: 'rejected' })
   assert.equal(h.asked, 1)
-  assert.deepEqual(result.outOfScope?.scopes, [{ scope: 'handbook', records: 1 }], '被拒的命中仍以索引给出')
+  assert.deepEqual(result.outOfScope?.scopes.map((entry) => [entry.scope, entry.records]), [['handbook', 1]], '被拒的命中仍以作用域清单给出')
 })
 
 test('absolute：memory_save 直接拒绝，不弹审批', async () => {

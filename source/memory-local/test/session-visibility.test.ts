@@ -145,7 +145,7 @@ test('普通限制:范围外命中默认只给索引;requestApproval=true 才审
   // 0.27.0:默认不发审批,global 命中以索引给出(withheld=out-of-scope)。
   const indexed = await search.execute({ query: 'beta' }, agentCtx)
   assert.deepEqual([...new Set(indexed.records.map((r) => r.scope))].sort(), [PROJECT].sort())
-  assert.deepEqual(indexed.outOfScope?.scopes, [{ scope: 'global', records: 1 }])
+  assert.deepEqual(indexed.outOfScope?.scopes.map((entry) => [entry.scope, entry.records]), [['global', 1]])
   assert.equal(indexed.withheld?.reason, 'out-of-scope')
   assert.equal(calls.length, 0)
 
@@ -162,7 +162,7 @@ test('普通限制:范围外命中默认只给索引;requestApproval=true 才审
   assert.deepEqual([...new Set(denied.records.map((r) => r.scope))], [PROJECT])
   assert.equal(denied.withheld?.reason, 'rejected')
   assert.ok((denied.withheld?.count ?? 0) >= 1)
-  assert.deepEqual(denied.outOfScope?.scopes, [{ scope: 'global', records: 1 }], '被拒的命中仍以索引给出')
+  assert.deepEqual(denied.outOfScope?.scopes.map((entry) => [entry.scope, entry.records]), [['global', 1]], '被拒的命中仍以作用域清单给出')
 })
 
 test('无限制:不做范围过滤,也不发起审批', async () => {
@@ -254,7 +254,7 @@ test('新会话默认可见域:会话 + 项目 + global,普通限制;范围外�
   assert.deepEqual(denied.records.map((r) => r.scope), ['global'])
   assert.equal(asked, 0, '0.27.0 起范围外命中默认不弹审批')
   assert.deepEqual(denied.withheld, { count: 1, reason: 'out-of-scope' })
-  assert.deepEqual(denied.outOfScope?.scopes, [{ scope: 'other-project', records: 1 }])
+  assert.deepEqual(denied.outOfScope?.scopes.map((entry) => [entry.scope, entry.records]), [['other-project', 1]])
 
   // requestApproval=true → 拒绝时把真实原因告诉模型。
   const rejected = await search.execute({ query: '默认策略', scope: 'all', requestApproval: true }, agentCtx)

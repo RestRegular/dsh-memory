@@ -250,7 +250,7 @@ test('memory_search 范围外命中默认只给索引,不弹审批;requestApprov
     visibilityPolicy: () => ({ level: 'normal' as const, scopes: [{ scope: PROJECT_SCOPE }], source: 'explicit' as const }),
   }
 
-  // 默认:完全不发起审批,范围外命中进入 outOfScope 索引(作用域聚合 + 条目印象)。
+  // 默认:完全不发起审批,范围外命中只给作用域清单(条数 + 用途,不含条目摘要)。
   let asked = 0
   const quietService = {
     ...scoped,
@@ -263,17 +263,19 @@ test('memory_search 范围外命中默认只给索引,不弹审批;requestApprov
   const result = await tool.execute({ query: 'x', description: '查范围外的发布规则' }, { agent: { session: { id: 's1' } } })
   assert.equal(asked, 0, '默认不弹审批')
   assert.deepEqual(result.records.map((r) => r.id), ['abcdef12-3456-7890-abcd-ef1234567890'], '范围内结果照常')
-  assert.deepEqual(result.outOfScope?.scopes, [{ scope: 'other-project', records: 2 }], '范围外按作用域聚合条数')
-  assert.deepEqual(result.outOfScope?.records.map((r) => r.id).sort(), ['outside-1', 'outside-2'])
-  assert.ok(result.outOfScope?.records.every((r) => !('content' in r)), '索引不含正文')
-  assert.ok(result.outOfScope?.records.every((r) => typeof r.summary === 'string' && r.summary.length > 0), '索引带摘要')
+  assert.deepEqual(result.outOfScope?.scopes.map((entry) => [entry.scope, entry.records, entry.requestable]), [
+    ['other-project', 2, true],
+  ], '范围外按作用域聚合条数')
+  assert.ok(result.outOfScope?.scopes.every((entry) => typeof entry.description === 'string' && entry.description.length > 0), '每个作用域都带用途描述')
+  assert.equal('records' in (result.outOfScope ?? {}), false, '范围外清单不再带条目索引')
   assert.deepEqual(result.withheld, { count: 2, reason: 'out-of-scope' }, '普通限制下未审批的范围外命中 = out-of-scope')
 
   const text = renderSearchResult(result, label)
-  assert.match(text, /范围外命中：other-project\(2\)/)
-  assert.match(text, /outOfScope/)
+  assert.match(text, /范围外命中（只列作用域与用途，不含条目内容）：1 个作用域 \/ 2 条/)
+  assert.match(text, /- other-project（2 条）：自定义作用域/)
   assert.match(text, /requestApproval=true/)
-  assert.match(text, /本次没有弹审批/)
+  assert.doesNotMatch(text, /范围外 A|范围外 B/, '范围外条目的摘要不进上下文')
+  assert.doesNotMatch(text, /本次没有弹审批/, '清单已经把话说清,不再重复 withheld 说明')
 
   // 显式 requestApproval=true:恢复 0.26 的审批行为,允许的条目并入 records。
   let payload: string[] = []
@@ -292,9 +294,53 @@ test('memory_search 范围外命中默认只给索引,不弹审批;requestApprov
   assert.deepEqual(payload.sort(), ['outside-1', 'outside-2'], '审批载荷带上全部范围外命中')
   assert.deepEqual(approved.records.map((r) => r.id).sort(), ['abcdef12-3456-7890-abcd-ef1234567890', 'outside-1'])
   assert.deepEqual(approved.withheld, { count: 1, reason: 'partial' })
-  assert.deepEqual(approved.outOfScope?.scopes, [{ scope: 'other-project', records: 1 }], '没被允许的那条仍以索引给出')
-  assert.deepEqual(approved.outOfScope?.records.map((r) => r.id), ['outside-2'])
+  assert.deepEqual(approved.outOfScope?.scopes.map((entry) => [entry.scope, entry.records]), [['other-project', 1]], '没被允许的那条仍以作用域清单给出')
   assert.match(renderSearchResult(approved, label), /只允许了其余条目/)
+})
+
+test('memory_search 范围外清单:用途取自作用域目录,不可申请的作用域如实标注', async () => {
+  const outside = {
+    id: 'outside-1',
+    scope: 'handbook',
+    kind: 'fact',
+    content: '范围外 A',
+    tags: [],
+    importance: 0.5,
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  const entry = {
+    scope: 'handbook',
+    description: '团队约定与发布流程',
+    origin: 'custom' as const,
+    inScope: false,
+    readable: false,
+    writable: false,
+    canRequestRead: false,
+    canRequestWrite: false,
+    accessStatus: 'restricted' as const,
+    updatedAt: 1,
+  }
+  const tool = memorySearchTool({
+    getService: () => ({
+      ...service,
+      search: async () => [{ record: outside, score: 0.8 }],
+      visibilityPolicy: () => ({ level: 'normal' as const, scopes: [{ scope: PROJECT_SCOPE }], source: 'explicit' as const }),
+      // 作用域被用户关掉了可读:命中被挡,但没有审批路径。
+      accessEvaluator: () => (request: { action: string; scope: string }) => (request.scope === 'handbook'
+        ? { allowed: false, reason: 'READ_DISABLED', requestable: false }
+        : { allowed: true, requestable: false }),
+      scopeCatalog: () => [entry],
+    }),
+  })
+  const result = await tool.execute({ query: 'x', description: '查团队约定' }, { agent: { session: { id: 's1' } } })
+  assert.deepEqual(result.outOfScope?.scopes, [{
+    scope: 'handbook',
+    records: 1,
+    description: '团队约定与发布流程',
+    requestable: false,
+  }], '用途来自 scope-meta(目录),可申请性来自授权判定')
+  assert.match(renderSearchResult(result, label), /- handbook（1 条 · 不可申请）：团队约定与发布流程/)
 })
 
 test('memory_search 范围外索引:绝对限制不出现,拒绝/超时后索引用审批结局', async () => {
@@ -341,7 +387,7 @@ test('memory_search 范围外索引:绝对限制不出现,拒绝/超时后索引
   assert.equal(asked, 1, '显式要求时发起审批')
   assert.equal(rejected.records.length, 0)
   assert.deepEqual(rejected.withheld, { count: 1, reason: 'rejected' })
-  assert.deepEqual(rejected.outOfScope?.scopes, [{ scope: 'other-project', records: 1 }], '拒绝后索引仍在,模型能再判断')
+  assert.deepEqual(rejected.outOfScope?.scopes.map((entry) => [entry.scope, entry.records]), [['other-project', 1]], '拒绝后清单仍在,模型能再判断')
 })
 
 test('renderListResult:去重条目只给 id,提示用 memory_get 取全文', () => {
@@ -477,7 +523,7 @@ test('普通限制+范围外命中:默认不发审批,description 校验不受�
   const result = await tool.execute({ query: 'x', description: '查发布流程的坑' }, exec)
   assert.equal(asked, undefined, '默认不发审批')
   assert.deepEqual(result.withheld, { count: 1, reason: 'out-of-scope' })
-  assert.equal(result.outOfScope?.records[0]?.id, 'outside-1')
+  assert.equal(result.outOfScope?.scopes[0]?.scope, 'other-project')
 })
 
 test('普通限制:绝对限制 / 无限制下不要求 description', async () => {

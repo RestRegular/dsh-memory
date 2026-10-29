@@ -126,6 +126,49 @@ test('面板 /status:每项 label 都带类型前缀(global: / project: / sessio
   }
 })
 
+test('面板 /status:带作用域用途(scope-meta 手写优先,没写过按类型给默认描述)', async () => {
+  // 0.28.0:面板「记录 → 作用域」子标签页要展示用途,与 memory_scopes 目录同源。
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-scope-'))
+  const svc = makeService(dir)
+  svc.setProjectScope('project:/w')
+  try {
+    await svc.save({ scope: 'handbook', kind: 'note', content: 'x', scopeDescription: '团队约定与发布流程' })
+    await svc.save({ scope: 'global', kind: 'note', content: 'g' })
+    svc.store.flush()
+    const res = fakeRes()
+    await handleRequest(ctxWith(svc), ROUTE, get(`${ROUTE}/status`), res)
+    assert.equal(res.out.status, 200)
+    const byScope = Object.fromEntries(res.out.body.value.scopes.map((s) => [s.scope, s]))
+    assert.equal(byScope.handbook.description, '团队约定与发布流程', '手写的用途原样返回')
+    assert.match(byScope.global.description, /全局作用域/, '没写过用途的作用域按类型给默认描述')
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('面板 /status:删光记录但写过用途的作用域仍然列出', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-scope-'))
+  const svc = makeService(dir)
+  svc.setProjectScope('project:/w')
+  try {
+    const saved = await svc.save({ scope: 'empty-域', kind: 'note', content: '临时', scopeDescription: '只留用途的空作用域' })
+    svc.store.flush()
+    for (const store of svc.store.allScopes()) store.records.delete(saved.id)
+    svc.store.flush()
+    const res = fakeRes()
+    await handleRequest(ctxWith(svc), ROUTE, get(`${ROUTE}/status`), res)
+    assert.equal(res.out.status, 200)
+    const row = res.out.body.value.scopes.find((s) => s.scope === 'empty-域')
+    assert.ok(row, '没有记录、但有元数据的作用域也在清单里')
+    assert.equal(row.description, '只留用途的空作用域')
+    assert.equal(row.records, 0)
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('面板 /status:会话 id 以 session- 开头时,回退标签取 16 位而不是被前缀占满', async () => {
   // 真机上的会话 id 形如 `session-1a2b3c4d-…`:前 8 位恒为 `session-`。
   // 只取 8 位会让每个会话作用域都显示成同一个名字,0.25.9 起取 16 位。

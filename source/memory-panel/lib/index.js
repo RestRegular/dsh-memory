@@ -8,7 +8,7 @@
  *   - apply 整体兜底 catch:任何意外都不允许向外抛。
  *
  * 提供管理员 API(前缀路由 /memory/api):
- *   GET  /status    各 scope 记录数 + 待嵌入数 + 展示标签
+ *   GET  /status    各 scope 记录数 + 待嵌入数 + 展示标签 + 用途描述(0.28.0)
  *   GET  /records   ?scope=&q=  枚举/过滤记录
  *   GET  /search    ?scope=&q=&topK=  语义检索(向量 + 词法,provider 排序)
  *   POST /update    {id, content?, kind?, importance?, tags?, triggers?, expiresAt?/ttlMs?}
@@ -882,15 +882,54 @@ async function handle(ctx, routePath, req, res) {
       const stats = typeof memory.scopeStats === 'function'
         ? memory.scopeStats()
         : store.allScopes().map((s) => ({ scope: s.scope, records: s.records.size, pendingEmbeds: s.embedPending.size }))
+      // 作用域用途(0.28.0)：面板「记录 → 作用域」子标签页要展示的「这个域是干什么的」。
+      // 与 memory_scopes 目录 / memory_search 的范围外清单同源(scope-meta 手写优先，
+      // 没写过按类型给默认描述)，所以三处看到的用途永远一致。
+      const catalog = new Map()
+      try {
+        if (typeof memory.scopeCatalog === 'function') {
+          for (const entry of memory.scopeCatalog(undefined) ?? []) {
+            if (entry && typeof entry.scope === 'string') catalog.set(entry.scope, entry)
+          }
+        }
+      } catch { /* 目录是增强：拿不到就只有名称与条数 */ }
       // 会话标题是尽力而为的增强,而且要读会话事件日志:只给最近活跃的前 N 个查,
       // 其余直接用「会话 <id 前 16 位>」。列表本身**始终**完整(不受这个上限影响)。
-      const scopes = stats.map((s, index) => ({
-        ...s,
-        // 别名(项目 / 自定义作用域)也要带类型前缀;没有别名时退回按类型算的展示名。
-        label: typeof s.name === 'string' && s.name !== ''
-          ? scopeDisplayName(s.scope, s.name)
-          : (index < TITLE_LOOKUP_LIMIT ? scopeLabel(ctx, s.scope) : fallbackScopeLabel(s.scope)),
-      }))
+      const scopes = stats.map((s, index) => {
+        const entry = catalog.get(s.scope)
+        return {
+          ...s,
+          // 别名(项目 / 自定义作用域)也要带类型前缀;没有别名时退回按类型算的展示名。
+          label: typeof s.name === 'string' && s.name !== ''
+            ? scopeDisplayName(s.scope, s.name)
+            : (index < TITLE_LOOKUP_LIMIT ? scopeLabel(ctx, s.scope) : fallbackScopeLabel(s.scope)),
+          ...(entry !== undefined && typeof entry.description === 'string' && entry.description.trim() !== ''
+            ? { description: entry.description.trim() }
+            : {}),
+          ...(entry !== undefined && typeof entry.origin === 'string' ? { origin: entry.origin } : {}),
+        }
+      })
+      // 删光记录不等于作用域消失：目录里有用途、却没有记录的作用域也列出来。
+      // 只收**有元数据**的（updatedAt 来自 scope-meta）：默认三路里的 global / 当前项目
+      // 也会出现在目录里，但它们未必真的落过盘，全塞进列表就是凭空多出两个作用域。
+      // 别的会话的 session scope 不列 —— 它们的用途是空的，只会把清单变长。
+      const seen = new Set(scopes.map((s) => s.scope))
+      for (const [key, entry] of catalog) {
+        if (seen.has(key) || key.startsWith('session:')) continue
+        if (typeof entry.description !== 'string' || entry.description.trim() === '') continue
+        if (!(typeof entry.updatedAt === 'number' && entry.updatedAt > 0)) continue
+        scopes.push({
+          scope: key,
+          records: 0,
+          pendingEmbeds: 0,
+          updatedAt: entry.updatedAt,
+          label: typeof entry.name === 'string' && entry.name !== ''
+            ? scopeDisplayName(key, entry.name)
+            : fallbackScopeLabel(key),
+          description: entry.description.trim(),
+          ...(typeof entry.origin === 'string' ? { origin: entry.origin } : {}),
+        })
+      }
       let embedServer = null
       // older providers have no lifecycle API — the panel simply omits the card
       try { embedServer = (await memory.embedServerStatus?.()) ?? null } catch { embedServer = null }

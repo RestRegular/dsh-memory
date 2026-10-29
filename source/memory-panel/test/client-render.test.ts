@@ -539,6 +539,59 @@ test('作用域下拉用服务端给的 label(会话标题 / project 的 cwd)', 
   assert.ok(!optionTexts.includes('session:sess-12345678'), '不再回退成裸 scope 键')
 })
 
+test('记录页:记忆 / 作用域 子标签页;作用域页展示名称 · 条数 · 用途', async () => {
+  const { hooks } = await loadBundle()
+  hooks.resetAll()
+  const state = {
+    scopes: [
+      { scope: 'handbook', records: 2, pendingEmbeds: 0, label: 'custom:handbook', description: '团队约定与发布流程', updatedAt: 1_700_000_000_000 },
+      { scope: 'global', records: 1, pendingEmbeds: 0, label: 'global:全局', description: '全局作用域：跨项目共享的通用事实与偏好', updatedAt: 1_600_000_000_000 },
+      { scope: 'project:C:/demo', records: 0, pendingEmbeds: 0, label: 'project:C:/demo' },
+    ],
+    embedServer: null,
+  }
+  const tree = await mountPanel(hooks, state)
+  // 默认落在「记忆」子标签页:记忆列表 / 工具栏在,作用域用途不在
+  const memoriesTab = () => collect(tree()).find((n) => n.tag === 'button' && textOf(n).trim() === '记忆')
+  const scopesTab = () => collect(tree()).find((n) => n.tag === 'button' && textOf(n).trim() === '作用域')
+  assert.ok(memoriesTab(), '记录页有「记忆」子标签页')
+  assert.ok(scopesTab(), '记录页有「作用域」子标签页')
+  assert.ok(String(memoriesTab()!.props?.className).includes('on'), '默认选中「记忆」')
+  assert.ok(!textOf(tree()).includes('团队约定与发布流程'), '记忆子标签页不列作用域')
+
+  ;(scopesTab()!.props!.onClick as () => void)()
+  hooks.runEffects()
+  const text = textOf(tree())
+  assert.ok(text.includes('团队约定与发布流程'), '作用域页展示手写用途')
+  assert.match(text, /全局作用域/, '没写过用途的按类型补默认描述')
+  assert.ok(text.includes('2 条记忆') && text.includes('1 条记忆'), '展示各作用域的记忆条数')
+  assert.ok(text.includes('custom:handbook') && text.includes('global:全局'), '名称带类型前缀')
+  assert.ok(text.includes('（未填写用途）'), '既没有手写也没有默认描述时如实写「未填写用途」')
+  assert.ok(!textOf(tree()).includes('新建'), '作用域页没有「新建记忆」的入口')
+
+  // 「查看记忆」→ 切回记忆子标签页,并按该作用域重新拉列表
+  const calls: string[] = []
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string) => {
+    calls.push(String(url))
+    return { status: 200, json: async () => ({ ok: true, value: String(url).includes('/status') ? state : { records: [] } }) }
+  }
+  try {
+    const view = collect(tree()).find((n) => n.tag === 'button' && textOf(n).trim() === '查看记忆')
+    assert.ok(view, '有记录的作用域带「查看记忆」')
+    ;(view!.props!.onClick as () => void)()
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+    hooks.runEffects()
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+    assert.ok(calls.some((url) => url.includes('records?scope=handbook')), `按作用域过滤重新拉列表(实际:${calls.join(', ')})`)
+    assert.ok(String(memoriesTab()!.props?.className).includes('on'), '切回「记忆」子标签页')
+    assert.ok(!textOf(tree()).includes('团队约定与发布流程'), '回到记忆列表')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
+})
+
 test('会话作用域展示名:客户端也取会话 id 前 16 位(前 8 位恒为 session-)', async () => {
   const { exports } = await loadBundle()
   const helpers = exports.__test as {

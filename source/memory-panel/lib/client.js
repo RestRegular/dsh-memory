@@ -184,6 +184,19 @@ window.__ModuleLoader__.load({
       '.memp .tab{background:none;border:0;border-radius:7px;padding:4px 14px;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:13px;line-height:1.6;transition:background .12s ease,color .12s ease}',
       '.memp .tab:hover{color:var(--dsw-alias-label-primary)}',
       '.memp .tab.on{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-brand-primary);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.10)}',
+      // 标签页里的二级切换(记录 → 记忆 / 作用域):比主标签栏小一档,跟在主标签栏下面
+      '.memp .subtabs{display:inline-flex;gap:2px;padding:2px;border-radius:8px;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l1)}',
+      '.memp .subtab{background:none;border:0;border-radius:6px;padding:2px 12px;color:var(--dsw-alias-label-secondary);cursor:pointer;font-size:12px;line-height:1.7;transition:background .12s ease,color .12s ease}',
+      '.memp .subtab:hover{color:var(--dsw-alias-label-primary)}',
+      '.memp .subtab.on{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-brand-primary);font-weight:600}',
+      // 作用域清单:一行一个作用域(名称 + 条数 + 用途 + 真实键)
+      '.memp .scope-row{display:flex;flex-direction:column;gap:5px;padding:9px 12px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}',
+      '.memp .scope-row:hover{border-color:var(--dsw-alias-brand-primary)}',
+      '.memp .scope-row-head{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:11.5px;color:var(--dsw-alias-label-secondary);min-width:0}',
+      '.memp .scope-row-name{font-size:12.5px;font-weight:600;color:var(--dsw-alias-label-primary);max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.memp .scope-row-desc{font-size:11.5px;line-height:1.55;color:var(--dsw-alias-label-secondary)}',
+      '.memp .scope-row-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:10.5px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .scope-row-key{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:10.5px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       // 记录视图:各区块之间留出呼吸感(之前全贴在一起)
       '.memp .memp-body > * + *{margin-top:14px}',
       '.memp .stats{margin-bottom:0}',
@@ -3535,6 +3548,10 @@ window.__ModuleLoader__.load({
       const [loading, setLoading] = React.useState(true)
       const [error, setError] = React.useState('')
       const [tab, setTab] = React.useState('data')
+      // 「记录」页里的二级标签页(0.28.0)：记忆(列表) / 作用域(名称 + 用途 + 条数)。
+      // 两个视图共用 /status 的那次拉取，切换不重新请求。
+      const [dataView, setDataView] = React.useState('memories')
+      const [scopeQuery, setScopeQuery] = React.useState('')
       const [pendingTick, setPendingTick] = React.useState(0)
       const [creating, setCreating] = React.useState(false)
 
@@ -3595,6 +3612,8 @@ window.__ModuleLoader__.load({
         // 列表里没有时补一张卡，保证跳过去一定能展开。
         setFocusRecordData(record && record.id ? record : null)
         setTab('data')
+        // 「记录」页现在是 记忆 / 作用域 两个子标签页：跳转必须落在记忆列表上。
+        setDataView('memories')
         setQ('')
         // 语义模式是按查询排名的:跳转要看到那条记录,必须回到普通列表。
         setSemantic(false)
@@ -3602,6 +3621,16 @@ window.__ModuleLoader__.load({
         const nextScope = scope || ''
         setScopeFilter(nextScope)
         load('', nextScope, false)
+      }
+      /** 作用域行的「查看记忆」：切回记忆子标签页并只看这个作用域。 */
+      const openScopeRecords = (scope) => {
+        setDataView('memories')
+        setScopeFilter(scope)
+        setQ('')
+        setSupersededFilter('hide')
+        setSemantic(false)
+        setSearchInfo(null)
+        load('', scope, false)
       }
       // 审批浮层 / 其它入口点击记忆 ID:挂载时消费一次 pending,之后靠同一事件。
       React.useEffect(() => {
@@ -3999,14 +4028,97 @@ window.__ModuleLoader__.load({
         h('a', { href: 'https://github.com/RestRegular/dsh-memory/issues/new', target: '_blank', rel: 'noreferrer' }, '💬 反馈建议 / 提 issue'),
       )
       const overviewBody = h('div', { className: 'memp-body' }, serverCard, maintenanceCard, footer)
+
+      // ---- 「记录」页的二级标签页:记忆 / 作用域(0.28.0) ----
+      // 作用域子标签页回答的是「有哪些域、各自干什么、多少条」——用途与
+      // memory_scopes 目录、memory_search 的范围外清单同源(服务端 /status 已合并)。
+      const scopeRows = (() => {
+        const needle = scopeQuery.trim().toLowerCase()
+        return scopes
+          .map((s) => ({
+            scope: s.scope,
+            label: scopeLabel(s.scope, labels),
+            description: typeof s.description === 'string' ? s.description.trim() : '',
+            records: Number(s.records) || 0,
+            pendingEmbeds: Number(s.pendingEmbeds) || 0,
+            updatedAt: Number(s.updatedAt) || 0,
+          }))
+          .filter((row) => needle === ''
+            || row.label.toLowerCase().includes(needle)
+            || row.scope.toLowerCase().includes(needle)
+            || row.description.toLowerCase().includes(needle))
+          .sort((a, b) => b.records - a.records || b.updatedAt - a.updatedAt || a.label.localeCompare(b.label))
+      })()
+      const viewSwitch = h('div', { className: 'row' },
+        h('div', { className: 'subtabs' },
+          h('button', {
+            className: 'subtab' + (dataView === 'memories' ? ' on' : ''),
+            onClick: () => setDataView('memories'),
+          }, '记忆'),
+          h('button', {
+            className: 'subtab' + (dataView === 'scopes' ? ' on' : ''),
+            onClick: () => setDataView('scopes'),
+          }, '作用域'),
+        ),
+      )
+      const scopeToolbar = h('div', { className: 'row toolbar' },
+        h('input', {
+          type: 'text',
+          placeholder: '搜索作用域名称 / 用途 / 键',
+          value: scopeQuery,
+          onChange: (e) => setScopeQuery(e.target.value),
+        }),
+        h('button', { onClick: () => load(), disabled: loading }, loading ? '刷新中…' : '刷新'),
+        scopeQuery.trim() !== '' ? h('button', { className: 'linkbtn', onClick: () => setScopeQuery('') }, '清空筛选') : null,
+      )
+      const scopeListBody = !loading && !error && scopeRows.length === 0
+        ? h('div', { className: 'empty' }, scopeQuery.trim() !== '' ? '没有匹配的作用域' : '还没有作用域')
+        : h('div', { className: 'list' },
+            scopeRows.map((row) => h('div', { className: 'scope-row', key: row.scope },
+              h('div', { className: 'scope-row-head' },
+                h('span', { className: 'scope-row-name', title: scopeTitle(row.scope, row.label) }, row.label),
+                h('span', { className: 'badge' }, `${row.records} 条记忆`),
+                row.pendingEmbeds > 0
+                  ? h('span', { className: 'pending', title: '待嵌入向量：向量服务就绪后会自动补上' }, `待嵌入 ${row.pendingEmbeds}`)
+                  : null,
+                h('span', {
+                  className: 'time',
+                  title: row.updatedAt > 0 ? `最近更新 ${fmtTime(row.updatedAt)}` : '还没有记录',
+                }, row.updatedAt > 0 ? fmtTime(row.updatedAt) : '—'),
+              ),
+              h('div', { className: 'scope-row-desc' }, row.description === '' ? '（未填写用途）' : row.description),
+              h('div', { className: 'scope-row-foot' },
+                h('span', { className: 'scope-row-key', title: '作用域键：工具参数直接用它（自定义作用域传裸名）' }, row.scope),
+                h('span', { style: { flex: 1 } }),
+                row.records > 0
+                  ? h('button', {
+                      className: 'linkbtn',
+                      title: '切到「记忆」并只看这个作用域',
+                      onClick: () => openScopeRecords(row.scope),
+                    }, '查看记忆')
+                  : null,
+              ),
+            )),
+          )
+      // 旧 provider 没有 scope-meta 用途：说明一句，而不是让人以为作用域都没有用途。
+      const scopeDescriptionMissing = scopes.length > 0
+        && scopes.every((s) => !(typeof s.description === 'string' && s.description.trim() !== ''))
+
       // 记录页:统计 + 工具栏 + 新建表单固定在上面,只有列表在滚动容器里 —— 记忆多了也不把面板撑长。
       const dataBody = h('div', { className: 'memp-body' },
+        viewSwitch,
         statsCard,
-        toolbar,
-        searchNoteNode,
-        createForm,
+        dataView === 'scopes' ? scopeToolbar : toolbar,
+        dataView === 'scopes' ? null : searchNoteNode,
+        dataView === 'scopes'
+          ? (scopeDescriptionMissing
+            ? h('div', { className: 'hint' }, '当前 provider 没有返回作用域用途（升级 @restregular/dsh-memory 后即可显示）。')
+            : null)
+          : createForm,
         error ? h('div', { className: 'err' }, error) : null,
-        h('div', { className: 'scroll' + (records.length > 0 || loading ? '' : ' is-empty') }, listBody),
+        h('div', {
+          className: 'scroll' + ((dataView === 'scopes' ? scopeRows.length > 0 : records.length > 0) || loading ? '' : ' is-empty'),
+        }, dataView === 'scopes' ? scopeListBody : listBody),
       )
       // 记忆树是自己的过滤维度(客户端即时筛选),进来时先拉一份不带服务端筛选的全量记录,
       // 否则从「记录」页带着搜索词切过来会只剩一部分树。

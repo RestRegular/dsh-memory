@@ -8,7 +8,7 @@ export const POLICY_TEXT = `## 记忆系统
 
 memory_search 只返回印象（ID、作用域、类型、标签和少量摘要）；判断相关后再用 memory_get(ids, fields) 取正文。fields 省略 = content + scope + kind + tags；只要摘要用 ["summary"]，只要正文用 ["content"]，需要重要度 / 时间 / 触发词等再显式加上对应字段。
 
-搜索命中作用域外记忆时默认**不弹审批**：结果里的 outOfScope 字段给出范围外索引（命中了哪些作用域、各几条、条目印象，不含正文）。只有确认索引里确有需要的内容时，再用 memory_search 带 requestApproval=true 重新发起同一次搜索（这时才弹审批），或用 memory_scopes(action="request") 申请该作用域的本会话权限；不要凭索引里的摘要就直接引用范围外内容。
+搜索命中作用域外记忆时默认**不弹审批**：结果里的 outOfScope 字段只列出命中的作用域——各几条、以及这些作用域的**用途描述**，不含任何记忆内容（也就没有摘要可引用）。确认某个作用域的用途确实与本次任务相关时，再用 memory_search 带 requestApproval=true 重新发起同一次搜索（这时才弹审批），或用 memory_scopes(action="request") 申请该作用域的本会话权限。
 
 需要知道有哪些作用域、各自用来做什么、当前能不能读/写时，用 memory_scopes（action="list"）。它只返回目录元信息（名字 / 用途 / 访问状态）与初始化记录正文，不返回普通记忆正文；范围外作用域在绝对限制下仍可发现，但正文（含初始化记录）永不可读、不可申请。
 
