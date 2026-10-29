@@ -37,6 +37,8 @@ export type AccessDenyReason =
   | 'WRITE_DISABLED'
   | 'KIND_NOT_ALLOWED'
   | 'ABSOLUTE_ISOLATION'
+  /** 0.30.0：宿主里该会话已归档 —— 作用域与记忆被冻结，恢复会话后自动恢复。 */
+  | 'SCOPE_ARCHIVED'
 
 export interface AccessDecision {
   allowed: boolean
@@ -64,6 +66,11 @@ export interface AccessContext {
   originOf(scope: string): ScopeKind
   /** 当前会话（含父会话继承）的有效 grant；absolute 下忽略。 */
   grants?: readonly GrantView[]
+  /**
+   * 0.30.0：宿主里已归档的**会话作用域键**（`session:<id>`）。归档只冻结
+   * 读/写/删除，不阻止目录发现 —— 名字与用途仍然可见，正文不可读。
+   */
+  archivedScopes?: ReadonlySet<string>
 }
 
 function outsideDecision(level: VisibilityLevel): AccessDecision {
@@ -75,6 +82,12 @@ function outsideDecision(level: VisibilityLevel): AccessDecision {
 export function authorize(request: AccessRequest, context: AccessContext): AccessDecision {
   if (!context.enabled[context.originOf(request.scope)]) {
     return { allowed: false, reason: 'SCOPE_DISABLED', requestable: false }
+  }
+  // 归档是宿主生命周期事实，不是可见域策略：没有审批放行路径，也**不允许**申请。
+  // discover 仍然允许（目录/面板要能看出「这个作用域已归档」），正文一律不可读。
+  if (context.archivedScopes?.has(request.scope) === true) {
+    if (request.action === 'discover') return { allowed: true, source: 'directory' }
+    return { allowed: false, reason: 'SCOPE_ARCHIVED', requestable: false }
   }
   if (request.action === 'discover') {
     return { allowed: true, source: 'directory' }

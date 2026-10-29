@@ -135,8 +135,10 @@ export interface ScopeCatalogEntryView {
   writable: boolean
   canRequestRead: boolean
   canRequestWrite: boolean
-  accessStatus: 'default' | 'read-only' | 'read-write' | 'restricted' | 'unavailable'
+  accessStatus: 'default' | 'read-only' | 'read-write' | 'restricted' | 'unavailable' | 'archived'
   updatedAt: number
+  /** 0.30.0：所属会话在宿主里已归档（读写冻结，恢复会话后自动复原）。 */
+  archived?: boolean
   /** 0.24.0 / D5：初始化记录正文；absolute 下不返回。 */
   initialRecords?: Array<{ id: string; kind: string; content: string; truncated?: boolean }>
 }
@@ -187,7 +189,7 @@ export interface MemoryToolService {
   /** 读 "all" 前把所有磁盘上的 scope 发现出来。 */
   discoverScopes?(): MemoryScope[]
   /** 作用域清单(scope + 记录数),用于 memory_list 的尾部摘要与错误提示。 */
-  scopeStats?(): Array<{ scope: string; records: number; pendingEmbeds: number }>
+  scopeStats?(): Array<{ scope: string; records: number; pendingEmbeds: number; archived?: boolean }>
   /** 作用域目录(名字/用途/访问状态);老 provider 没有时 memory_scopes 明确报不支持。 */
   scopeCatalog?(agent: unknown): ScopeCatalogEntryView[]
   /**
@@ -1378,7 +1380,7 @@ export interface ListArgs {
 export interface ListResult {
   records: Array<{ id: string; scope: string; kind: string; updatedAt: number; content: string; deduped?: boolean }>
   /** 作用域清单(名字 + 条数);文案由 apply.ts 统一渲染(那里能查会话标题)。 */
-  scopeStats?: Array<{ scope: string; records: number; pendingEmbeds: number }>
+  scopeStats?: Array<{ scope: string; records: number; pendingEmbeds: number; archived?: boolean }>
   /**
    * 有记录被可见域挡住时告知模型数量与真实原因(不泄露正文)。
    * 0.23 起绝对限制 / 「不可读」开关也会出现在这里。

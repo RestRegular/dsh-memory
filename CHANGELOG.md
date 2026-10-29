@@ -2,6 +2,16 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.30.0 — 会话作用域绑定会话生命周期（创建自动建 / 归档即冻结 / 恢复即复原）
+
+- **问题**：会话作用域此前只在第一次写记忆时才懒创建，且与宿主的会话生命周期完全脱节 —— 会话归档后，它的 `session:<id>` 作用域与记忆仍然"存在"，跨作用域检索、面板、`memory_get(id)` 都能碰到；恢复 / 归档也没有任何可见语义。用户想要的是：会话创建时作用域就已存在，归档时连同记忆一起冻结，恢复后原样回来。
+- **创建**：`provider/apply.ts` 订阅宿主 `session/created`（顶层会话；子 Agent 沿用父会话作用域），调用新增的 `ensureSessionScope(sessionId)` —— 只写 `scope-meta`（用途：「会话作用域：仅本会话可见的过程记忆；随会话归档与恢复（系统自动创建）」/ `createdBy: system` / `status: ready`），**不写任何记忆**，幂等、不覆盖用户改过的用途。监听器全程 try/catch：`session/created` 抛错会回滚会话创建，记忆侧失败绝不能影响宿主。启动时 `ctx.inject(['sessions'])` 给已存在的会话补建。
+- **归档 = 冻结（实时判定，不复制状态）**：`LocalMemoryService.setArchivedSessionLookup()` 注入对宿主 `workspaceRegistry.archivedSessionIds` 的**实时**读取（不缓存、不落盘）。`authorize()` 新增 `archivedScopes` 上下文：归档作用域 `discover` 仍允许（目录/面板要能看出「已归档」），`read` / `write` / `delete` 一律 `SCOPE_ARCHIVED`（`requestable=false`，没有审批放行路径）。`search` / `list` / `listSync` / `getByIds` 直接跳过归档作用域 —— 不是过滤结果，而是根本不加载它的 store，所以恢复时无需重建索引。
+- **归档期间不清理**：小时级 housekeeping（过期记录清理 + 容量淘汰）与 dispose 时的清理都跳过归档作用域（新增 `runHousekeeping()` 作为定时器与测试共用的入口）；数据文件 `.jsonl` / `.vec` 原样保留。
+- **目录与面板**：`scopeCatalog` 每项新增 `archived?: boolean`，`accessStatus` 新增 `'archived'`；归档作用域的 `records` 仍返回（归档不是权限边界，条数可见），`readable/writable/canRequest*` 恒 false。`memory_scopes` 渲染成「N 条 · 已归档 · 恢复会话后自动恢复读写」；面板「记录 → 作用域」每行显示「已归档」徽标（`/status` 透传 `archived`）。
+- **恢复**：宿主归档集合移除该 id 后，下一次判定就恢复正常 —— `search` / `list` / `getByIds` 立即可用，`memory_get` 按原 id 可取，`authorize` 回到普通策略。没有任何"恢复动作"需要执行。
+- 测试：新增 `source/memory-local/test/session-archive.test.ts`（3 个用例：自动创建与幂等 / 归档冻结与恢复复原 / 冻结期间不清理），覆盖 `search`、`listSync`、`getByIds`、`authorize`、`scopeCatalog`、`save` 拒绝与数据文件保留；全套本地 / 工具 / 注入 / 面板测试通过（`multiprocess.test.ts` 需真起子进程，在受限沙箱里 EPERM，与本改动无关）。
+
 ## 0.29.0 — 作用域用途 / 别名可编辑（用户 + Agent）
 
 - **问题**：0.28.0 之后「作用域用途」成了检索范围外清单里唯一的信息来源，但它**只能写不能改**——Agent 想补一句用途只能靠 `memory_save` 的 `scopeDescription`（还要顺带写一条记忆），面板则完全没有编辑入口；别名更只在 `memory_save({ path })` 那一瞬间能设，设错了只能改文件。于是第一次随手写的用途会一直错下去。
