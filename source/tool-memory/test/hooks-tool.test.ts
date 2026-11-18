@@ -253,6 +253,76 @@ test('memory_hooks:provider 不支持时给升级提示，不静默失败', asyn
   )
 })
 
+// ---------------------------------------------------------------- 0.40.0：统计重置 + 调用审计
+
+test('memory_hooks.reset-stats:清零累计统计并回传被清掉的次数', async () => {
+  const cleared: string[] = []
+  const service = stubHooks({
+    resetHookStats(id) {
+      cleared.push(id)
+      return { runCount: 27491, errorCount: 3, rejectCount: 1 }
+    },
+  })
+  const saved = service.saveHook!({ code: CODE, name: '注入摘要只取概括句', phase: 'before-inject' })
+  const tool = memoryHooksTool({ getService: getService(service) })
+  const result = await tool.execute({ action: 'reset-stats', id: saved.id }, exec)
+  assert.deepEqual(cleared, [saved.id], '按解析后的完整 id 调 provider')
+  assert.deepEqual(result.cleared, { runCount: 27491, errorCount: 3, rejectCount: 1 })
+  assert.match(result.note ?? '', /清零/)
+  // 必须说清楚"代码与批准状态没变"，否则模型会以为脚本被停用。
+  assert.match(result.note ?? '', /代码与批准状态没有变化|已批准的仍然会运行/)
+})
+
+test('memory_hooks.reset-stats:老 provider 没有该方法时诚实报不支持', async () => {
+  const service = stubHooks({ resetHookStats: undefined })
+  const saved = service.saveHook!({ code: CODE, name: 'x', phase: 'before-save' })
+  const tool = memoryHooksTool({ getService: getService(service) })
+  await assert.rejects(
+    () => tool.execute({ action: 'reset-stats', id: saved.id }, exec),
+    (error: Error & { code?: string }) => error.code === 'HOOKS_UNSUPPORTED',
+  )
+})
+
+test('memory_hooks.audit:按 tool / rewritten 过滤并把逐次记录回给模型', async () => {
+  const seen: Array<Record<string, unknown>> = []
+  const service = stubHooks({
+    hookCallLog(query) {
+      seen.push(query ?? {})
+      return [{
+        hookId: 'hook-1',
+        hookName: '注入摘要只取概括句',
+        phase: 'before-inject',
+        tool: 'memory_search',
+        target: 'summary',
+        recordId: 'rec-1',
+        ok: true,
+        crashed: false,
+        rewritten: true,
+        dropped: false,
+        durationMs: 2,
+        at: 1_700_000_000_000,
+      }]
+    },
+  })
+  service.saveHook!({ code: CODE, name: '注入摘要只取概括句', phase: 'before-inject' })
+  const tool = memoryHooksTool({ getService: getService(service) })
+  const result = await tool.execute({
+    action: 'audit', tool: 'memory_search', rewritten: true, limit: 5,
+  }, exec)
+  assert.deepEqual(seen[0], { tool: 'memory_search', rewritten: true, limit: 5 })
+  assert.equal(result.calls!.length, 1)
+  assert.equal(result.calls![0]!.target, 'summary', '审计要能看出改的是摘要还是正文')
+  assert.match(result.note ?? '', /最近 1 次调用/)
+})
+
+test('memory_hooks.audit:没有记录时说明"内存环、只记真实运行"', async () => {
+  const service = stubHooks({ hookCallLog() { return [] } })
+  const tool = memoryHooksTool({ getService: getService(service) })
+  const result = await tool.execute({ action: 'audit' }, exec)
+  assert.deepEqual(result.calls, [])
+  assert.match(result.note ?? '', /内存环|试跑/)
+})
+
 test('memoryTools:七个工具都在，含 memory_hooks', () => {
   const names = Object.keys(memoryTools({ getService: () => undefined })).sort()
   assert.deepEqual(names, [

@@ -39,7 +39,7 @@ JSONL 落盘 · 本机向量检索 · 七个模型工具 · 自动召回 · 硬�
 
 | 能力 | 说明 |
 | --- | --- |
-| **八个工具** | `memory_save` / `memory_search` / `memory_list` / `memory_get` / `memory_forget` / `memory_scopes` / `memory_block` / `memory_hooks`。`memory_search` 只回印象（8 位 id / 作用域 / 类型 / 标签 / 短摘要），正文和元数据用 `memory_get` 的 `fields` 按需取；同一会话里已出现过的条目只回 id。范围外命中默认只给**作用域清单**（`outOfScope` 字段：名字 / 条数 / 用途，0.28.0 起不再带条目摘要），确认后带 `requestApproval: true` 重发才弹审批。`description` 字段在普通限制下必填，审批卡会展示它。`memory_scopes` 管目录：`action="list"` 给作用域名字 / 用途 / 当前可读可写状态，`action="edit"` 编辑某个作用域的**用途 / 别名**（0.29.0），`action="request"` 申请范围外权限；目录本身不返回任何正文。`memory_block`（0.32.0）让 Agent 把无关记忆**藏起来**而不是删掉：`action="block"` / `"unblock"` / `"list"`，目标可以是作用域或记录 id / 前缀，层级 `session`（只影响本会话）/ `workspace`（影响该工作区所有会话）。**作用域参数传裸名**（`handbook`）：0.26.0 起工具输出里的展示名 `custom:handbook` 粘进参数会被自动归一，`project:` / `session:` 本来就直接可用。`memory_hooks`（0.35.0）管理规则附带的脚本：`list` / `get` / `save` / `delete` / `approve` / `enable` / `disable` / `run`（试跑不写记忆）；写脚本前 Agent 会先加载随包技能 `memory-hook-scripts` |
+| **八个工具** | `memory_save` / `memory_search` / `memory_list` / `memory_get` / `memory_forget` / `memory_scopes` / `memory_block` / `memory_hooks`。`memory_search` 只回印象（8 位 id / 作用域 / 类型 / 标签 / 短摘要），正文和元数据用 `memory_get` 的 `fields` 按需取；同一会话里已出现过的条目只回 id。范围外命中默认只给**作用域清单**（`outOfScope` 字段：名字 / 条数 / 用途，0.28.0 起不再带条目摘要），确认后带 `requestApproval: true` 重发才弹审批。`description` 字段在普通限制下必填，审批卡会展示它。`memory_scopes` 管目录：`action="list"` 给作用域名字 / 用途 / 当前可读可写状态，`action="edit"` 编辑某个作用域的**用途 / 别名**（0.29.0），`action="request"` 申请范围外权限；目录本身不返回任何正文。`memory_block`（0.32.0）让 Agent 把无关记忆**藏起来**而不是删掉：`action="block"` / `"unblock"` / `"list"`，目标可以是作用域或记录 id / 前缀，层级 `session`（只影响本会话）/ `workspace`（影响该工作区所有会话）。**作用域参数传裸名**（`handbook`）：0.26.0 起工具输出里的展示名 `custom:handbook` 粘进参数会被自动归一，`project:` / `session:` 本来就直接可用。`memory_hooks`（0.35.0）管理规则附带的脚本：`list` / `get` / `save` / `delete` / `approve` / `revoke-approval` / `run`（试跑不写记忆）/ `reset-stats`（清零累计统计）/ `audit`（逐次调用记录，0.40.0）；写脚本前 Agent 会先加载随包技能 `memory-hook-scripts` |
 | **四种作用域** | 会话 / 项目 / `global` / 自定义名。默认写进当前会话，读默认合并会话 + 项目 + global；项目作用域可起别名。自定义作用域**首次由 Agent 创建时必须带 `scopeDescription`**（一句话用途），可选带 `scopeRule` 写一条初始规则；元数据存在 `<storeDir>/scope-meta/`，删光记录也不会丢 |
 | **作用域目录与绝对隔离** | `memory_scopes` 列出范围内 / 范围外的名字与用途（`action="edit"` 可改用途与别名）；normal / none 下还带**初始化记录正文**（每个作用域最多 3 条，方便 Agent 直接读到“这个作用域主要放什么”）。绝对限制下范围外作用域**仍可发现**，但正文（含初始记录）永不可读、不可写、不可申请（没有任何审批放行路径）；普通限制下范围外条目可申请，`memory_scopes request` 走审批后写入**本会话**授权（默认只读，写权限必须单独申请），子 Agent 沿父会话继承 |
 | **会话授权（grants）** | Agent 申请、用户批准的例外单独存在 `<storeDir>/grants/<session>.json`，不并入可见域策略；只读 / 可写独立、可撤销、只在本会话（及子 Agent）生效；`absolute` 下授权不生效，作用域被删除重建后按创建代次自动失效 |
@@ -399,7 +399,9 @@ memory_scopes({
 | --- | --- | --- |
 | `before-save` | `memory_save` 落盘前 | 返回 `{ ok: false, message: '哪里错、怎么改' }` **拒绝这次保存**，理由原样回给模型，它改对后重试；报错自动带上关联规则 id |
 | `after-save` | 落盘后 | 只观察 / 附注，不改结果、不阻断 |
-| `before-inject` | 进入上下文前 | 返回 `{ content: '改写后' }` 改写正文，`{ drop: true }` 丢弃整条。覆盖**三条注入通道**：规则段、摘要、每轮自动召回 |
+| `before-inject` | 进入上下文 / 作为工具结果返回前 | 返回 `{ content: '改写后' }` 改写正文，`{ drop: true }` 丢弃整条。覆盖**四条通道**：规则段、摘要、每轮自动召回，以及 `memory_search` / `memory_list` / `memory_get` 的工具结果（0.40.0） |
+
+`before-inject` 的工具结果通道改哪个字段看 `ctx.target`：`memory_search` → `summary`、`memory_list` → `content`、`memory_get` → 只有 `fields` 里要了 `summary` 时才改。**`memory_get` 的 `content` 永不改写**（那是读原文的出口）。同一段代码、同一次批准，同时管注入和工具结果，不用为工具结果再批一次。
 
 钩子**不必挂在记忆上**：随 `memory_save.hookCode` 保存会关联到那条规则（记 `ruleId`）；用 `memory_hooks` 的 `action:"save"` 且不传 `ruleId` 则建成**通用钩子**，靠 `scopes` / `kinds` / `phase` 与脚本里的 `ctx` 决定何时自动执行。代码实际按作用域 + 类型匹配触发，`ruleId` 只作关联标注。
 
@@ -421,11 +423,12 @@ memory_save({
 })
 ```
 
-- **写脚本前先加载随包技能**：Agent 用 `skill` 工具加载 `memory-hook-scripts`，里面有入口函数名、沙箱 API、返回约定和 8 个现成范例。别凭记忆写 —— 入口名错了脚本不会运行。
+- **写脚本前先加载随包技能**：Agent 用 `skill` 工具加载 `memory-hook-scripts`，里面有入口函数名、沙箱 API、返回约定和 10 个现成范例。别凭记忆写 —— 入口名错了脚本不会运行。
 - **首次保存或改代码要批准一次**：审批卡会展示完整代码。同一段代码不重复问，改一个字符就重新批准；没批准的代码**永远不会执行**。
 - **代码不进检索**：存在 `<storeDir>/hooks.json`，`memory_search` / 摘要 / 召回都看不到，只有 `memory_hooks` 工具和面板「规则代码」页能读。
 - **沙箱边界**：node:vm、无 `require` / `process` / 网络、禁用 `eval`、同步、默认 120ms 超时。脚本`throw` 只记告警并**放行**（写坏的校验器不能锁死记忆）；要拒绝就正常 `return { ok:false }`。
-- **面板**：「规则代码」标签页可逐行查看 / 编辑 / 拿样例试跑（`run` 不写记忆）/ 启停 / 删除；可关总开关、调超时、关掉"Agent 提交代码需我批准"。用户自己保存的代码视为已批准。
+- **统计与审计（0.40.0）**：卡片上的 `runCount` / `errorCount` / `rejectCount` 是累计值，`memory_hooks({action:'reset-stats', id})` 可清零（只动统计，代码与批准不变）。要看"刚才那次谁触发、改写了没有"用 `memory_hooks({action:'audit'})`：逐次记录 `tool` / `target` / `rewritten` / `dropped` / `durationMs`，最新在前，可按 `tool` / `rewritten` 过滤。审计是**内存环**（最近 500 条，进程重启即清空），只记真实运行、不记试跑。
+- **面板**：「规则代码」标签页可逐行查看 / 编辑 / 拿样例试跑（`run` 不写记忆）/ 清零统计 / 删除；顶部有「最近调用」折叠区；可关总开关、调超时、关掉"Agent 提交代码需我批准"。用户自己保存的代码视为已批准。
 
 ### 流程索引（procedure）
 

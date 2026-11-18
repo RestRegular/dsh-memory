@@ -762,6 +762,18 @@ window.__ModuleLoader__.load({
       '.memp .hook-card-actions{display:flex;align-items:center;gap:4px;flex:none;flex-wrap:wrap}',
       '.memp .linkbtn.danger:hover{color:var(--dsw-alias-state-error-primary,#d33)}',
       '.memp .hook-card-meta{padding:7px 12px;font-size:11px;line-height:1.6;color:var(--dsw-alias-label-secondary);border-bottom:1px solid var(--dsw-alias-border-l1)}',
+      '.memp .hook-audit{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);font-size:11.5px;overflow:hidden}',
+      '.memp .hook-audit-head{display:flex;align-items:center;gap:8px;padding:7px 11px;flex-wrap:wrap}',
+      '.memp .hook-audit-list{display:flex;flex-direction:column;border-top:1px solid var(--dsw-alias-border-l1);max-height:260px;overflow:auto}',
+      '.memp .hook-audit-row{display:flex;align-items:center;gap:9px;padding:4px 11px;border-bottom:1px solid color-mix(in srgb,var(--dsw-alias-border-l1) 55%,transparent);white-space:nowrap}',
+      '.memp .hook-audit-row:last-child{border-bottom:none}',
+      '.memp .hook-audit-row.ok .hook-audit-verdict{color:var(--dsw-alias-state-success-primary,#2a8)}',
+      '.memp .hook-audit-row.err .hook-audit-verdict{color:var(--dsw-alias-state-error-primary,#d33)}',
+      '.memp .hook-audit-time{color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;flex:none}',
+      '.memp .hook-audit-name{font-weight:600;max-width:180px;overflow:hidden;text-overflow:ellipsis}',
+      '.memp .hook-audit-where{font-family:var(--ds-font-family-code,ui-monospace,monospace);font-size:10.5px;color:var(--dsw-alias-label-secondary);flex:none}',
+      '.memp .hook-audit-verdict{flex:none}',
+      '.memp .hook-audit-ms{margin-left:auto;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums;flex:none}',
       '.memp .hook-code-preview{margin:0;padding:10px 12px;font-family:var(--ds-font-family-code,ui-monospace,monospace);font-size:11px;line-height:1.55;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1);max-height:190px;overflow:auto;white-space:pre}',
       '.memp .hook-edit{padding:10px 12px;display:flex;flex-direction:column;gap:8px}',
       '.memp .hook-edit-head{display:flex;align-items:baseline;gap:8px}',
@@ -4927,6 +4939,8 @@ window.__ModuleLoader__.load({
       const [filterApproval, setFilterApproval] = React.useState('')
       // 试跑输出可手动关闭：记录哪些卡片的试跑结果被用户关掉。
       const [trialClosed, setTrialClosed] = React.useState(new Set())
+      // 0.40.0：逐次调用审计默认收起 —— 它是排查工具，平时不该占版面。
+      const [auditOpen, setAuditOpen] = React.useState(false)
 
       const load = async () => {
         setError('')
@@ -5076,8 +5090,27 @@ window.__ModuleLoader__.load({
         setBusy(false)
       }
 
-      const updateSettings = async (patch) => {
-        const next = { ...(data && data.settings ? data.settings : {}), ...patch }
+      /**
+       * 0.40.0：把累计统计清零。
+       *
+       * 累计计数是"从这段代码第一次运行到现在"的总和，调试时几千次旧记录会一直压在
+       * 卡片上，改完脚本根本看不出"现在到底还错不错"。清零只动统计，不动代码与批准。
+       */
+      const resetStats = async (hook) => {
+        if (!window.confirm(`确定把「${hook.name || hook.id}」的运行统计清零吗？\n\n只清掉累计的运行 / 出错 / 拒绝次数，代码与批准状态都不变 —— 已批准的脚本仍然会运行。`)) return
+        setBusy(true)
+        setError('')
+        try {
+          await api('hooks', { action: 'reset-stats', id: hook.id })
+          await load()
+          flash('统计已清零')
+        } catch (e) {
+          setError(String(e.message || e))
+        }
+        setBusy(false)
+      }
+
+      const updateSettings = async (patch) => {        const next = { ...(data && data.settings ? data.settings : {}), ...patch }
         setData({ ...(data || {}), settings: next })
         try {
           await api('hooks', { action: 'settings', settings: next })
@@ -5158,6 +5191,47 @@ window.__ModuleLoader__.load({
         error ? h('div', { className: 'err' }, error) : null,
       )
 
+      /**
+       * 0.40.0：逐次调用审计。
+       *
+       * 为什么需要它：累计计数只能说明"跑了多少次、错了几次"，回答不了"刚才那次是谁
+       * 触发的、改写了没有"。排查"脚本在工具结果上为什么不生效"时，只有逐次记录能
+       * 对上账。数据是内存环（进程重启即清空），默认收起。
+       */
+      const renderAudit = () => {
+        const calls = Array.isArray(data.calls) ? data.calls : []
+        if (calls.length === 0 && !auditOpen) return null
+        const fmtTime = (at) => {
+          try { return new Date(at).toLocaleTimeString('zh-CN', { hour12: false }) } catch { return '' }
+        }
+        const where = (call) => (call.target ? `${call.tool || 'inject'}/${call.target}` : (call.tool || 'inject'))
+        const verdict = (call) => call.error
+          ? `出错：${call.error}`
+          : call.dropped ? '丢弃整条' : call.rewritten ? '已改写' : '未改写'
+        return h('div', { className: 'hook-audit' },
+          h('div', { className: 'hook-audit-head' },
+            h('button', { className: 'linkbtn', onClick: () => setAuditOpen((prev) => !prev) }, auditOpen ? '▾' : '▸'),
+            h('span', { onClick: () => setAuditOpen((prev) => !prev), style: { cursor: 'pointer' } },
+              `最近调用 ${calls.length} 条`),
+            h('span', { className: 'muted' }, ' · 只记真实运行（试跑不算），内存里保留最近 500 条，进程重启即清空'),
+            h('button', { className: 'linkbtn', onClick: () => load(), disabled: busy, style: { marginLeft: 'auto' } }, '刷新'),
+          ),
+          auditOpen
+            ? (calls.length === 0
+                ? h('div', { className: 'muted', style: { padding: '6px 10px' } }, '还没有调用记录。')
+                : h('div', { className: 'hook-audit-list' }, calls.map((call, index) =>
+                    h('div', { className: 'hook-audit-row' + (call.error ? ' err' : call.rewritten ? ' ok' : ''), key: `${call.hookId}-${call.at}-${index}` },
+                      h('span', { className: 'hook-audit-time' }, fmtTime(call.at)),
+                      h('span', { className: 'hook-audit-name' }, call.hookName || call.hookId),
+                      h('span', { className: 'hook-audit-where' }, where(call)),
+                      h('span', { className: 'hook-audit-verdict' }, verdict(call)),
+                      call.message ? h('span', { className: 'muted' }, call.message) : null,
+                      h('span', { className: 'hook-audit-ms' }, `${call.durationMs}ms`),
+                    ))))
+            : null,
+        )
+      }
+
       const renderCard = (hook) => {
         const editing = draft !== null && draft.id === hook.id
         const folded = !editing && !expanded.has(hook.id)
@@ -5189,6 +5263,9 @@ window.__ModuleLoader__.load({
             h('div', { className: 'hook-card-actions' },
               h('button', { className: 'linkbtn', onClick: () => (editing ? setDraft(null) : edit(hook)), disabled: busy }, editing ? '收起' : '编辑代码'),
               h('button', { className: 'linkbtn', onClick: () => run(hook), disabled: busy }, '试跑'),
+              (hook.runCount > 0 || hook.errorCount > 0 || hook.rejectCount > 0)
+                ? h('button', { className: 'linkbtn', onClick: () => resetStats(hook), disabled: busy, title: '把累计运行 / 出错 / 拒绝次数清零（不动代码与批准）' }, '清零统计')
+                : null,
               approved
                 ? h('button', { className: 'linkbtn', onClick: () => revokeApproval(hook), disabled: busy }, '撤销批准')
                 : h('button', { className: 'linkbtn', onClick: () => approve(hook), disabled: busy }, '批准'),
@@ -5294,6 +5371,7 @@ window.__ModuleLoader__.load({
           })),
           h('span', { className: 'muted' }, `${shownHooks.length} / ${hooks.length} 条`),
         ),
+        renderAudit(),
         draft !== null && draft.id === '' ? renderEditor() : null,
         error && draft === null ? h('div', { className: 'err' }, error) : null,
         shownHooks.length === 0

@@ -17,9 +17,19 @@ description: "Use when writing or editing the executable script that rides along
 |---|---|---|---|
 | `before-save` | `memory_save` 落盘**之前** | ✅ 返回 `{ok:false}` 直接拒绝这次保存 | 否 |
 | `after-save` | 记录已经落盘**之后** | ❌ 只能附注 | 否 |
-| `before-inject` | 记忆即将进入上下文**之前** | ✅（`drop:true` 丢弃整条） | ✅ 返回 `{content}` 改写 |
+| `before-inject` | 记忆即将进入上下文 / 作为工具结果返回**之前** | ✅（`drop:true` 丢弃整条） | ✅ 返回 `{content}` 改写 |
 
-`before-inject` 覆盖**三条注入通道**：系统提示的规则段、会话第一步的摘要、以及每轮按用户问题触发的自动召回。所以"改写/丢弃"对模型实际读到的所有记忆都生效。
+`before-inject` 覆盖**四条通道**：系统提示的规则段、会话第一步的摘要、每轮按用户问题触发的自动召回，以及 **`memory_search` / `memory_list` / `memory_get` 的工具结果**（0.40.0 起）。所以"改写/丢弃"对模型实际读到的所有记忆都生效——**同一段代码、同一次批准**，管所有通道，不用为工具结果再批一次。
+
+工具结果通道改的是哪个字段，看 `ctx.target`：
+
+| 工具 | `ctx.target` | 被改写的是 |
+|---|---|---|
+| `memory_search` | `summary` | 每条命中的摘要 |
+| `memory_list` | `content` | 每条记录的正文 |
+| `memory_get` | `summary` | 只有 `fields` 里要了 `summary` 时才改 |
+
+`memory_get` 的 `content` **永远不会被改写**——那是"读原文"的出口，改了就读不到真东西了。
 
 默认是 `before-save`。绝大多数"规范类"规则都用它。
 
@@ -76,8 +86,10 @@ function verify(memory) {
 `ctx` 描述这次调用：
 
 ```js
-{ phase, tool, sessionId, description, now, settings }
+{ phase, tool, target, sessionId, description, now, settings }
 ```
+
+`target` 只在工具结果通道上有值（`'summary'` / `'content'`），注入通道没有这个字段。
 
 `settings` 是**只读设置快照**（0.37.0 起），脚本能读到当前注入设置里的摘要字数限制，按它截断而不写死数字：
 
@@ -89,12 +101,22 @@ function verify(memory) {
 }
 ```
 
-`tool` 是触发者（`'memory_save'` / `'memory_hooks'` / `'inject'`），可以据此分支：
+`tool` 是触发者（`'memory_save'` / `'memory_hooks'` / `'inject'` / `'memory_search'` / `'memory_list'` / `'memory_get'` / `'panel'`），可以据此分支：
 
 ```js
 function verify(memory, ctx) {
   if (ctx.tool !== 'memory_save') return true   // 只拦显式保存
   ...
+}
+```
+
+注入通道上"只取概括句"的典型写法（工具结果与注入共用同一段）：
+
+```js
+function parse(memory) {
+  const text = String(memory.content || '')
+  const at = text.indexOf('：')
+  return { content: at < 0 ? text : text.slice(0, at) }
 }
 ```
 
@@ -109,7 +131,7 @@ function verify(memory, ctx) {
 | `'一段话'` | 不通过，这段话就是理由 |
 | `{ ok: true, message: '…' }` | 通过，并把这句话附在工具结果里 |
 | `{ content: '新正文' }` | 改写正文（`before-inject` / `after-save` 生效） |
-| `{ drop: true }` | 整条丢弃（`before-inject`） |
+| `{ drop: true }` | 整条丢弃（`before-inject`；工具结果里整条不再出现） |
 
 **`message` 是写给模型看的**。它决定了模型下一次能不能自己改对，所以要说
 "缺什么、应该怎样"，而不是"格式错误"。
@@ -151,6 +173,37 @@ function verify(memory, ctx) {
 
 试跑结果按运行时机分开呈现（0.38.0）：保存前校验显示"允许保存 / 拒绝保存"，保存后观察显示"观察 / 附注"，注入前解析显示"改写后正文 / 整条丢弃"；并会回显脚本的**真实返回值**和 `log()` 输出，不只给规范化结论。
 
+## 统计清零与调用审计（0.40.0）
+
+卡上的 `runCount` / `errorCount` / `rejectCount` 是**从这段代码第一次运行到现在**的累计值。
+调试时几千次旧记录会一直压着，改完脚本根本看不出"现在还错不错"，所以可以清零：
+
+```
+memory_hooks({ action: 'reset-stats', id: '<hook id>', description: '...' })
+→ { cleared: { runCount: 27491, errorCount: 3, rejectCount: 1 }, ... }
+```
+
+清零**只动统计**：代码、批准指纹、`id`、`createdAt` 全不变，脚本照常运行。面板卡片上
+有对应的「清零统计」按钮（只在有计数时才出现）。
+
+累计计数回答不了"刚才那次是谁触发的、改写了没有"，所以要逐次排查就用审计：
+
+```
+memory_hooks({ action: 'audit', description: '...' })
+memory_hooks({ action: 'audit', hookId: '<id>', tool: 'memory_search', rewritten: true, limit: 20, description: '...' })
+```
+
+每条记录带 `hookId` / `hookName` / `phase` / `tool` / `target` / `recordId` / `ok` /
+`crashed` / `rewritten` / `dropped` / `durationMs` / `at`，最新在前。几点要知道：
+
+- **只在内存里**保留最近 500 条，进程重启即清空（落盘会让 `hooks.json` 被注入过程写爆）；
+- 只记**真实运行**，`action: 'run'` 的试跑不入环、也不记统计；
+- 面板「规则代码」页顶部有「最近调用」折叠区，内容一样。
+
+"脚本在工具结果上为什么不生效"通常三种原因，用审计一眼能分开：`tool` 对不上（脚本
+按 `ctx.tool` 分支了）、`rewritten: false`（脚本没返回 `content`，或返回的和原文一样）、
+根本没记录（未批准 / 被 `scopes` / `kinds` 挡掉了）。
+
 ## 删除钩子要二次确认（不可逆）
 
 `memory_hooks({ action: 'delete', id })` **不会一次删掉**——删除是从 `hooks.json` 直接移除、没有回收站，写好的代码找不回来（只能从会话日志里翻）。所以它分两步：
@@ -174,6 +227,7 @@ function verify(memory, ctx) {
 | `脚本执行超时` | 死循环，或对超大字符串做了正则回溯 |
 | 判定总是通过 | 忘了 `return`，函数隐式返回 `undefined`（= 通过） |
 | 代码改了却不生效 | 还是待批准状态，跑一次 `action: 'approve'` |
+| 注入改写了、工具结果没改 | 脚本按 `ctx.tool` 分支了，没放行 `memory_search` / `memory_list` / `memory_get`；用 `action: 'audit'` 看有没有记录 |
 
 ## 更多范例
 

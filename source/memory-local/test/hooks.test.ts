@@ -541,3 +541,181 @@ test('设置:代码超过上限时拒绝保存', () => {
     /字符上限/,
   )
 })
+
+// ---------------------------------------------------------------- 0.40.0：工具结果通道
+
+/** 「只取概括句」的 before-inject 脚本：截到第一个全角冒号前。 */
+const HEAD_ONLY = `function parse(memory) {
+  var text = String(memory.content || '')
+  var at = text.indexOf('：')
+  return { content: at < 0 ? text : text.slice(0, at) }
+}`
+
+const ITEM = (text: string, id = 'rec-1') => ({ id, scope: 'global', kind: 'fact', text })
+
+test('工具结果通道:同一段 before-inject 代码也改写工具返回的摘要 (0.40.0)', () => {
+  const service = makeService()
+  const hook = service.saveHook({ phase: 'before-inject', code: HEAD_ONLY, name: '注入摘要只取概括句' })
+  service.approveHook(hook.id)
+
+  const parsed = service.parseForToolResult([ITEM('概括句：这段正文不该出现在摘要里')], {
+    tool: 'memory_search',
+    target: 'summary',
+  })
+  assert.deepEqual(parsed.texts, ['概括句'], '摘要被改写为概括句')
+  assert.equal(parsed.changed.length, 1)
+  assert.equal(parsed.changed[0]!.option, 'rewritten')
+})
+
+test('工具结果通道:ctx.tool / ctx.target 传给脚本，脚本可按通道分支 (0.40.0)', () => {
+  const service = makeService()
+  const hook = service.saveHook({
+    phase: 'before-inject',
+    code: `function parse(memory, ctx) { return { content: ctx.tool + '/' + ctx.target } }`,
+    name: '看通道',
+  })
+  service.approveHook(hook.id)
+
+  const search = service.parseForToolResult([ITEM('原文')], { tool: 'memory_search', target: 'summary' })
+  assert.deepEqual(search.texts, ['memory_search/summary'])
+  const list = service.parseForToolResult([ITEM('原文')], { tool: 'memory_list', target: 'content' })
+  assert.deepEqual(list.texts, ['memory_list/content'])
+  // 注入通道没有 target（整条正文进上下文，没有歧义）；工具结果通道默认 content。
+  const inject = service.parseForToolResult([ITEM('原文')], { tool: 'inject' })
+  assert.deepEqual(inject.texts, ['inject/content'])
+})
+
+test('工具结果通道:脚本 drop 的条目回 null，由调用方剔除 (0.40.0)', () => {
+  const service = makeService()
+  const hook = service.saveHook({
+    phase: 'before-inject',
+    code: `function parse(memory) { return memory.content.indexOf('机密') >= 0 ? { drop: true } : { content: memory.content } }`,
+    name: '过滤机密',
+  })
+  service.approveHook(hook.id)
+  const parsed = service.parseForToolResult([ITEM('可以'), ITEM('机密内容', 'rec-2')], {
+    tool: 'memory_list',
+    target: 'content',
+  })
+  assert.deepEqual(parsed.texts, ['可以', null])
+  assert.equal(parsed.changed[0]!.option, 'dropped')
+})
+
+test('工具结果通道:未批准的脚本不改写任何东西 (0.40.0)', () => {
+  const service = makeService()
+  service.saveHook({ phase: 'before-inject', code: HEAD_ONLY, name: '还没批准' })
+  const parsed = service.parseForToolResult([ITEM('概括句：正文')], { tool: 'memory_search', target: 'summary' })
+  assert.deepEqual(parsed.texts, ['概括句：正文'], '未批准 = 不运行')
+  assert.deepEqual(parsed.changed, [])
+})
+
+test('工具结果通道:脚本崩溃时保留原文并给告警，不抛错 (0.40.0)', () => {
+  const service = makeService()
+  const hook = service.saveHook({
+    phase: 'before-inject',
+    code: 'function parse() { throw new Error("脚本坏了") }',
+    name: '坏的',
+  })
+  service.approveHook(hook.id)
+  const parsed = service.parseForToolResult([ITEM('原文')], { tool: 'memory_search', target: 'summary' })
+  assert.deepEqual(parsed.texts, ['原文'], '崩溃 = 没跑过，原文保留')
+  assert.equal(parsed.warnings.length, 1)
+  assert.match(parsed.warnings[0]!, /脚本坏了|失败/)
+})
+
+test('工具结果通道:输入记录对象不被修改 (0.40.0)', () => {
+  const service = makeService()
+  const hook = service.saveHook({ phase: 'before-inject', code: HEAD_ONLY, name: 'x' })
+  service.approveHook(hook.id)
+  const items = [ITEM('概括句：正文')]
+  service.parseForToolResult(items, { tool: 'memory_search', target: 'summary' })
+  assert.equal(items[0]!.text, '概括句：正文', '入参原样不动')
+})
+
+// ---------------------------------------------------------------- 0.40.0：统计重置 + 调用审计
+
+test('重置统计:清零计数与最近结局，代码与批准不变 (0.40.0)', () => {
+  const service = makeService()
+  const hook = service.saveHook({ phase: 'before-save', code: COLON_CHECK, name: 'x' })
+  service.approveHook(hook.id)
+  // 跑几次造出统计（含一次拒绝）。
+  service.runHooks('before-save', { memory: MEMORY('没有冒号') })
+  service.runHooks('before-save', { memory: MEMORY('有：冒号') })
+  // getHook 返回的是存储里的活对象：先把数值取出来，否则 resetStats 会就地改掉它。
+  const before = service.getHook(hook.id)!
+  const beforeRunCount = before.runCount
+  const beforeRejectCount = before.rejectCount
+  assert.ok(beforeRunCount >= 2)
+  assert.ok(beforeRejectCount >= 1)
+
+  const cleared = service.resetHookStats(hook.id)
+  assert.ok(cleared !== null)
+  assert.equal(cleared!.runCount, beforeRunCount, '回传被清掉的次数')
+  assert.equal(cleared!.rejectCount, beforeRejectCount)
+  const after = service.getHook(hook.id)!
+  assert.equal(after.runCount, 0)
+  assert.equal(after.errorCount, 0)
+  assert.equal(after.rejectCount, 0)
+  assert.equal(after.lastOutcome, undefined, '最近结局也清掉')
+  assert.equal(after.lastRunAt, undefined)
+  // 代码与批准都不动。
+  assert.equal(after.code, hook.code)
+  assert.equal(service.hookPendingApproval(hook.id), false, '仍然是已批准')
+  // 清零后脚本照常运行。
+  assert.equal(service.runHooks('before-save', { memory: MEMORY('有：冒号') }).length, 1)
+})
+
+test('重置统计:钩子不存在时返回 null (0.40.0)', () => {
+  const service = makeService()
+  assert.equal(service.resetHookStats('hook-nope'), null)
+})
+
+test('调用审计:真实运行逐条入环，试跑不入环 (0.40.0)', () => {
+  const service = makeService()
+  const hook = service.saveHook({ phase: 'before-inject', code: HEAD_ONLY, name: '注入摘要只取概括句' })
+  service.approveHook(hook.id)
+
+  assert.deepEqual(service.hookCallLog(), [], '一开始是空的')
+
+  service.parseForToolResult([ITEM('概括句：正文')], { tool: 'memory_search', target: 'summary', sessionId: 's1' })
+  const calls = service.hookCallLog()
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0]!.tool, 'memory_search')
+  assert.equal(calls[0]!.target, 'summary')
+  assert.equal(calls[0]!.rewritten, true, '改写真的发生了')
+  assert.equal(calls[0]!.recordId, 'rec-1')
+  assert.equal(calls[0]!.crashed, false)
+
+  // 试跑不是真实运行，不进审计。
+  service.runHookTrial(hook.id, { memory: MEMORY('概括句：正文'), tool: 'memory_hooks' })
+  assert.equal(service.hookCallLog().length, 1, '试跑不入环')
+})
+
+test('调用审计:可按 tool / rewritten / limit 过滤，最新在前 (0.40.0)', () => {
+  const service = makeService()
+  const hook = service.saveHook({ phase: 'before-inject', code: HEAD_ONLY, name: 'x' })
+  service.approveHook(hook.id)
+  // 两条会改写，一条不会（没有冒号）。
+  service.parseForToolResult([ITEM('概括句：正文')], { tool: 'memory_search', target: 'summary' })
+  service.parseForToolResult([ITEM('没有冒号')], { tool: 'memory_search', target: 'summary' })
+  service.parseForToolResult([ITEM('另一个：正文', 'rec-9')], { tool: 'memory_list', target: 'content' })
+
+  const all = service.hookCallLog()
+  assert.equal(all.length, 3)
+  assert.equal(all[0]!.tool, 'memory_list', '最新在前')
+  assert.equal(service.hookCallLog({ tool: 'memory_search' }).length, 2)
+  assert.equal(service.hookCallLog({ rewritten: false }).length, 1, '没改写的那条')
+  assert.equal(service.hookCallLog({ rewritten: true }).length, 2)
+  assert.equal(service.hookCallLog({ limit: 1 }).length, 1)
+})
+
+test('调用审计:崩溃的调用如实记成 crashed (0.40.0)', () => {
+  const service = makeService()
+  const hook = service.saveHook({ phase: 'before-inject', code: 'function parse(){ throw new Error("boom") }', name: 'x' })
+  service.approveHook(hook.id)
+  service.parseForToolResult([ITEM('原文')], { tool: 'memory_search', target: 'summary' })
+  const call = service.hookCallLog()[0]!
+  assert.equal(call.crashed, true)
+  assert.equal(call.ok, true, '崩溃不阻断：ok 仍为 true')
+  assert.match(call.error ?? '', /boom/)
+})

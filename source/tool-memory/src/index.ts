@@ -340,6 +340,30 @@ export interface MemoryToolService {
   runHookTrial?(id: string, input: unknown): HookOutcomeView[]
   /** 钩子设置（面板 / 工具展示）。 */
   hookSettings?(): { enabled: boolean; timeoutMs: number; requireApproval: boolean; maxCodeChars: number }
+  /**
+   * 0.40.0：把 before-inject 钩子跑在**工具结果**上（摘要 / 正文）。
+   *
+   * 与 `parseForInject` 是同一批脚本、同一段代码 —— 用户批准的是这条规则的
+   * 行为，不该因为"通道"多批一次。老 provider 没有这个方法时工具照常返回原文。
+   */
+  parseForToolResult?(items: ReadonlyArray<{
+    id: string
+    scope: string
+    kind: string
+    text: string
+    tags?: readonly string[]
+    importance?: number
+    createdAt?: number
+    updatedAt?: number
+  }>, options: { tool: string; target?: 'content' | 'summary'; sessionId?: string }): {
+    texts: Array<string | null>
+    changed: Array<{ id: string; hook: string; option: 'rewritten' | 'dropped' }>
+    warnings: string[]
+  }
+  /** 0.40.0：重置一条钩子的累计统计（不动代码与批准指纹）。 */
+  resetHookStats?(id: string): { runCount: number; errorCount: number; rejectCount: number } | null
+  /** 0.40.0：钩子逐次调用审计（内存环，最新在前）。 */
+  hookCallLog?(query?: { hookId?: string; tool?: string; rewritten?: boolean; limit?: number }): HookCallRecordView[]
 }
 
 // ---------------------------------------------------------------- 记忆钩子（0.35.0）
@@ -370,9 +394,35 @@ export interface HookRecordView {
   pendingApproval?: boolean
 }
 
+/**
+ * 一次钩子真实调用的审计记录（0.40.0）。
+ *
+ * 累计计数（runCount / errorCount / rejectCount）只能说明"跑了多少次"，
+ * 说明不了"刚才那次是谁触发的、改写了没有"。排查脚本在工具结果通道上为什么
+ * 不生效时，逐次记录才是能对上账的东西。只在内存里，进程重启即清空。
+ */
+export interface HookCallRecordView {
+  hookId: string
+  hookName: string
+  phase: HookPhaseView
+  /** 触发者：memory_search / memory_list / memory_get / inject / memory_save … */
+  tool?: string
+  /** 改写目标：summary（摘要）或 content（正文）。 */
+  target?: 'content' | 'summary'
+  recordId?: string
+  ok: boolean
+  crashed: boolean
+  /** 改写是否真的发生了（脚本返回了不同的文本）。 */
+  rewritten: boolean
+  dropped: boolean
+  durationMs: number
+  at: number
+  message?: string
+  error?: string
+}
+
 /** 一次钩子运行的结果（试跑与真实运行同形）。 */
-export interface HookOutcomeView {
-  /** ruleId = 该钩子关联的规则记忆 id（可能没有）。 */
+export interface HookOutcomeView {  /** ruleId = 该钩子关联的规则记忆 id（可能没有）。 */
   hook: { id: string; name: string; phase: HookPhaseView; ruleId?: string }
   ok: boolean
   message?: string
@@ -1255,6 +1305,97 @@ export function summarize(content: string, chars: number = DEFAULT_SUMMARY_CHARS
 }
 
 /**
+ * 把 before-inject 钩子跑在工具返回的文本上（0.40.0）的核心。
+ *
+ * 设计口径
+ * --------
+ * - **只改"回给模型的文本"，不动存储。** 传进去的都是副本字段，`MemoryRecord` 一个字节都不碰。
+ * - **崩溃 / 超时 / provider 不支持 → 原样返回。** 工具调用绝不因为钩子坏了而失败。
+ * - 返回与入参**等长同序**的数组：`null` = 该条被脚本 drop（调用方自行剔除或置空），
+ *   `undefined` = 没改写（保持原值），字符串 = 改写后的文本。
+ * - `target` 区分摘要与正文，脚本按 `ctx.target` 分支（两者的截断口径不同）。
+ */
+function rewriteTexts(
+  opts: MemoryToolsOptions,
+  exec: unknown,
+  items: ReadonlyArray<{
+    id: string
+    scope: string
+    kind: string
+    text: string
+    tags?: readonly string[]
+    importance?: number
+    createdAt?: number
+    updatedAt?: number
+  }>,
+  tool: string,
+  target: 'content' | 'summary',
+): Array<string | null | undefined> {
+  if (items.length === 0) return []
+  const service = opts.getService()
+  if (service?.parseForToolResult === undefined) return items.map(() => undefined)
+  let parsed: ReturnType<NonNullable<MemoryToolService['parseForToolResult']>>
+  try {
+    parsed = service.parseForToolResult(items, { tool, target, ...sessionOption(exec) })
+  } catch {
+    // 钩子通道整体坏掉（不该发生）也退回原文。
+    return items.map(() => undefined)
+  }
+  return items.map((item, index) => {
+    const next = parsed.texts[index]
+    if (next === null) return null
+    if (next === undefined || next === item.text) return undefined
+    return next
+  })
+}
+
+/**
+ * `rewriteTexts` 的记录版：就地改写 `records[i][field]`。
+ *
+ * 被 drop 的条目把字段置空并打上 `hookDropped`，渲染层据此当作"没有这段文本"，
+ * 调用方也可以用它把整条剔出去。
+ */
+function applyHookRewrite<T extends { id: string; scope: string; kind: string }>(
+  opts: MemoryToolsOptions,
+  exec: unknown,
+  records: T[],
+  tool: string,
+  field: 'content' | 'summary',
+): void {
+  if (records.length === 0) return
+  const items = records.map((record) => {
+    const extra = record as unknown as { tags?: string[]; importance?: number; createdAt?: number; updatedAt?: number; [k: string]: unknown }
+    return {
+      id: record.id,
+      scope: record.scope,
+      kind: record.kind,
+      text: String(extra[field] ?? ''),
+      ...(Array.isArray(extra.tags) ? { tags: extra.tags } : {}),
+      ...(typeof extra.importance === 'number' ? { importance: extra.importance } : {}),
+      ...(typeof extra.createdAt === 'number' ? { createdAt: extra.createdAt } : {}),
+      ...(typeof extra.updatedAt === 'number' ? { updatedAt: extra.updatedAt } : {}),
+    }
+  })
+  const texts = rewriteTexts(opts, exec, items, tool, field)
+  for (let i = 0; i < records.length; i += 1) {
+    const next = texts[i]
+    const target = records[i] as unknown as Record<string, unknown>
+    if (next === null) {
+      target[field] = ''
+      target.hookDropped = true
+      continue
+    }
+    if (next !== undefined) target[field] = next
+  }
+}
+
+/** 把 exec 里的会话 id 折成可选字段（没有会话时不传，避免 provider 收到 undefined）。 */
+function sessionOption(exec: unknown): { sessionId?: string } {
+  const id = sessionIdOf(agentOf(exec))
+  return id === undefined ? {} : { sessionId: id }
+}
+
+/**
  * memory_search 的上下文去重(0.21.0):
  *   - 同一条记忆、同一个 updatedAt 版本已经出现在上下文里 → 摘要置空并标 deduped;
  *   - 没出现过的（含内容更新后的新版本）→ 照常带摘要，并记为“摘要已出现”。
@@ -1499,6 +1640,11 @@ export function memorySearchTool(opts: MemoryToolsOptions): ToolSpec<SearchArgs,
           }
         }
         if (wantedTopK !== undefined) result.records = result.records.slice(0, wantedTopK)
+        // 0.40.0：before-inject 钩子也管工具结果 —— 摘要返回前先过一遍脚本。
+        // 必须在去重**之前**：去重会清空摘要，被清空的条目没有可改写的文本。
+        applyHookRewrite(opts, exec, result.records, 'memory_search', 'summary')
+        // 脚本用 drop 丢掉整条的，直接不出现在结果里（留个空 id 只会让模型困惑）。
+        result.records = result.records.filter((record) => (record as unknown as { hookDropped?: boolean }).hookDropped !== true)
         // 上下文去重:同一条记忆同版本已经出现过 → 只回 id,摘要让 memory_get 按需取。
         applySummaryDedupe(opts, exec, result.records)
         return result
@@ -1788,6 +1934,11 @@ export function memoryListTool(opts: MemoryToolsOptions): ToolSpec<ListArgs, Lis
           const reason = withheldReasonFor(decide, policy, deniedRecords.map((record) => ({ scope: record.scope, kind: record.kind })), verdict)
           if (reason !== undefined) withheld = { count: denied, reason }
         }
+        // 0.40.0：before-inject 钩子也管工具结果 —— 正文返回前先过一遍脚本。
+        // 放在去重之前：去重会把 content 清空，清空后就没有可改写的文本了。
+        applyHookRewrite(opts, exec, records, 'memory_list', 'content')
+        // 脚本 drop 掉的条目直接不出现在列表里（否则会是一条只有 id 的空记录）。
+        records = records.filter((record) => (record as unknown as { hookDropped?: boolean }).hookDropped !== true)
         // 上下文去重:同版本已经出现过 → 只回 id,正文让 memory_get 按需取。
         const dedup = opts.contextDedup?.(exec)
         if (dedup !== undefined && records.length > 0) {
@@ -2206,8 +2357,33 @@ export function memoryGetTool(opts: MemoryToolsOptions): ToolSpec<GetArgs, GetRe
         const reason = denied > 0
           ? withheldReasonFor(decide, policy, deniedRecords.map((record) => ({ scope: record.scope, kind: record.kind })), verdict)
           : undefined
+        const records = found.map((r) => pickGetFields(r, fields, chars))
+        // 0.40.0：只改写 summary 字段。content 是"取全文"的入口，改它等于让
+        // memory_get 再也取不到原文 —— 那不是摘要规则该管的事。
+        if (fields.includes('summary')) {
+          const texts = rewriteTexts(
+            opts,
+            exec,
+            found.map((record) => ({
+              id: record.id,
+              scope: record.scope,
+              kind: record.kind,
+              text: summarize(record.content, chars),
+              ...(Array.isArray(record.tags) ? { tags: record.tags } : {}),
+              ...(typeof record.createdAt === 'number' ? { createdAt: record.createdAt } : {}),
+              ...(typeof record.updatedAt === 'number' ? { updatedAt: record.updatedAt } : {}),
+            })),
+            'memory_get',
+            'summary',
+          )
+          for (let i = 0; i < records.length; i += 1) {
+            const next = texts[i]
+            if (next === null) delete records[i]!.summary
+            else if (next !== undefined) records[i]!.summary = next
+          }
+        }
         return {
-          records: found.map((r) => pickGetFields(r, fields, chars)),
+          records,
           fields,
           // 被可见域挡住的 id 不是"不存在":它们进 withheld 说明原因,不进 missing。
           missing: ids.filter((token) => !all.some((r) => r.id === token || r.id.startsWith(token))),
@@ -2383,7 +2559,12 @@ export function memoryBlockTool(opts: MemoryToolsOptions): ToolSpec<BlockArgs, B
 }
 
 /** `memory_hooks` 支持的 action。 */
-export type HookAction = 'list' | 'get' | 'save' | 'delete' | 'approve' | 'revoke-approval' | 'enable' | 'disable' | 'run'
+export type HookAction =
+  | 'list' | 'get' | 'save' | 'delete' | 'approve' | 'revoke-approval' | 'enable' | 'disable' | 'run'
+  /** 0.40.0：把累计统计清零（不动代码与批准指纹）。 */
+  | 'reset-stats'
+  /** 0.40.0：看逐次调用审计（内存环，最新在前）。 */
+  | 'audit'
 
 export interface HooksArgs {
   action: HookAction
@@ -2414,6 +2595,14 @@ export interface HooksArgs {
   confirm?: string
   /** 本次调用的用途(给用户看);普通限制下必填,审批弹窗展示。 */
   description?: string
+  /** audit：只看这条钩子的调用记录。 */
+  hookId?: string
+  /** audit：只看这个触发者的记录（memory_search / memory_list / memory_get / inject …）。 */
+  tool?: string
+  /** audit：只看改写了（true）/ 没改写（false）的记录。 */
+  rewritten?: boolean
+  /** audit：最多返回多少条（默认 50，上限 500）。 */
+  limit?: number
 }
 
 export interface HooksResult {
@@ -2422,6 +2611,10 @@ export interface HooksResult {
   settings?: { enabled: boolean; timeoutMs: number; requireApproval: boolean; maxCodeChars: number }
   /** run 的试跑结果。 */
   outcomes?: HookOutcomeView[]
+  /** audit 的逐次调用记录（最新在前）。 */
+  calls?: HookCallRecordView[]
+  /** reset-stats 清掉的次数。 */
+  cleared?: { runCount: number; errorCount: number; rejectCount: number }
   /** 面向模型的一句话说明（审批结局等）。 */
   note?: string
   /** delete 未带正确 confirm 时 = true，此时 hooks 是"待删除"预览、removed=0。 */
@@ -2447,9 +2640,11 @@ function findHook(service: MemoryToolService, raw: string): HookRecordView {
 
 const HOOKS_TOOL_DESCRIPTION =
   'Manage executable memory hooks: scripts attached to rule memories that the plugin runs at a fixed phase. '
-  + 'before-save validates a memory and can REJECT the save; after-save only observes; before-inject parses text before it enters context. '
+  + 'before-save validates a memory and can REJECT the save; after-save only observes; before-inject parses text before it enters context — '
+  + 'it rewrites BOTH injected content and tool results (memory_search summaries, memory_list content, memory_get summary). '
   + 'Hook code lives in hooks.json and is NEVER part of memory search/list/digest. '
   + 'Deleting a hook is IRREVERSIBLE — action="delete" requires a two-step confirmation: first call without confirm to get a preview, then repeat with confirm="<hook name or id>". '
+  + 'action="reset-stats" zeroes the cumulative counters without touching code or approval; action="audit" shows per-call records (in-memory ring, newest first). '
   + 'Load the `memory-hook-scripts` skill (via the `skill` tool) before writing code — it documents the entry-function names, the sandbox API, the return contract and ready-made examples.'
 
 export function memoryHooksTool(opts: MemoryToolsOptions): ToolSpec<HooksArgs, HooksResult> {
@@ -2459,11 +2654,11 @@ export function memoryHooksTool(opts: MemoryToolsOptions): ToolSpec<HooksArgs, H
     parameters: {
       action: {
         type: 'string',
-        enum: ['list', 'get', 'save', 'delete', 'approve', 'revoke-approval', 'enable', 'disable', 'run'],
+        enum: ['list', 'get', 'save', 'delete', 'approve', 'revoke-approval', 'enable', 'disable', 'run', 'reset-stats', 'audit'],
         required: true,
-        description: 'list=列全部（不含代码）；get=读代码；save=新建/更新；delete=删除（不可逆，**必须二次确认**：先不带 confirm 调用拿预览，再带 confirm="<钩子的 name 或 id>" 重复调用才真删）；approve=批准代码使其运行；revoke-approval=撤销批准（代码保留、变回待批准、不再运行）；enable/disable=旧别名（等同 approve/revoke-approval）；run=拿一段正文试跑（不写记忆）。',
+        description: 'list=列全部（不含代码）；get=读代码；save=新建/更新；delete=删除（不可逆，**必须二次确认**：先不带 confirm 调用拿预览，再带 confirm="<钩子的 name 或 id>" 重复调用才真删）；approve=批准代码使其运行；revoke-approval=撤销批准（代码保留、变回待批准、不再运行）；enable/disable=旧别名（等同 approve/revoke-approval）；run=拿一段正文试跑（不写记忆）；reset-stats=把累计统计清零（不动代码与批准）；audit=看逐次调用审计（内存环，最新在前）。',
       },
-      id: { type: 'string', description: '钩子 id（或唯一前缀 / 名字）；get/delete/approve/revoke-approval/enable/disable/run 必填' },
+      id: { type: 'string', description: '钩子 id（或唯一前缀 / 名字）；get/delete/approve/revoke-approval/enable/disable/run/reset-stats 必填' },
       confirm: { type: 'string', description: 'delete 专用二次确认：值必须等于目标钩子的 name 或完整 id。删除不可逆（hooks.json 直接覆盖、无回收站），不带或写错只返回待删预览、不会删除。' },
       code: { type: 'string', description: '脚本源码（save 必填）。入口函数名与返回约定见技能 memory-hook-scripts。' },
       phase: {
@@ -2480,6 +2675,10 @@ export function memoryHooksTool(opts: MemoryToolsOptions): ToolSpec<HooksArgs, H
       scopes: { type: 'array', items: { type: 'string' }, description: '适用作用域键；省略 = 全部适用（更新时保留旧值）' },
       kinds: { type: 'array', items: { type: 'string' }, description: '适用记忆类型（fact/rule/...）；省略 = 全部适用' },
       content: { type: 'string', description: 'run 试跑用的正文（只跑脚本，不写记忆）' },
+      hookId: { type: 'string', description: 'audit 专用：只看这条钩子的调用记录（id 或唯一前缀）。' },
+      tool: { type: 'string', description: 'audit 专用：只看这个触发者（memory_search / memory_list / memory_get / inject / memory_save …）。' },
+      rewritten: { type: 'boolean', description: 'audit 专用：true=只看真的改写了的，false=只看没改写的（排查"脚本没生效"就用 false）。' },
+      limit: { type: 'number', description: 'audit 专用：最多返回多少条（默认 50，上限 500）。' },
       description: { type: 'string', description: DESCRIPTION_PARAM_DESCRIPTION },
     },
     async execute(args: HooksArgs, exec?: unknown): Promise<HooksResult> {
@@ -2652,6 +2851,47 @@ export function memoryHooksTool(opts: MemoryToolsOptions): ToolSpec<HooksArgs, H
           action,
           hooks: fresh !== undefined ? [withApproval(fresh)] : [],
           note: '「启用」已更名为「批准」：已批准这段代码，从现在起会运行。',
+        }
+      }
+
+      // ------------------------------------------------------------ 0.40.0
+      if (action === 'reset-stats') {
+        if (typeof service.resetHookStats !== 'function') {
+          throw new MemoryToolError('HOOKS_UNSUPPORTED', '当前 memory provider 不支持重置统计（请升级 @restregular/dsh-memory）')
+        }
+        const target = findHook(service, args.id ?? '')
+        const cleared = service.resetHookStats(target.id)
+        if (cleared === null) throw new MemoryToolError('HOOK_NOT_FOUND', `没有找到钩子 ${target.id}`)
+        const fresh = typeof service.getHook === 'function' ? service.getHook(target.id) : undefined
+        return {
+          action,
+          hooks: fresh !== undefined ? [withApproval(fresh)] : [],
+          cleared,
+          note: `已把「${target.name}」的运行统计清零（清掉 ${cleared.runCount} 次运行 / ${cleared.errorCount} 次出错 / ${cleared.rejectCount} 次拒绝）。`
+            + '代码与批准状态没有变化 —— 已批准的仍然会运行。',
+        }
+      }
+
+      if (action === 'audit') {
+        if (typeof service.hookCallLog !== 'function') {
+          throw new MemoryToolError('HOOKS_UNSUPPORTED', '当前 memory provider 不支持调用审计（请升级 @restregular/dsh-memory）')
+        }
+        const calls = service.hookCallLog({
+          ...(args.hookId !== undefined && args.hookId.trim() !== ''
+            ? { hookId: findHook(service, args.hookId).id }
+            : {}),
+          ...(args.tool !== undefined && args.tool.trim() !== '' ? { tool: args.tool.trim() } : {}),
+          ...(typeof args.rewritten === 'boolean' ? { rewritten: args.rewritten } : {}),
+          ...(typeof args.limit === 'number' ? { limit: args.limit } : {}),
+        })
+        return {
+          action,
+          hooks: service.listHooks().map(withApproval),
+          calls,
+          ...(settings !== undefined ? { settings } : {}),
+          note: calls.length === 0
+            ? '最近没有匹配的调用记录。审计是内存环（进程重启即清空），只记真实运行、不记试跑。'
+            : `最近 ${calls.length} 次调用（最新在前）。审计只在内存里保留最近 500 次，进程重启即清空。`,
         }
       }
 

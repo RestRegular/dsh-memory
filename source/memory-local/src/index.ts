@@ -48,6 +48,7 @@ import { SessionGrantsStore, type GrantPermission, type ScopeGrant } from './gra
 import { ApprovalAuditStore, type ApprovalAuditEvent, type ApprovalMode } from './approval-audit.ts'
 import {
   DEFAULT_HOOK_SETTINGS,
+  HOOK_CALL_LOG_MAX,
   HOOK_PHASES,
   HookStore,
   describeOutcomes,
@@ -55,6 +56,7 @@ import {
   hookNeedsApproval,
   runHookCode,
   runHooks,
+  type HookCallRecord,
   type HookOutcome,
   type HookPhase,
   type HookRecord,
@@ -851,6 +853,13 @@ export class LocalMemoryService implements MemoryServiceApi {
   private readonly approvalAudit: ApprovalAuditStore
   /** 记忆钩子（0.35.0）：规则记忆附带的可执行校验/解析脚本，独立于记忆存储。 */
   private readonly hooks: HookStore
+  /**
+   * 钩子逐次调用审计环（0.40.0）：只存内存、进程重启即清空。
+   *
+   * 累计计数回答不了「刚才那次是谁触发的、为什么没改写」；这里保留最近
+   * `HOOK_CALL_LOG_MAX` 次真实运行（试跑不算），供 memory_hooks 的 audit 视图读。
+   */
+  private readonly hookCalls: HookCallRecord[] = []
   /** 钩子运行设置（随 settings.json 的 hooks 小节落盘）。 */
   private hookCfg: HookSettings
   /** 可见域变更通知:下一次 pre-step 注入给 Agent 后删除(按会话)。 */
@@ -1059,7 +1068,35 @@ export class LocalMemoryService implements MemoryServiceApi {
 
   /** 真正跑一批钩子（工具 / 注入共用）。未批准的钩子不会执行。 */
   runHooks(phase: HookPhase, input: Parameters<typeof runHooks>[2]): HookOutcome[] {
-    return runHooks(this.hooks, phase, input, this.hookSettings())
+    // 0.40.0：真实运行进审计环（试跑 runHookTrial 不进 —— 那不是真实运行）。
+    return runHooks(this.hooks, phase, input, this.hookSettings(), { audit: this.hookCalls })
+  }
+
+  /**
+   * 重置一条钩子的运行统计（0.40.0）。
+   *
+   * 只清计数与最近结局，代码 / 批准指纹 / id / 创建时间都不动 —— 调完不会让一条
+   * 待批准的脚本意外生效，也不会让已批准的脚本重新要审批。
+   * 返回被清掉的次数；钩子不存在时返回 `null`。
+   */
+  resetHookStats(id: string): { runCount: number; errorCount: number; rejectCount: number } | null {
+    return this.hooks.resetStats(id)
+  }
+
+  /**
+   * 钩子逐次调用审计（0.40.0）：最新在前。
+   *
+   * 这是**内存环**，不是账本：最多保留 `HOOK_CALL_LOG_MAX` 条，进程重启即清空。
+   * 想按钩子过滤就传 hookId；想只看改写了没生效的就传 rewritten:true。
+   */
+  hookCallLog(query: { hookId?: string; tool?: string; rewritten?: boolean; limit?: number } = {}): HookCallRecord[] {
+    const limit = Math.max(1, Math.min(HOOK_CALL_LOG_MAX, Number(query.limit) || 50))
+    const filtered = this.hookCalls.filter((entry) =>
+      (query.hookId === undefined || entry.hookId === query.hookId)
+      && (query.tool === undefined || entry.tool === query.tool)
+      && (query.rewritten === undefined || entry.rewritten === query.rewritten))
+    // 最新在前：排查时先看刚才那次。
+    return filtered.slice(-limit).reverse()
   }
 
   /**
@@ -1106,13 +1143,7 @@ export class LocalMemoryService implements MemoryServiceApi {
   } {
     const settings = this.hookSettings()
     if (!settings.enabled || records.length === 0) return { records: [...records], changed: [], warnings: [] }
-    // 0.37.0：设置快照只读一次，传给每条记录的 before-inject 钩子（ctx.settings）。
-    const injectCfg = this.injectSettings()
-    const settingsView = {
-      digestChars: 160,
-      impressionChars: injectCfg.impression.chars,
-      recallChars: 300,
-    }
+    const settingsView = this.hookSettingsView()
     const out: MemoryRecord[] = []
     const changed: Array<{ id: string; hook: string; option: 'rewritten' | 'dropped' }> = []
     const warnings: string[] = []
@@ -1156,6 +1187,99 @@ export class LocalMemoryService implements MemoryServiceApi {
       if (!dropped) out.push(current)
     }
     return { records: out, changed, warnings }
+  }
+
+  /**
+   * 工具结果解析（0.40.0）：把同一批 before-inject 钩子也跑在**工具返回值**上。
+   *
+   * 为什么复用 before-inject 而不是新开一个时机：用户批准的是「注入摘要只取概括句」
+   * 这条规则的**行为**，不是"某个通道"。分成两个时机意味着同一份逻辑要批两次、
+   * 两处可能不一致 —— 一个已批准的脚本同时管注入和工具结果才符合直觉。
+   *
+   * 与 `parseForInject` 的差别只有两点：
+   *   1. 输入不是整条 `MemoryRecord`，而是「一段待改写的文本」（摘要或正文）；
+   *   2. `ctx.tool` 传**真实工具名**（memory_search / memory_list / memory_get），
+   *      `ctx.target` 说明这段文本是 summary 还是 content，脚本据此分支。
+   *
+   * 返回的 `texts` 与入参等长、同序；`null` = 该条被脚本 drop（调用方自行剔除）。
+   * 崩溃 / 超时一律保留原文 —— 工具调用绝不因为钩子坏了而失败。
+   */
+  parseForToolResult(
+    items: ReadonlyArray<{
+      id: string
+      scope: string
+      kind: string
+      text: string
+      tags?: readonly string[]
+      importance?: number
+      createdAt?: number
+      updatedAt?: number
+    }>,
+    options: { tool: string; target?: 'content' | 'summary'; sessionId?: string },
+  ): {
+    texts: Array<string | null>
+    changed: Array<{ id: string; hook: string; option: 'rewritten' | 'dropped' }>
+    warnings: string[]
+  } {
+    const settings = this.hookSettings()
+    const unchanged = (): Array<string | null> => items.map((item) => item.text)
+    if (!settings.enabled || items.length === 0) {
+      return { texts: unchanged(), changed: [], warnings: [] }
+    }
+    const settingsView = this.hookSettingsView()
+    const target = options.target ?? 'content'
+    const texts: Array<string | null> = []
+    const changed: Array<{ id: string; hook: string; option: 'rewritten' | 'dropped' }> = []
+    const warnings: string[] = []
+    for (const item of items) {
+      let current: string | null = item.text
+      // 与注入通道同序：后面的脚本看到前面改写后的文本。
+      for (const hook of this.hooks.forRun('before-inject', { scope: item.scope, kind: item.kind }, settings)) {
+        const outcomes = this.runHooks('before-inject', {
+          memory: {
+            id: item.id,
+            scope: item.scope,
+            kind: item.kind,
+            content: current ?? '',
+            tags: Array.isArray(item.tags) ? item.tags.map(String) : [],
+            ...(item.importance !== undefined ? { importance: item.importance } : {}),
+            ...(item.createdAt !== undefined ? { createdAt: item.createdAt } : {}),
+            ...(item.updatedAt !== undefined ? { updatedAt: item.updatedAt } : {}),
+          },
+          tool: options.tool,
+          target,
+          ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+          settings: settingsView,
+        })
+        const outcome = outcomes.find((entry) => entry.hook.id === hook.id)
+        if (outcome === undefined) continue
+        if (outcome.error !== undefined) {
+          warnings.push(`钩子「${hook.name}」在改写工具结果时失败（已忽略）：${outcome.error}`)
+          continue
+        }
+        if (outcome.drop === true) {
+          current = null
+          changed.push({ id: item.id, hook: hook.name, option: 'dropped' })
+          break
+        }
+        if (typeof outcome.content === 'string' && outcome.content.trim() !== '' && outcome.content !== current) {
+          current = outcome.content
+          changed.push({ id: item.id, hook: hook.name, option: 'rewritten' })
+        }
+      }
+      texts.push(current)
+    }
+    return { texts, changed, warnings }
+  }
+
+  /** 钩子沙箱的只读设置快照（注入与工具结果通道共用同一份口径）。 */
+  private hookSettingsView(): { digestChars: number; impressionChars: number; recallChars: number } {
+    const injectCfg = this.injectSettings()
+    return {
+      digestChars: 160,
+      impressionChars: injectCfg.impression.chars,
+      recallChars: 300,
+    }
   }
 
   /** 注入半边注册审计收集器。重复注册时后一个覆盖前一个(激活重载)。 */

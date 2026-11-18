@@ -599,8 +599,53 @@ test('renderHooksResult:试跑按时机分开展示并回显脚本真实输出 (
   assert.ok(parseText.includes('改写后正文：概括句'))
 })
 
-test('memory_save.supersedes 的参数说明要求完整 id，并禁止 8 位短 id', () => {
-  const tool = memorySaveTool({ getService: () => service })
+test('renderHooksResult:reset-stats 说清"清掉了什么"且不暗示停用 (0.40.0)', () => {
+  const hook = {
+    id: 'hook-12345678', name: '注入摘要只取概括句', phase: 'before-inject' as const,
+    code: 'function parse(){}', enabled: true, scopes: [], kinds: [],
+    createdBy: 'user', createdAt: 1, updatedAt: 1, runCount: 0, errorCount: 0, rejectCount: 0,
+  }
+  const text = renderHooksResult({
+    action: 'reset-stats',
+    hooks: [hook],
+    cleared: { runCount: 27491, errorCount: 3, rejectCount: 1 },
+    note: '代码与批准状态没有变化 —— 已批准的仍然会运行。',
+  }, label)
+  assert.ok(text.includes('27491'), '回显被清掉的运行次数')
+  assert.ok(text.includes('代码与批准状态没有变化'), '必须说清脚本没被停用')
+})
+
+test('renderHooksResult:audit 逐条展示触发者 / 通道 / 结局 (0.40.0)', () => {
+  const text = renderHooksResult({
+    action: 'audit',
+    hooks: [],
+    calls: [
+      {
+        hookId: 'hook-12345678', hookName: '注入摘要只取概括句', phase: 'before-inject',
+        tool: 'memory_search', target: 'summary', recordId: 'rec-1',
+        ok: true, crashed: false, rewritten: true, dropped: false, durationMs: 2,
+        at: Date.UTC(2026, 10, 18, 8, 1, 52),
+      },
+      {
+        hookId: 'hook-12345678', hookName: '注入摘要只取概括句', phase: 'before-inject',
+        tool: 'memory_list', target: 'content',
+        ok: true, crashed: false, rewritten: false, dropped: false, durationMs: 1,
+        at: Date.UTC(2026, 10, 18, 8, 1, 53),
+      },
+    ],
+  }, label)
+  assert.ok(text.includes('memory_search/summary'), '看得见通道')
+  assert.ok(text.includes('已改写'))
+  assert.ok(text.includes('未改写'), '没改写的也要显示 —— 排查"脚本没生效"靠它')
+  assert.ok(text.includes('2ms'), '带耗时')
+})
+
+test('renderHooksResult:audit 没记录时给一句可操作的话 (0.40.0)', () => {
+  const text = renderHooksResult({ action: 'audit', hooks: [], calls: [] }, label)
+  assert.ok(text.includes('没有匹配的调用记录'))
+})
+
+test('memory_save.supersedes 的参数说明要求完整 id，并禁止 8 位短 id', () => {  const tool = memorySaveTool({ getService: () => service })
   const params = tool.parameters as Record<string, { description?: string }>
   const text = params.supersedes?.description ?? ''
   assert.ok(text.length > 0, 'supersedes 必须有参数说明')

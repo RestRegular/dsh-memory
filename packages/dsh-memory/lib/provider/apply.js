@@ -443,6 +443,24 @@ export class CordisMemoryService extends Service {
     return this.impl.parseForInject(records, sessionId)
   }
 
+  /** 0.40.0：同一批 before-inject 钩子也跑在工具结果（摘要 / 正文）上。 */
+  parseForToolResult(
+    items                                                         ,
+    options                                                         ,
+  )                                                       {
+    return this.impl.parseForToolResult(items, options)
+  }
+
+  /** 0.40.0：重置一条钩子的累计统计（不动代码与批准指纹）。 */
+  resetHookStats(id        )                                                   {
+    return this.impl.resetHookStats(id)
+  }
+
+  /** 0.40.0：钩子逐次调用审计（内存环，最新在前）。 */
+  hookCallLog(query                                                   )                                                {
+    return this.impl.hookCallLog(query)
+  }
+
   /** 面板改设置:落盘后广播,注入半边下一步就能按新设置跑。 */
   updateInjectSettings(patch         )                                                   {
     const next = this.impl.updateInjectSettings(patch)

@@ -421,6 +421,41 @@ export function renderHooksResult(value             , label            )        
     return [head, detail, value.note ?? ''].filter((part) => part !== '').join('\n')
   }
 
+  if (value.action === 'reset-stats') {
+    const hook = value.hooks[0]
+    const cleared = value.cleared
+    const head = hook !== undefined ? describe(hook) : '钩子'
+    const body = cleared === undefined
+      ? '统计已清零。'
+      : `已清掉累计统计：运行 ${cleared.runCount} 次 / 出错 ${cleared.errorCount} 次 / 拒绝 ${cleared.rejectCount} 次。`
+    return `${head}\n${body}${value.note !== undefined ? `\n${value.note}` : ''}`
+  }
+
+  if (value.action === 'audit') {
+    const calls = value.calls ?? []
+    if (calls.length === 0) {
+      return [value.note ?? '', '最近没有匹配的调用记录。']
+        .filter((part) => part !== '')
+        .join('\n')
+    }
+    // 最新在前：排查时先看刚才那次。每行都是「什么时候 / 谁触发 / 结果 / 耗时」。
+    const lines = calls.map((call) => {
+      const when = new Date(call.at).toISOString().slice(11, 19)
+      const where = call.tool ?? 'inject'
+      const what = call.target !== undefined ? `${where}/${call.target}` : where
+      const verdict = call.error !== undefined
+        ? `出错：${call.error}`
+        : call.dropped
+          ? '丢弃整条'
+          : call.rewritten
+            ? '已改写'
+            : '未改写'
+      const message = call.message !== undefined && call.error === undefined ? ` · ${call.message}` : ''
+      return `- ${when} [${shortId(call.hookId)}] ${what} · ${verdict}${message} · ${call.durationMs}ms`
+    })
+    return [value.note ?? '', ...lines].filter((part) => part !== '').join('\n')
+  }
+
   const list = value.hooks
   if (list.length === 0) {
     return [value.note ?? '', '当前没有任何记忆钩子。']

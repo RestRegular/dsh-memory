@@ -132,6 +132,14 @@ const PHASE_ENTRY                              = {
                       
                                                  
                              
+     
+                        
+    
+                                         
+                                                 
+                                                 
+     
+                                
  
 
 /** 单个钩子的运行结果。 */
@@ -154,6 +162,41 @@ const PHASE_ENTRY                              = {
                
                     
  
+
+/**
+ * 一次真实运行的审计记录（0.40.0）。
+ *
+ * 为什么要有它：`runCount` / `errorCount` / `rejectCount` 只回答「跑了多少次、错了几次」，
+ * 回答不了「刚才那一次是谁触发的、跑了多久、为什么没改写」。排查脚本在工具结果通道上
+ * 为什么不生效时，只有逐次记录能对上账。
+ *
+ * 只存在内存里（进程重启即清空）：它是**诊断**用途，不是账本 —— 落盘会让 hooks.json
+ * 随着每次注入调用无限膨胀，而注入一次可能有几十条记忆。
+ */
+                                 
+                
+                  
+                  
+                                                                                        
+               
+                                               
+                                
+                    
+                   
+                                      
+             
+                  
+                                   
+                    
+                  
+                    
+            
+                  
+                
+ 
+
+/** 审计环最多保留多少条（跨全部钩子）。 */
+export const HOOK_CALL_LOG_MAX = 500
 
                                
                   
@@ -318,6 +361,9 @@ export function runHookCode(
   const ctxJson = JSON.stringify({
     phase,
     ...(input.tool !== undefined ? { tool: input.tool } : {}),
+    // 0.40.0：工具结果通道要告诉脚本"这次改写的是摘要还是正文"。
+    // 注入通道不传（整条正文进上下文，没有歧义）。
+    ...(input.target !== undefined ? { target: input.target } : {}),
     ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
     ...(input.description !== undefined ? { description: input.description } : {}),
     // 0.37.0：只读设置快照进沙箱 ctx.settings —— 脚本能按当前摘要字数限制截断。
@@ -549,6 +595,35 @@ export class HookStore {
     this.persist()
   }
 
+  /**
+   * 重置统计（0.40.0）：把 `runCount` / `errorCount` / `rejectCount` 与最近结局清零。
+   *
+   * 为什么需要它：钩子是按"代码指纹"批准后长期运行的，统计是**累计**的。调试脚本时
+   * 前面几千次运行（含早期的错误）会一直压在卡片上，"这次改完到底还错不错"根本看不出来。
+   * 清零只动统计，不动代码、不动批准指纹、不动 id / createdAt —— 也就是说它不会让
+   * 一条待批准的脚本意外生效，也不会让已批准的脚本重新要审批。
+   *
+   * 返回清掉的次数（找不到钩子返回 null，便于上层区分"没有这个钩子"和"本来就是 0"）。
+   */
+  resetStats(id        )                                                                       {
+    this.load()
+    const hook = this.hooks.find((item) => item.id === id)
+    if (hook === undefined) return null
+    const cleared = {
+      runCount: Number(hook.runCount) || 0,
+      errorCount: Number(hook.errorCount) || 0,
+      rejectCount: Number(hook.rejectCount) || 0,
+    }
+    hook.runCount = 0
+    hook.errorCount = 0
+    hook.rejectCount = 0
+    delete hook.lastOutcome
+    delete hook.lastMessage
+    delete hook.lastRunAt
+    this.persist()
+    return cleared
+  }
+
   /** 记一次审批指纹。 */
   approve(id        , hash        )          {
     this.load()
@@ -589,13 +664,15 @@ export class HookStore {
  *
  * - 顺序执行；任一 before-save 返回 ok:false 就**立即停止**（后面的钩子没必要跑）。
  * - 崩溃 / 超时只告警，不阻断（见文件头注释第 3 条）。
+ * - `audit`（0.40.0）可选：传进来一个 `HookCallRecord[]` 就会把每次调用追加进去，
+ *   供 memory_hooks 的 audit 视图与面板读。不传就没有额外开销。
  */
 export function runHooks(
   store           ,
   phase           ,
   input              ,
   settings              ,
-  options                               = {},
+  options                                                         = {},
 )                {
   if (!settings.enabled) return []
   const out                = []
@@ -625,6 +702,26 @@ export function runHooks(
       ...(result.logs.length > 0 ? { logs: result.logs.slice(0, 20) } : {}),
       ...(result.raw !== undefined ? { raw: result.raw } : {}),
     }
+    if (options.audit !== undefined) {
+      pushCallLog(options.audit, {
+        hookId: hook.id,
+        hookName: hook.name,
+        phase,
+        ...(input.tool !== undefined ? { tool: input.tool } : {}),
+        ...(input.target !== undefined ? { target: input.target } : {}),
+        ...(input.memory.id !== undefined ? { recordId: input.memory.id } : {}),
+        ok: outcome.ok,
+        crashed,
+        // 「改写是否真的发生」= 返回了 content 且与输入不同。脚本原样返回同一段文字
+        // 也算没改写，否则审计里全是噪声。
+        rewritten: result.content !== undefined && result.content !== input.memory.content,
+        dropped: result.drop === true,
+        durationMs: outcome.durationMs,
+        at: started,
+        ...(outcome.message !== undefined ? { message: outcome.message } : {}),
+        ...(outcome.error !== undefined ? { error: outcome.error } : {}),
+      })
+    }
     try {
       store.recordRun(hook.id, {
         ok: outcome.ok,
@@ -637,6 +734,12 @@ export function runHooks(
     if (phase === 'before-save' && !crashed && !result.ok) break
   }
   return out
+}
+
+/** 往审计环里追加一条，超出上限时丢最旧的（就地修改，调用方持有同一个数组）。 */
+export function pushCallLog(log                  , entry                )       {
+  log.push(entry)
+  if (log.length > HOOK_CALL_LOG_MAX) log.splice(0, log.length - HOOK_CALL_LOG_MAX)
 }
 
 /** 把一批结果折成给模型看的一段文字（没有内容时返回空串）。 */

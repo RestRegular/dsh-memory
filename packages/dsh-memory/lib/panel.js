@@ -1269,6 +1269,8 @@ async function handle(ctx, routePath, req, res) {
             pendingApproval: pending ? memory.hookPendingApproval(hook.id) : false,
           })),
           settings: typeof memory.hookSettings === 'function' ? memory.hookSettings() : undefined,
+          // 0.40.0：逐次调用审计（内存环，最新在前）。面板据此展示"刚才那次改写了没有"。
+          calls: typeof memory.hookCallLog === 'function' ? memory.hookCallLog({ limit: 100 }) : [],
         },
       })
       return
@@ -1324,6 +1326,18 @@ async function handle(ctx, routePath, req, res) {
           tool: 'panel',
         })
         writeJson(res, { ok: true, value: { outcomes } })
+        return
+      }
+
+      if (action === 'reset-stats') {
+        // 0.40.0：只清累计计数，不动代码与批准指纹 —— 调完已批准的脚本仍然会跑。
+        if (typeof memory.resetHookStats !== 'function') throw new ApiError(501, 'NOT_SUPPORTED', 'provider 未提供重置统计接口（请升级 @restregular/dsh-memory）')
+        const id = typeof body.id === 'string' ? body.id : ''
+        if (id === '') throw new ApiError(400, 'HOOK_ID_REQUIRED', 'id 不能为空')
+        const cleared = memory.resetHookStats(id)
+        if (cleared === null) throw new ApiError(404, 'HOOK_NOT_FOUND', '没有找到这个钩子')
+        const fresh = typeof memory.getHook === 'function' ? memory.getHook(id) : undefined
+        writeJson(res, { ok: true, value: { cleared, hook: fresh } })
         return
       }
 

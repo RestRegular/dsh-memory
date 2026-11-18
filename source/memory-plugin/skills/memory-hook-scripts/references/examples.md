@@ -146,6 +146,52 @@ function observe(memory) {
 }
 ```
 
+## 9. 注入摘要只取概括句（before-inject，同时管工具结果）
+
+这条是最常见的：记忆都按「概括句：正文」写，摘要里只要冒号前那句。**同一段代码同时
+管注入通道和 `memory_search` / `memory_list` / `memory_get` 的工具结果**（0.40.0），
+不用为工具结果另写一份、也不用再批一次。
+
+```js
+function parse(memory) {
+  const text = String(memory.content || '')
+  const at = text.indexOf('：')
+  if (at < 0) return true                       // 没有冒号：不猜，原样放行
+  const head = text.slice(0, at).trim()
+  if (head === '') return true                  // 冒号前是空的：原样放行，让 memory_get 兜底
+  if (head === text.trim()) return true         // 本来就只有一句，不用改
+  return { content: head }
+}
+```
+
+想区分通道（比如只在工具结果上省字数、注入时保留多一点），用 `ctx.target`：
+
+```js
+function parse(memory, ctx) {
+  const text = String(memory.content || '')
+  const at = text.indexOf('：')
+  if (at < 0) return true
+  const head = text.slice(0, at).trim()
+  if (head === '') return true
+  // memory_get 的 content 永远不会被改写，所以这里只需要管 summary。
+  if (ctx.target === 'content' && head.length < 20) return { content: text }  // 列表里宁可多看几个字
+  return { content: head }
+}
+```
+
+## 10. 工具结果里过滤掉不该出现的条目（before-inject + drop）
+
+`drop: true` 在工具结果通道上是"整条不出现"，比返回一条空记录干净：
+
+```js
+function parse(memory, ctx) {
+  // 只在工具结果里过滤；注入通道不丢，免得模型连"有这条"都不知道。
+  if (ctx.tool === 'inject') return true
+  if (/过期|已废弃|DO NOT USE/.test(memory.content)) return { drop: true }
+  return true
+}
+```
+
 ## 调试脚本
 
 不要靠猜。用 `run` 拿几段样例跑一遍：
@@ -157,3 +203,7 @@ memory_hooks({ action: 'run', id: '<id>', content: '记忆内容规范：这段�
 
 `run` 只跑脚本、不写记忆，是验证判断边界最快的方式。注意 `run` 用的是脚本保存时
 记下的 `scopes` / `kinds` 的第一个值；要让脚本命中，样例的 `kind` 必须匹配。
+
+**试跑不等于线上生效。** 试跑不记统计、也不进审计，所以"试跑对了但线上没反应"要去
+`memory_hooks({ action: 'audit' })` 看真实调用：`tool` 对不对、`rewritten` 是不是 false、
+有没有记录（没记录 = 未批准或被 `scopes` / `kinds` 挡掉）。

@@ -2,6 +2,20 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.40.0 — 规则代码也管工具结果：`memory_search` / `memory_list` / `memory_get` 返回前改写，加统计清零与逐次调用审计
+
+- **同一段 `before-inject` 代码现在也管工具结果**：此前「注入摘要只取概括句」只改写三条注入通道，`memory_search` 返回的摘要、`memory_list` 返回的正文、`memory_get` 要的 `summary` 字段仍是原文——模型在工具结果里照样读到整段正文。0.40.0 起 `before-inject` 覆盖**第四条通道**：工具结果返回前先过一遍已批准的脚本。**复用同一个时机、同一段代码、同一次批准**，不新增 phase，不需要为工具结果再批一次。
+  - `memory_search` → 改写 `summary`；`memory_list` → 改写 `content`；`memory_get` → 只在 `fields` 里要了 `summary` 时改写。
+  - **`memory_get` 的 `content` 永不改写**：那是"读原文"的出口，改了就读不到真东西。
+  - 新增 `ctx.target`（`'summary'` / `'content'`），`ctx.tool` 取值扩到 `memory_search` / `memory_list` / `memory_get`，脚本可按通道分支。
+  - 改写顺序在**上下文去重之前**（去重会清空摘要，清空后没有可改写的文本）；`drop: true` 在工具结果里是"整条不出现"，不是空记录。
+  - 失败策略不变：脚本崩溃 / 超时 / provider 不支持 → 原样返回原文，**工具调用绝不因钩子失败**；永远改返回副本，不碰存储里的 `MemoryRecord`。
+- **统计清零**：`memory_hooks({action:'reset-stats', id})` 清零 `runCount` / `errorCount` / `rejectCount` 与最近结局（`lastOutcome` / `lastMessage` / `lastRunAt`），返回被清掉的次数。代码、批准指纹、`id`、`createdAt` 全不变，脚本照常运行。面板卡片加「清零统计」按钮（有计数时才出现）。
+- **逐次调用审计（新）**：`memory_hooks({action:'audit'})` 返回最近的真实运行记录，每条带 `hookId` / `hookName` / `phase` / `tool` / `target` / `recordId` / `ok` / `crashed` / `rewritten` / `dropped` / `durationMs` / `at`，最新在前，可按 `hookId` / `tool` / `rewritten` / `limit` 过滤。面板「规则代码」页顶部加「最近调用」折叠区。审计是**内存环**（最多 500 条，进程重启即清空）——落盘会让 `hooks.json` 在每次注入时被写，代价远大于收益；只记真实运行，`run` 试跑不入环、不记统计。
+  - 说明：0.40.0 之前**没有**逐次审计，只有 `runCount` / `errorCount` / `rejectCount` 三个累计计数——累计值回答不了"刚才那次是谁触发、改写了没有"。
+- 回归守卫：`hooks.test.ts` 加工具结果通道 6 例（改写 / `ctx.target` / drop / 未批准 / 崩溃放行 / 入参不被改）与统计清零、审计过滤共 10 例；新增 `tool-result-hooks.test.ts` 8 例（三个工具各自改哪个字段、`content` 不被改、老 provider 降级、钩子抛错不拖垮工具、不碰存储对象、会话 id 透传）；`hooks-tool.test.ts` 加 reset-stats / audit 4 例；`tools.test.ts` 加两条新 action 的渲染 3 例；`service-delegation.test.ts` 的转发名单补三个新方法。全套 63 个测试文件 **687 例 0 失败**。
+- 文档：随包技能 `memory-hook-scripts` 写明四条通道、`ctx.target` 对照表、统计清零与审计用法，`references/examples.md` 新增「注入摘要只取概括句（同时管工具结果）」「工具结果里过滤条目」两例。
+
 ## 0.39.0 — 记忆图：新增 3D 星图，与 2D 星图并存
 
 - **新增 3D 星图（Three.js）**：面板「记忆图」页签下现有三种视图——**记忆图**（原记忆树）/ **2D 星图** / **3D 星图**。2D 星图**保留原样**，3D 是纯增量；`buildMemoryGraph()` 的确定性布局逻辑一字未改，3D 坐标由它派生（`buildMemoryGraph3D()` 是纯函数，无随机量，同样输入必得同样输出）。
