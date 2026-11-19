@@ -29,7 +29,13 @@ test('单包声明:一个包同时带 host patch 与 client bundle', () => {
   // 客户端 bundle 必须能从包外解析(exports["./client"]),否则宿主拿不到它
   assert.equal(meta.exports?.['./client'], './lib/client.js')
   assert.equal(meta.exports?.['.'], './lib/index.js')
-  assert.deepEqual(meta.dsh.client.inject, ['@deepseek-ai/dsh-client-ui-slots'])
+  assert.deepEqual(meta.dsh.client.inject, [
+    '@deepseek-ai/dsh-client-ui-slots',
+    '@deepseek-ai/dsh-client-ui-context-menu',
+    '@deepseek-ai/dsh-client-ui-workspace',
+    '@deepseek-ai/dsh-api-session-controller',
+    '@deepseek-ai/dsh-api-workspace-controller',
+  ])
 })
 
 test('patch 只有一行,而且 name 就是包名', () => {

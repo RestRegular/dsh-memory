@@ -8137,7 +8137,113 @@ window.__ModuleLoader__.load({
       )
     }
 
-    const inject = ['slots']
+    /**
+     * 0.41.0：工作区「整理记忆」——新会话开场提示词。
+     *
+     * 纯函数，测试直接核对口径：先出整体报告、不逐条审批；合并用 supersedes 指向多条
+     * 旧记录完整 id（一修多），高度重合的才物理删除。提示词明确"报告前不要改数据"，
+     * 对应 task.md 里"先出报告、人工确认"的决策。
+     */
+    function organizeMemoryPrompt(target) {
+      const workspace = typeof target === 'string' ? target : (target?.path ?? '')
+      const label = typeof target === 'string' ? '' : (target?.displayTitle ?? '')
+      const where = label !== '' && workspace !== ''
+        ? `\n工作区：${label}（${workspace}）`
+        : workspace !== '' ? `\n工作区路径：${workspace}` : ''
+      return [
+        '请整理当前工作区的记忆。这是一次性整理会话，严格按下面四步执行：' + where,
+        '1. 扫描：用 memory_scopes({action:"list"}) 看有哪些作用域，再用 memory_list 和 memory_search 找出与这个工作区相关的记忆。排除 kind=rule（硬性规则不参与整理）。',
+        '2. 只分析、出整体报告（这一步不要写任何记忆）：告诉我一共多少条、大致分成哪些主题、每组里哪些是过时结论、哪些是同主题重复、哪些高度重合可以删除。用中文写一份总体情况说明，不要逐条列出来让我逐条确认。',
+        '3. 等我回复确认后再动手（我没确认前不要修改任何记忆）。确认后：同主题的多条记忆合并成一条更完整的，用 memory_save 的 supersedes 传数组一次指向所有旧记忆的完整 id（一条修正多条），旧版本默认退出检索、历史仍可用 memory_get 查到；scope 必须显式传旧记录所在作用域，本会话无写权限时先用 memory_scopes({action:"request"}) 申请。',
+        '4. 高度重合、内容几乎一样的重复记忆才用 memory_forget 删除；拿不准的一律用 supersedes 合并而不是删。删除前在报告里说清是哪几条，我没有单独反对才做。全程不要碰 kind=rule。',
+      ].join('\n')
+    }
+
+    /** 把工作区菜单目标解析成 sessions.create 的 {workspaceId} 或 {cwd}。 */
+    async function workspaceCreateTarget(ctx, target) {
+      const workspaceId = typeof target === 'string' ? '' : (target?.workspaceId ?? '')
+      const cwd = typeof target === 'string' ? target : (target?.path ?? '')
+      // 菜单已经给了 workspaceId：直接用它，create 才会把会话归属到该工作区。
+      if (workspaceId !== '') return { workspaceId }
+      try {
+        const snapshot = ctx.get('workspaces')?.list?.getSnapshot?.()
+        const items = Array.isArray(snapshot?.items) ? snapshot.items : []
+        const windows = /^[A-Za-z]:\//u.test(cwd) || cwd.startsWith('//')
+        const normalized = (value) => {
+          const raw = String(value ?? '').replace(/\\/g, '/').replace(/\/$/, '')
+          return windows ? raw.toLowerCase() : raw
+        }
+        const wanted = normalized(cwd)
+        const match = items.find((item) => typeof item?.path === 'string' && normalized(item.path) === wanted)
+        if (match && typeof match.workspaceId === 'string' && match.workspaceId !== '') {
+          return { workspaceId: match.workspaceId }
+        }
+      } catch { /* workspaces 服务缺席：退回 cwd */ }
+      return cwd !== '' ? { cwd } : undefined
+    }
+
+    /** 等新会话的 live session 绑定出现（create 只登记占位符，打开后才有 prompt 面）。 */
+    async function waitForSessionPrompt(ctx, sessionId, timeoutMs = 5000) {
+      const sessions = ctx.get('sessions')
+      if (!sessions || typeof sessions.binding !== 'function') return undefined
+      const deadline = Date.now() + Math.max(200, timeoutMs)
+      while (Date.now() < deadline) {
+        try {
+          const session = sessions.binding(sessionId)?.session
+          if (session && typeof session.prompt === 'function') return session
+        } catch { /* 切换期间 binding 可能抛错 */ }
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+      return undefined
+    }
+
+    /** 在指定工作区新建会话并自动发送整理提示词，返回新会话 id 或 null。 */
+    async function startOrganizeSession(ctx, target) {
+      const sessions = ctx.get('sessions')
+      const uiWorkspace = ctx.get('uiWorkspace')
+      if (!sessions || typeof sessions.create !== 'function' || !uiWorkspace) return null
+      const request = await workspaceCreateTarget(ctx, target)
+      if (request === undefined) return null
+      const result = await sessions.create(request)
+      if (!result) return null
+      let sessionId
+      if (result.ok === false) {
+        sessionId = result.error?.code === 'session/workspace-attach-failed'
+          ? result.error?.details?.sessionId : undefined
+        if (!sessionId) throw new Error(result.error?.message ?? 'create session failed')
+      } else {
+        sessionId = result.value?.sessionId ?? result.sessionId ?? (typeof result === 'string' ? result : undefined)
+      }
+      if (!sessionId) return null
+      if (typeof uiWorkspace.openSession === 'function') uiWorkspace.openSession(sessionId)
+      const live = await waitForSessionPrompt(ctx, sessionId)
+      if (!live) return sessionId // 会话建好了但发不出去，仍把 id 交给调用方提示
+      const text = organizeMemoryPrompt(target)
+      let echo
+      try {
+        try {
+          echo = typeof live.beginSubmission === 'function'
+            ? live.beginSubmission({ mode: 'queue', text, attachments: [] })
+            : undefined
+        } catch { echo = undefined }
+        const sent = await live.prompt([{ type: 'text', text }], 'queue', undefined, echo?.requestId)
+        if (sent && sent.ok === false) throw new Error(sent.error?.message ?? 'prompt failed')
+      } catch (error) {
+        try { echo?.abandon?.() } catch { /* 忽略 */ }
+        throw error
+      }
+      return sessionId
+    }
+
+    // 0.41.0：工作区三点菜单需要 contextMenus；新建会话与发首条消息需要
+    // sessions / uiWorkspace / workspaces。宿主按包名注入，缺谁都只降级。
+    const inject = [
+      'slots',
+      '@deepseek-ai/dsh-client-ui-context-menu',
+      '@deepseek-ai/dsh-client-ui-workspace',
+      '@deepseek-ai/dsh-api-session-controller',
+      '@deepseek-ai/dsh-api-workspace-controller',
+    ]
 
     /** 侧栏入口打开的主界面页面(整块可滚动,内容就是面板本体)。 */
     function MemoryPage({ openSession, sessionInfo } = {}) {
@@ -9471,6 +9577,40 @@ window.__ModuleLoader__.load({
         } catch (error) {
           console.warn('[dsh-memory] 记忆访问审批卡注册失败:', error?.message)
         }
+
+        // 0.41.0：工作区树三点菜单的「整理记忆」。ctx.contextMenus 由
+        // @deepseek-ai/dsh-client-ui-context-menu 提供，可能晚于本插件就绪；用 ctx.inject
+        // 等它出现。缺服务只是没有这个菜单，绝不让 client apply 失败。
+        try {
+          if (typeof ctx.inject === 'function') {
+            ctx.inject(['contextMenus'], (scope) => {
+              try {
+                const menus = scope.get('contextMenus')
+                if (!menus || typeof menus.register !== 'function') return
+                scope.effect(() => menus.register({
+                  id: 'dsh-memory.organize',
+                  target: 'workspace',
+                  order: 400,
+                  resolve: (target) => [{
+                    id: 'organize',
+                    label: '整理记忆',
+                    failureLabel: '整理记忆会话启动失败',
+                    run: async () => {
+                      const sessionId = await startOrganizeSession(scope, target)
+                      if (sessionId === null) {
+                        console.warn('[dsh-memory] 无法创建整理记忆会话（宿主会话服务不可用）')
+                      }
+                    },
+                  }],
+                }), 'dsh-memory: workspace organize menu')
+              } catch (error) {
+                console.warn('[dsh-memory] 工作区整理记忆菜单注册失败:', error?.message)
+              }
+            })
+          }
+        } catch (error) {
+          console.warn('[dsh-memory] contextMenus 注入失败:', error?.message)
+        }
       } catch (error) {
         console.error('[dsh-memory] client apply 失败(已吞掉):', error?.message)
       }
@@ -9652,6 +9792,10 @@ window.__ModuleLoader__.load({
       conversationStoreFor: conversationStoreFor,
       setConversationView: setConversationView,
       setClientCtx: (value) => { clientCtx = value },
+      // 0.41.0：工作区整理记忆（纯函数 + 两段式建会话，测试直接驱动）
+      organizeMemoryPrompt: organizeMemoryPrompt,
+      workspaceCreateTarget: workspaceCreateTarget,
+      startOrganizeSession: startOrganizeSession,
     }
     return module.exports
   },

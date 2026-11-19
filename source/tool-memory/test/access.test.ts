@@ -43,6 +43,7 @@ function harness(
     forget: async () => ({ removed: 0, ids: [] }),
     getByIds: (ids: string[]) => [
       ...(ids.includes(OLD_ID) ? [{ id: OLD_ID, scope: 'global', kind: 'fact', content: '旧记录', tags: [], importance: 0.5, updatedAt: 0 }] : []),
+      ...(ids.includes(OLD_ID_2) ? [{ id: OLD_ID_2, scope: 'global', kind: 'fact', content: '旧记录2', tags: [], importance: 0.5, updatedAt: 0 }] : []),
       ...records.filter((item) => ids.includes(item.record.id)).map((item) => item.record),
     ],
     visibilityPolicy: () => policy,
@@ -140,6 +141,7 @@ test('显式 write:false 不弹审批，直接 SCOPE_READ_ONLY', async () => {
 })
 
 const OLD_ID = '12345678-aaaa-bbbb-cccc-ddddeeeeffff'
+const OLD_ID_2 = '87654321-aaaa-bbbb-cccc-ddddeeeeffff'
 
 test('supersedes 省略 scope 直接拒绝（SUPERSEDES_SCOPE_REQUIRED），不落盘', async () => {
   const h = harness(NORMAL, {}, 'save')
@@ -174,4 +176,24 @@ test('supersedes 有写权限时保存成功，返回值带目标作用域 key �
   const input = h.saved[0] as Record<string, unknown>
   assert.equal(input.scope, 'handbook', 'scope 显式传给 provider')
   assert.equal(input.supersedes, OLD_ID)
+})
+
+test('supersedes 数组：工具层不报 schema 错，返回 merged 含全部旧 id 与文案可渲染', async () => {
+  const h = harness(NORMAL, {}, 'save')
+  const result = await h.tool.execute(
+    { content: '合并两条旧记忆', scope: 'handbook', supersedes: [OLD_ID, OLD_ID_2], description: '合并测试' },
+    agentExec,
+  ) as { id: string; scope: string; supersedes?: unknown; merged?: { ids: string[]; scopes?: string[] } }
+  assert.equal(result.scope, 'handbook')
+  assert.equal(result.supersedes, undefined, '数组场景不占用单 id 的 supersedes 字段')
+  assert.deepEqual(result.merged?.ids, [OLD_ID, OLD_ID_2], '返回合并的两条旧 id')
+  assert.deepEqual(result.merged?.scopes, ['global', 'global'], '返回两条旧记录的作用域')
+  const input = h.saved[0] as Record<string, unknown>
+  assert.deepEqual(input.supersedes, [OLD_ID, OLD_ID_2], '数组原样透传给 provider')
+
+  // schema 支持 string | string[]（oneOf），且参数说明提到数组=合并
+  const params = (h.tool as ReturnType<typeof memorySaveTool>).parameters as Record<string, unknown>
+  const supersedesSchema = params.supersedes as { oneOf?: unknown[]; description?: string }
+  assert.ok(Array.isArray(supersedesSchema.oneOf) && supersedesSchema.oneOf.length === 2, 'schema 用 oneOf 同时接受 string 与 string[]')
+  assert.ok(supersedesSchema.description?.includes('传数组'), '说明里写明数组=合并')
 })

@@ -2,6 +2,13 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.41.0 — 工作区「整理记忆」：三点菜单一键在新会话里整理该工作区的记忆，`supersedes` 支持一修多
+
+- **工作区三点菜单新增「整理记忆」**：左侧工作区树每个工作区的「…」菜单里多一项（注册在宿主 `contextMenus` 的 `workspace` 目标，`order:400`，落在重命名 / 打开方式 / 删除之后）。点一下就在该工作区**新建一个会话并自动发出开场提示词**，不用自己开新会话再复制粘贴。实现照搬 dsh-notepad 的生产路径：`sessions.create({workspaceId})`（`workspaceId` 来自菜单目标；缺失时按 cwd 匹配 workspace 快照，再退回 `{cwd}`）→ `uiWorkspace.openSession(id)` → 轮询 `sessions.binding(id).session.prompt` → `session.prompt([{type:'text',text}],'queue')`（带 `beginSubmission` 乐观回显）。create 只登记占位符、live session 要等打开后才绑定，所以轮询不能省。宿主缺 `contextMenus` / `sessions` / `uiWorkspace` 时只少这个菜单，不影响面板其余部分。
+- **开场提示词的口径**：提示 Agent ①扫描本工作区相关记忆（排除 `kind=rule`）；②先出**整体情况报告**（多少条、哪些主题、哪些过时 / 重复 / 高度重合），**不逐条列出来让用户逐条确认**；③等用户回复确认后才动手——同主题多条用 `memory_save` 的 `supersedes` **数组**一次指向所有旧 id（一条修正多条，旧版本退出检索、历史仍可 `memory_get`）；④只有高度重合才 `memory_forget` 删除，拿不准的一律合并。这是「先报告、人工确认」而非「逐条审批」，也符合项目既有的「降噪不是清理」口径。
+- **`supersedes` 一修多（本次配套）**：`memory_save` 的 `supersedes` 接受单个完整 id 或 id 数组；数组时先把每个 id 跨作用域校验存在（任一不存在即 `SUPERSEDES_UNKNOWN`，不部分写入），落盘后所有旧 id 都进 `supersededIds()`，检索 / 摘要 / 规则 / 自动召回一起退役。仍强制显式 `scope`，读写权限判定不变。
+- 回归守卫：`client-render.test.ts` 加 4 例（提示词口径、workspaceId/cwd 解析、create→open→prompt 全链路、apply 通过 `ctx.inject` 注册菜单）；provider / 工具层的一修多用例见对应测试。全套测试 0 失败。
+
 ## 0.40.0 — 规则代码也管工具结果：`memory_search` / `memory_list` / `memory_get` 返回前改写，加统计清零与逐次调用审计
 
 - **同一段 `before-inject` 代码现在也管工具结果**：此前「注入摘要只取概括句」只改写三条注入通道，`memory_search` 返回的摘要、`memory_list` 返回的正文、`memory_get` 要的 `summary` 字段仍是原文——模型在工具结果里照样读到整段正文。0.40.0 起 `before-inject` 覆盖**第四条通道**：工具结果返回前先过一遍已批准的脚本。**复用同一个时机、同一段代码、同一次批准**，不新增 phase，不需要为工具结果再批一次。

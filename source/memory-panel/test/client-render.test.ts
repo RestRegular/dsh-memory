@@ -211,7 +211,13 @@ async function loadBundleImpl() {
   assert.equal(reg.id, PACKAGE_NAME, 'ModuleLoader id must equal the package name')
   const exports = reg.factory(requireShim)
   assert.equal(typeof exports.apply, 'function')
-  assert.deepEqual(exports.inject, ['slots'])
+  assert.deepEqual(exports.inject, [
+    'slots',
+    '@deepseek-ai/dsh-client-ui-context-menu',
+    '@deepseek-ai/dsh-client-ui-workspace',
+    '@deepseek-ai/dsh-api-session-controller',
+    '@deepseek-ai/dsh-api-workspace-controller',
+  ])
   return { exports, hooks, portals }
 }
 
@@ -2194,9 +2200,19 @@ test('client apply 注册记忆视图、轨迹徽标与详情页签', async () =
       return () => {}
     },
   }
+  const contextMenusRegistered: Array<Record<string, unknown>> = []
   const ctx = {
     get: (name: string) => name === 'slots' ? slots : undefined,
     effect: (fn: () => unknown) => { const dispose = fn(); return typeof dispose === 'function' ? dispose : () => {} },
+    inject(deps: string[], cb: (scope: unknown) => void) {
+      injected.push(...deps)
+      cb({
+        get: (name: string) => name === 'contextMenus'
+          ? { register(contribution: Record<string, unknown>) { contextMenusRegistered.push(contribution); return () => {} } }
+          : undefined,
+        effect: (fn: () => unknown) => fn(),
+      })
+    },
   }
   const globals = globalThis as Record<string, unknown>
   const saved = {
@@ -2247,6 +2263,12 @@ test('client apply 注册记忆视图、轨迹徽标与详情页签', async () =
   assert.equal(dock?.spec.id, 'memory-access-approval', '审批卡注册在会话内的输入框 dock')
   assert.ok(injected.includes('conversation.input.dock'))
   assert.ok(injected.includes('conversation.view'))
+  // 0.41.0：工作区三点菜单的整理记忆条目（ctx.inject 等 contextMenus）
+  assert.ok(injected.includes('contextMenus'))
+  const organize = contextMenusRegistered.find((r) => r.id === 'dsh-memory.organize')
+  assert.ok(organize, '注册了工作区整理记忆菜单')
+  assert.equal(organize!.target, 'workspace')
+  assert.equal(organize!.order, 400)
   assert.ok(!injected.includes('conversation.session.header.actions'))
   assert.ok(injected.includes('shell.overlay'))
   const visibility = registered.find((entry) => entry.spec.name === 'conversation.input.right')
@@ -4026,3 +4048,74 @@ test('审计详情能把 operationId 精确送到轨迹视图', async () => {
   assert.ok(textOf(current).includes('已定位到轨迹'))
   hooks.resetAll()
 })
+
+test('0.41.0 整理记忆提示词：先出报告、合并用 supersedes 一修多、高度重合才删除', async () => {
+  const { exports } = await loadBundle()
+  const prompt = (exports.__test as {
+    organizeMemoryPrompt: (target: unknown) => string
+  }).organizeMemoryPrompt
+  const text = prompt({ workspaceId: 'ws-1', path: 'D:/work/proj', displayTitle: '项目 X' })
+  assert.ok(text.includes('项目 X'), '带工作区显示名')
+  assert.ok(text.includes('D:/work/proj'), '带工作区路径')
+  assert.ok(text.includes('整体报告'), '先出整体报告')
+  assert.ok(text.includes('不要逐条'), '不逐条审批')
+  assert.ok(text.includes('supersedes') && text.includes('数组') && text.includes('一条修正多条'), '合并用一修多')
+  assert.ok(text.includes('memory_forget') && text.includes('高度重合'), '高度重合才删除')
+  assert.ok(text.includes('kind=rule') && text.includes('不要碰'), '不碰硬性规则')
+})
+
+test('0.41.0 workspaceCreateTarget：有 workspaceId 直接用，没 id 按 cwd 匹配', async () => {
+  const { exports } = await loadBundle()
+  const target = (exports.__test as {
+    workspaceCreateTarget: (ctx: unknown, target: unknown) => Promise<unknown>
+  }).workspaceCreateTarget
+  assert.deepEqual(
+    await target({ get: () => undefined }, { workspaceId: 'ws-9', path: 'D:/w' }),
+    { workspaceId: 'ws-9' },
+  )
+  // 无 id 时按 cwd（大小写不敏感）匹配 workspace 快照
+  const ctx = {
+    get: (name: string) => name === 'workspaces'
+      ? { list: { getSnapshot: () => ({ phase: 'ready', items: [{ workspaceId: 'ws-m', path: 'd:/WORK/proj' }] }) } }
+      : undefined,
+  }
+  assert.deepEqual(
+    await target(ctx, { workspaceId: '', path: 'D:/work/proj' }),
+    { workspaceId: 'ws-m' },
+  )
+  assert.deepEqual(await target({ get: () => undefined }, 'D:/fallback'), { cwd: 'D:/fallback' })
+})
+
+test('0.41.0 startOrganizeSession：create → openSession → prompt 发送开场消息', async () => {
+  const { exports } = await loadBundle()
+  const start = (exports.__test as {
+    startOrganizeSession: (ctx: unknown, target: unknown) => Promise<string | null>
+  }).startOrganizeSession
+  const sent: unknown[][] = []
+  const opened: string[] = []
+  let createdWith: unknown
+  const live = {
+    beginSubmission: () => ({ requestId: 'req-1', abandon() {} }),
+    prompt: async (...args: unknown[]) => { sent.push(args); return { ok: true } },
+  }
+  const ctx = {
+    get: (name: string) => {
+      if (name === 'sessions') return {
+        create: async (opts: unknown) => { createdWith = opts; return { value: { sessionId: 'new-1' } } },
+        binding: (id: string) => id === 'new-1' ? { session: live } : undefined,
+      }
+      if (name === 'uiWorkspace') return { openSession: (id: string) => opened.push(id) }
+      return undefined
+    },
+  }
+  const id = await start(ctx, { workspaceId: 'ws-1', path: 'D:/w', displayTitle: 'W' })
+  assert.equal(id, 'new-1')
+  assert.deepEqual(createdWith, { workspaceId: 'ws-1' })
+  assert.deepEqual(opened, ['new-1'], '打开新会话')
+  assert.equal(sent.length, 1, '发送了首条消息')
+  const parts = sent[0]![0] as Array<{ type: string; text: string }>
+  assert.equal(parts[0]!.type, 'text')
+  assert.ok(parts[0]!.text.includes('整理当前工作区的记忆'), '首条消息是整理提示词')
+  assert.equal(sent[0]![1], 'queue')
+})
+

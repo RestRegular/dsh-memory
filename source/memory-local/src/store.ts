@@ -9,6 +9,39 @@ import { Buffer } from 'node:buffer'
 import { dirname, join } from 'node:path'
 import type { MemoryRecord, MemorySaveInput, MemoryScope } from 'dsh-memory'
 
+/**
+ * 0.41.0：supersedes 从单 id 扩展为 `string | string[]`。
+ * `MemoryRecord` / `MemorySaveInput` 来自不可修改的外部 `dsh-memory` 类型包，
+ * 这里只做局部 cast 扩展，保证 `node --experimental-strip-types` 能直接跑。
+ * 落盘值保持传入形态（string 仍 string，数组仍数组），空数组按“没传”处理。
+ */
+export type SupersedesValue = string | string[]
+type WithSupersedes = { supersedes?: SupersedesValue }
+
+/** 读取记录上的 supersedes 实际值（外部类型只声明 string，这里覆盖为并集）。 */
+export function supersedesOf(record: MemoryRecord): SupersedesValue | undefined {
+  return (record as MemoryRecord & WithSupersedes).supersedes
+}
+
+/**
+ * 规整传入的 supersedes：数组去重、保留顺序；空数组 = undefined；单 id 原样返回。
+ * store.save 与 provider 校验共用这一份口径。
+ */
+export function normalizeSupersedes(input: unknown): SupersedesValue | undefined {
+  if (typeof input === 'string') return input
+  if (Array.isArray(input)) {
+    const seen = new Set<string>()
+    const ids: string[] = []
+    for (const entry of input) {
+      if (typeof entry !== 'string' || seen.has(entry)) continue
+      seen.add(entry)
+      ids.push(entry)
+    }
+    return ids.length > 0 ? ids : undefined
+  }
+  return undefined
+}
+
 export interface ScopeStoreEvents {
   onWarn?(message: string): void
 }
@@ -775,12 +808,14 @@ export class MemoryStore {
   ): { record: MemoryRecord; deduped: boolean } {
     const s = this.scope(input.scope)
     const hash = contentHash(input.scope, input.content)
+    const normalized = normalizeSupersedes(input.supersedes)
     for (const rec of s.records.values()) {
       if (contentHash(rec.scope, rec.content) === hash) {
         rec.updatedAt = Date.now()
         rec.accessCount += 1
         rec.importance = Math.max(rec.importance, input.importance ?? defaults.importance)
-        if (input.supersedes) rec.supersedes = input.supersedes
+        // 0.41.0：去重命中的刷新分支也要把 supersedes 原样更新（含数组）。
+        if (normalized !== undefined) (rec as MemoryRecord & WithSupersedes).supersedes = normalized
         // 同一内容重写 = 刷新状态:TLL 重新计时;显式去掉过期时间时一并清掉。
         if (input.expiredAt !== undefined) rec.expiredAt = input.expiredAt
         else delete rec.expiredAt
@@ -808,7 +843,8 @@ export class MemoryStore {
       lastAccessedAt: now,
       accessCount: 0,
       importance: input.importance ?? defaults.importance,
-      ...(input.supersedes ? { supersedes: input.supersedes } : {}),
+      // 0.41.0：string 保持 string、数组保持数组；空数组已由 normalizeSupersedes 视为未传。
+      ...(normalized !== undefined ? { supersedes: normalized } : {}),
       ...(input.expiredAt ? { expiredAt: input.expiredAt } : {}),
       ...(Array.isArray((input as MemorySaveInput & { triggers?: unknown }).triggers)
         ? { triggers: ((input as MemorySaveInput & { triggers?: unknown }).triggers as unknown[]).map(String) }

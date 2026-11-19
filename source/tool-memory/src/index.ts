@@ -33,7 +33,8 @@ export interface GetSourceRecord {
   createdAt: number
   updatedAt: number
   expiredAt?: number
-  supersedes?: string
+  /** 0.41.0：可为单 id 或 id 数组（合并修正多条旧记忆）。 */
+  supersedes?: string | string[]
   triggers?: string[]
   /** 0.24.0：作用域初始化记录（目录/说明的来源标记）。 */
   initial?: boolean
@@ -699,11 +700,18 @@ function outOfScopeReason(
  */
 const SUPERSEDES_PARAM_DESCRIPTION =
   '被这条新记忆修正 / 替换掉的旧记录 id。必须传**完整 id**(36 位 UUID),不能传 memory_search / memory_list / 摘要 / 规则索引里显示的 8 位短 id;手头只有短 id 时先用 memory_get 取回 —— 它结果里每段首行的 [id] 就是完整 id。旧记录会被标记为「已修正」,默认不再出现在检索、规则和自动召回里,但 memory_get 仍能查到。'
+  + '传数组 = 一条新记忆合并/修正多条旧记忆（传进去的旧 id 全部退役，数组内部去重、保留顺序；任何一个 id 找不到都会报错且不会部分写入）。'
   + '传了 supersedes 时**必须显式带 scope 参数**（不接受省略 / 默认作用域）：scope 是新记录要保存到的目标作用域，本会话必须对它拥有写权限；跨作用域修正（旧记录在别的作用域）现在支持，但目标作用域必须写权限，否则直接拒绝，不做审批。'
+
+/** 0.41.0：supersedes 是否已提供（string 非空 / 非空数组）。 */
+function hasSupersedes(value: string | string[] | undefined): boolean {
+  if (Array.isArray(value)) return value.length > 0
+  return typeof value === 'string' && value !== ''
+}
 
 /** 带 supersedes 时必须显式写 scope：拒绝静默落到默认作用域造成“修错地方”。 */
 function requireScopeForSupersedes(args: SaveArgs, explicit: string | undefined): void {
-  if (args.supersedes === undefined || args.supersedes === '') return
+  if (!hasSupersedes(args.supersedes)) return
   const raw = args.scope?.trim()
   if (explicit === undefined || raw === undefined || raw === '') {
     throw new MemoryToolError(
@@ -993,8 +1001,11 @@ export interface SaveArgs {
   kind?: string
   tags?: string[]
   importance?: number
-  /** 被这条新记录修正/替换的旧记录 **完整** id(不接受 8 位短 id)。 */
-  supersedes?: string
+  /**
+   * 被这条新记录修正/替换的旧记录 **完整** id(不接受 8 位短 id)。
+   * 0.41.0：可传 id 数组 = 一条新记忆合并/修正多条旧记忆（这些旧 id 全部退役）。
+   */
+  supersedes?: string | string[]
   /** 过期时间（毫秒时间戳）；kind='state' 不传时按设置里的默认 TTL。 */
   expiresAt?: number
   /** 相对有效期（毫秒）；与 expiresAt 二选一，显式值优先。 */
@@ -1028,8 +1039,13 @@ export interface SaveResult {
   /** 作用域别名（这次写入顺带登记的名字）。 */
   scopeName?: string
   deduped: boolean
-  /** supersedes 修正的场景：被修正旧记录 id 与其所在作用域（可跨作用域）。 */
+  /**
+   * supersedes 单 id 修正场景：被修正旧记录 id 与其所在作用域（可跨作用域）。
+   * 传数组（合并多条）时不带这一项，改用 merged（保持对旧调用方的兼容）。
+   */
   supersedes?: { id: string; scope?: string }
+  /** 0.41.0：supersedes 传数组时，被合并/退役的旧记录 id 与其作用域。 */
+  merged?: { ids: string[]; scopes?: string[] }
   /** 0.35.0：随这条记忆登记的钩子（代码挂上了但没批准时也会给 id，附审批结局）。 */
   hook?: { id: string; name: string; phase: HookPhaseView; approval: string }
 }
@@ -1058,7 +1074,15 @@ export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, Sav
       kind: { type: 'string', enum: ['fact', 'decision', 'preference', 'procedure', 'note', 'rule', 'state'] },
       tags: { type: 'array', items: { type: 'string' } },
       importance: { type: 'number', description: '0~1, higher = more important' },
-      supersedes: { type: 'string', description: SUPERSEDES_PARAM_DESCRIPTION },
+      // 0.41.0：string 或 string[] 都合法。oneOf 是 dsh-tools authoring DSL 支持的
+      // 组合关键字（exact-one 分支；分支内只能放 type/items 等，不能再带 description）。
+      supersedes: {
+        oneOf: [
+          { type: 'string' },
+          { type: 'array', items: { type: 'string' } },
+        ],
+        description: SUPERSEDES_PARAM_DESCRIPTION,
+      },
       expiresAt: { type: 'number', description: '过期时间(毫秒时间戳)。kind=state 不传时按设置里的默认 TTL(7 天)' },
       ttlMs: { type: 'number', description: '相对有效期(毫秒)。与 expiresAt 二选一，expiresAt 优先' },
       triggers: { type: 'array', items: { type: 'string' }, description: '流程触发词(kind=procedure)：工具名/关键词/路径；缺省用 tags' },
@@ -1120,7 +1144,7 @@ export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, Sav
       // 0.36.0：带 supersedes 时 scope 必须显式给出（见 requireScopeForSupersedes），
       // 且本会话必须对目标作用域已有写权限 —— 不触发范围外审批，权限不足直接拒绝。
       requireScopeForSupersedes(args, explicit)
-      const isSupersedes = args.supersedes !== undefined && args.supersedes !== ''
+      const isSupersedes = hasSupersedes(args.supersedes)
 
       // 写入护栏（0.20.0 / 0.23.0）：write 开关与范围等级分开判断。
       //   - 作用域在范围内但「可写」关掉 → 直接拒绝并说明开关;
@@ -1215,19 +1239,38 @@ export function memorySaveTool(opts: MemoryToolsOptions): ToolSpec<SaveArgs, Sav
             description: args.description,
           })
         }
+        const supersedesValue = args.supersedes as string | string[] | undefined
         let oldScope: string | undefined
-        if (isSupersedes) {
+        let mergedInfo: SaveResult['merged']
+        let singleInfo: SaveResult['supersedes']
+        if (isSupersedes && supersedesValue !== undefined) {
+          const ids = Array.isArray(supersedesValue) ? supersedesValue : [supersedesValue]
           try {
-            const hit = (await service.getByIds?.([args.supersedes!]))?.[0]
-            oldScope = hit?.scope
+            // 0.41.0：数组时 getByIds 批量取（单 id 走同一条路径，行为不变）。
+            const hits = (await service.getByIds?.(ids)) ?? []
+            const byId = new Map(hits.map((hit) => [hit.id, hit.scope]))
+            if (Array.isArray(supersedesValue)) {
+              const scopes = ids.map((id) => byId.get(id)).filter((scope): scope is string => scope !== undefined)
+              mergedInfo = { ids, ...(scopes.length > 0 ? { scopes } : {}) }
+            } else {
+              oldScope = byId.get(supersedesValue)
+              singleInfo = { id: supersedesValue, ...(oldScope !== undefined ? { scope: oldScope } : {}) }
+            }
           } catch { /* 取不到旧记录作用域只影响提示，不影响保存成功 */ }
+          // 取作用域失败只影响提示，不影响修正/合并关系本身的回显。
+          if (Array.isArray(supersedesValue)) {
+            mergedInfo ??= { ids }
+          } else {
+            singleInfo ??= { id: supersedesValue }
+          }
         }
         return {
           id: record.id,
           scope: record.scope,
           ...(alias !== undefined ? { scopeName: alias } : {}),
           deduped: false,
-          ...(isSupersedes ? { supersedes: { id: args.supersedes!, ...(oldScope !== undefined ? { scope: oldScope } : {}) } } : {}),
+          ...(singleInfo !== undefined ? { supersedes: singleInfo } : {}),
+          ...(mergedInfo !== undefined ? { merged: mergedInfo } : {}),
           ...(hookInfo !== undefined ? { hook: hookInfo } : {}),
         }
       } catch (error) {

@@ -50,3 +50,13 @@ test('memory_save 渲染带一次目标作用域 key，且不再有冗余的第�
   assert.equal(apply.includes('保存到的目标作用域 key：'), false, '不能再有第二行重复 key')
   assert.ok(apply.includes('value.supersedes'), 'supersedes 场景必须额外说明修正关系')
 })
+
+/**
+ * 0.41.0：supersedes 数组 = 合并多条旧记忆，文案里必须明确「合并了 N 条」。
+ */
+test('memory_save 渲染对数组 supersedes 写明合并了 N 条', () => {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const apply = readFileSync(join(here, '..', 'src', 'apply.ts'), 'utf8')
+  assert.ok(apply.includes('合并修正'), '数组修正场景有合并文案')
+  assert.ok(apply.includes('merged.ids.length'), '文案带合并条数')
+})

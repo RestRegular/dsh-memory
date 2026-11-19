@@ -1,6 +1,6 @@
 {
   "name": "@restregular/dsh-memory",
-  "version": "0.40.0",
+  "version": "0.41.0",
   "description": "DeepSeek Harness 记忆系统(单包单入口):JSONL 存储 + 本地向量检索(BGE-M3)+ 五个模型工具 + 自动召回注入 + 管理面板。",
   "icon": "./icon.svg",
   "type": "module",
@@ -27,7 +27,11 @@
     },
     "client": {
       "inject": [
-        "@deepseek-ai/dsh-client-ui-slots"
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-context-menu",
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-api-workspace-controller"
       ],
       "platform": "web"
     }

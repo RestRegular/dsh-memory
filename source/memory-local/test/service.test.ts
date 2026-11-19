@@ -92,6 +92,49 @@ test('supersedes 跨作用域：目标旧记录在别的 scope 也能修正，�
   )
 })
 
+test('supersedes 数组：一条新记忆把两条旧记忆都退役（list/search 隐藏，includeSuperseded 可见）', async () => {
+  const r1 = await svc.save({ scope: PROJECT, kind: 'fact', content: '配置 A：端口 3000' })
+  const r2 = await svc.save({ scope: PROJECT, kind: 'fact', content: '配置 B：超时 5s' })
+  const merged = await svc.save({
+    scope: PROJECT,
+    kind: 'fact',
+    content: '合并修正：端口 4000、超时 10s',
+    supersedes: [r1.id, r2.id],
+  } as never)
+  assert.deepEqual(merged.supersedes, [r1.id, r2.id], '数组形态原样落盘、保留顺序')
+  // 两条旧记录默认都退役
+  const visible = await svc.list({ scope: PROJECT })
+  assert.equal(visible.some((r) => r.id === r1.id), false, '旧记录 1 默认 list 隐藏')
+  assert.equal(visible.some((r) => r.id === r2.id), false, '旧记录 2 默认 list 隐藏')
+  assert.ok(visible.some((r) => r.id === merged.id), '新记录可见')
+  const search = await svc.search({ text: '配置 端口 超时', scope: PROJECT })
+  assert.equal(search.some((h) => h.record.id === r1.id || h.record.id === r2.id), false, 'search 默认也看不到两条旧记录')
+  // includeSuperseded 能看到两条
+  const history = await svc.search({ text: '配置 端口 超时', scope: PROJECT, includeSuperseded: true } as never)
+  assert.ok(history.some((h) => h.record.id === r1.id), 'includeSuperseded 能看到旧记录 1')
+  assert.ok(history.some((h) => h.record.id === r2.id), 'includeSuperseded 能看到旧记录 2')
+  assert.deepEqual(svc.supersededIds(), [r1.id, r2.id], 'supersededIds 收集数组里的每个 id')
+})
+
+test('supersedes 数组：有一个 id 不存在时报错且没有任何写入', async () => {
+  const r1 = await svc.save({ scope: PROJECT, kind: 'fact', content: '独立旧记录内容 xyz' })
+  const before = (await svc.list({ scope: PROJECT })).length
+  const missing = '99999999-aaaa-bbbb-cccc-ddddeeeeffff'
+  await assert.rejects(
+    () => svc.save({
+      scope: PROJECT,
+      kind: 'fact',
+      content: '这条不应被写入',
+      supersedes: [r1.id, missing],
+    } as never),
+    (err: Error & { code?: string }) => err.code === 'SUPERSEDES_UNKNOWN' && err.message.includes(missing),
+  )
+  const after = await svc.list({ scope: PROJECT })
+  assert.equal(after.length, before, '失败后记录数不变，没有部分写入')
+  assert.equal(after.some((r) => r.content === '这条不应被写入'), false, '新记录没有落盘')
+  assert.ok(after.some((r) => r.id === r1.id), '被指向的合法旧记录未被改动')
+})
+
 test('state: default TTL, expired hidden from search/list, getByIds still returns it', async () => {  const state = await svc.save({
     scope: PROJECT, kind: 'state', content: '当前部署在测试环境，验证后需要回滚',
     ttlMs: 30,

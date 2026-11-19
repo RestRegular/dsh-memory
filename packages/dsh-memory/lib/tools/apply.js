@@ -144,9 +144,13 @@ export function apply(ctx     , config                   = {}) {
       ? `已更新既有记忆（内容相同，去重）：${value.id} @ ${value.scope}`
       : `已保存记忆 ${value.id} @ ${value.scope}`
     // supersedes 场景补一条修正关系（旧记录所在作用域可不同）。
-    const correctionLine = value.supersedes === undefined
-      ? ''
-      : `\n已用本条修正旧记忆 ${value.supersedes.id}${value.supersedes.scope !== undefined ? `（旧记录在 ${value.supersedes.scope}）` : ''}`
+    // 0.41.0：数组 = 一条记忆合并/修正多条旧记忆，文案里明确「合并了 N 条」。
+    const correctionLine = value.merged !== undefined
+      ? `\n已用本条合并修正 ${value.merged.ids.length} 条旧记忆：${value.merged.ids.join('、')}`
+        + (value.merged.scopes !== undefined ? `（旧记录作用域：${value.merged.scopes.join('、')}）` : '')
+      : value.supersedes === undefined
+        ? ''
+        : `\n已用本条修正旧记忆 ${value.supersedes.id}${value.supersedes.scope !== undefined ? `（旧记录在 ${value.supersedes.scope}）` : ''}`
     const tail = correctionLine
     const hook = value.hook
     if (hook === undefined) return `${head}${tail}`

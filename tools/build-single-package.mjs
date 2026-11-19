@@ -250,7 +250,16 @@ writeJson(join(OUT, 'package.json'), {
   files: ['lib/', 'locale/', 'skills/', 'cordis.patch.yml', 'icon.svg', 'README.md', 'CHANGELOG.md', 'LICENSE'],
   dsh: {
     bundle: { patch: './cordis.patch.yml' },
-    client: { inject: ['@deepseek-ai/dsh-client-ui-slots'], platform: 'web' },
+    client: {
+      inject: [
+        '@deepseek-ai/dsh-client-ui-slots',
+        '@deepseek-ai/dsh-client-ui-context-menu',
+        '@deepseek-ai/dsh-client-ui-workspace',
+        '@deepseek-ai/dsh-api-session-controller',
+        '@deepseek-ai/dsh-api-workspace-controller',
+      ],
+      platform: 'web',
+    },
   },
   peerDependencies: {
     '@deepseek-ai/cordis': '*',

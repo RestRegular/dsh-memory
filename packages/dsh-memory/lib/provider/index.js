@@ -14,7 +14,7 @@
               
                    
                    
-import { MemoryStore, newId, scopeFileName,                 } from './store.js'
+import { MemoryStore, newId, normalizeSupersedes, scopeFileName, supersedesOf,                                       } from './store.js'
 import {
   canonicalWorkspacePath,
   defaultScopeDescription,
@@ -1396,7 +1396,13 @@ export class LocalMemoryService                             {
       : scopes.map((scope) => this.store.peek(scope)).filter((s)                             => s !== undefined)
     for (const store of stores) {
       for (const record of store.records.values()) {
-        if (typeof record.supersedes === 'string' && record.supersedes.length > 0) ids.add(record.supersedes)
+        // 0.41.0：string 与 string[] 都收集；对外仍返回去重后的 string[]。
+        const value = supersedesOf(record)
+        if (typeof value === 'string') {
+          if (value.length > 0) ids.add(value)
+        } else if (Array.isArray(value)) {
+          for (const entry of value) if (typeof entry === 'string' && entry.length > 0) ids.add(entry)
+        }
       }
     }
     return [...ids]
@@ -3439,8 +3445,19 @@ export class LocalMemoryService                             {
     // 作用域去修正另一作用域里的旧记录（project / global / session / 自定义均可）。
     // 之前这里用 `this.store.scope(scope).records.get(id)` 只查新记录自己的 scope，
     // 跨作用域一律报 SUPERSEDES_UNKNOWN；findById 会扫描全部已加载/已发现的 scope。
-    if (input.supersedes && !this.findById(input.supersedes)) {
-      throw memoryError('SUPERSEDES_UNKNOWN', `supersedes target ${input.supersedes} not found in any scope`)
+    // 0.41.0：supersedes 可为 string | string[]。数组时逐个按完整 id 跨作用域查找，
+    // **先全部校验通过再继续写盘**，任何一个 id 找不到都直接报错，绝不部分写入。
+    const normalizedSupersedes = normalizeSupersedes(input.supersedes)
+    if (typeof normalizedSupersedes === 'string') {
+      if (!this.findById(normalizedSupersedes)) {
+        throw memoryError('SUPERSEDES_UNKNOWN', `supersedes target ${normalizedSupersedes} not found in any scope`)
+      }
+    } else if (Array.isArray(normalizedSupersedes)) {
+      for (const target of normalizedSupersedes) {
+        if (!this.findById(target)) {
+          throw memoryError('SUPERSEDES_UNKNOWN', `supersedes target ${target} not found in any scope`)
+        }
+      }
     }
     // 状态型记忆(state)默认带 TTL:写入时算一次绝对 expiresAt,读取时只比较时间。
     // 显式 expiresAt 优先;ttlMs 对任何 kind 都生效(便于测试/特殊用途)。
@@ -3516,7 +3533,8 @@ export class LocalMemoryService                             {
       const outcomes = this.runHooks('before-save', {
         memory: {
           ...draft,
-          ...(input.supersedes !== undefined ? { supersedes: input.supersedes } : {}),
+          // 0.41.0：钩子看到的是规整后的实际值（string 或去重后的 string[]；空数组视为未传）。
+          ...(normalizedSupersedes !== undefined ? { supersedes: normalizedSupersedes } : {}),
           ...(input.expiredAt !== undefined ? { expiresAt: input.expiredAt } : {}),
         },
         ...(typeof (input                          ).hookTool === 'string'

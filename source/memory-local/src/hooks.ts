@@ -103,7 +103,8 @@ export interface HookMemoryView {
   createdAt?: number
   updatedAt?: number
   expiresAt?: number
-  supersedes?: string
+  /** 0.41.0：可为单 id 或 id 数组（合并修正多条旧记忆），透传实际值。 */
+  supersedes?: string | string[]
   initial?: boolean
 }
 
