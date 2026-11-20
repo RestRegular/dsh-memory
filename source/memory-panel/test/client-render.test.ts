@@ -4130,8 +4130,16 @@ test('0.42.1 更新卡片：版本下拉切换内容，悬停版本号右侧同�
   ;(row98!.props!.onMouseEnter as () => void)()
   text = textOf(current)
   assert.ok(text.includes('修复：旧 bug') || text.includes('旧 bug'), '悬停显示该版本的一行更新摘要')
-  const summary = collect(current).find((n) => String(n.props?.className ?? '').includes('ver-summary'))
-  assert.ok(summary, '摘要卡片节点存在（与版本号同行）')
+  const summary = collect(current).find((n) => String(n.props?.className ?? '').includes('ver-summary-card'))
+  assert.ok(summary, '摘要卡片节点存在')
+  // 卡片在列表**外面**：与 .ver-list 同为 .ver-pop 的子节点，而不是列表行的子节点
+  const pop = collect(current).find((n) => String(n.props?.className ?? '').includes('ver-pop'))
+  assert.ok(pop, '有下拉容器 .ver-pop')
+  const popChildren = (pop!.children ?? []) as Array<{ props?: Record<string, unknown> }>
+  const listChild = popChildren.find((c) => String(c.props?.className ?? '').includes('ver-list'))
+  const summaryChild = popChildren.find((c) => String(c.props?.className ?? '').includes('ver-summary-card'))
+  assert.ok(listChild && summaryChild, '列表与摘要卡片是同级兄弟（卡片在列表外）')
+  assert.equal((summary!.props?.style as Record<string, unknown>)?.['--ver-hover-index'], 1, '按悬停行号对齐')
   // 点选 9.9.8 → 下方内容切到旧版
   ;(row98!.props!.onClick as () => void)()
   text = textOf(current)

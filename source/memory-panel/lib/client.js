@@ -151,12 +151,17 @@ window.__ModuleLoader__.load({
       '.memp .ver-select{position:relative;display:inline-flex;flex-direction:column;align-items:flex-start;align-self:flex-start}',
       '.memp .ver-select-btn{display:inline-flex;align-items:center;gap:6px;min-width:150px;padding:4px 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-brand-primary);font-family:var(--ds-font-family-code,ui-monospace,monospace);font-size:12px;cursor:pointer}',
       '.memp .ver-select-btn:hover{border-color:var(--dsw-alias-brand-primary)}',
-      '.memp .ver-list{position:absolute;z-index:12;top:100%;left:0;margin-top:4px;min-width:340px;max-width:min(90vw,560px);max-height:300px;overflow:auto;padding:4px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 8px 24px rgba(0,0,0,.20)}',
-      '.memp .ver-row{display:flex;align-items:center;gap:10px;padding:5px 8px;border-radius:6px;cursor:pointer;font-size:12px;border:1px solid transparent;white-space:nowrap}',
+      '.memp .ver-pop{position:absolute;z-index:12;top:100%;left:0;margin-top:4px;display:flex;align-items:flex-start;gap:8px}',
+      '.memp .ver-list{flex:none;min-width:150px;max-width:340px;max-height:300px;overflow:auto;padding:4px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 8px 24px rgba(0,0,0,.20)}',
+      '.memp .ver-row{display:flex;align-items:center;gap:10px;height:29px;box-sizing:border-box;padding:5px 8px;border-radius:6px;cursor:pointer;font-size:12px;border:1px solid transparent;white-space:nowrap}',
       '.memp .ver-row:hover,.memp .ver-row.hovered{border-color:var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-layer-2)}',
       '.memp .ver-row.on .ver-row-num{font-weight:600;color:var(--dsw-alias-brand-primary)}',
       '.memp .ver-row-num{flex:none;font-family:var(--ds-font-family-code,ui-monospace,monospace);color:var(--dsw-alias-label-primary)}',
-      '.memp .ver-summary{display:inline-block;flex:1;min-width:0;max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.6}',
+      // 摘要卡片在列表外侧右边；margin-top 用 --ver-hover-index(行号)×29px(行高)+4px(列表 padding)
+      // 对齐到悬停那一行，视觉上与版本号同行。
+      '.memp .ver-summary-card{flex:none;align-self:flex-start;margin-top:calc(var(--ver-hover-index,0) * 29px + 4px);display:flex;align-items:center;gap:8px;max-width:min(60vw,420px);height:29px;box-sizing:border-box;padding:2px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 8px 24px rgba(0,0,0,.20);color:var(--dsw-alias-label-primary);font-size:11.5px;white-space:nowrap;overflow:hidden}',
+      '.memp .ver-summary-ver{flex:none;font-family:var(--ds-font-family-code,ui-monospace,monospace);font-weight:600;color:var(--dsw-alias-brand-primary)}',
+      '.memp .ver-summary-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary)}',
       '.memp .release{border-top:1px solid var(--dsw-alias-border-l1);padding-top:8px}',
       '.memp .release-title{font-size:12px;font-weight:600;line-height:1.5}',
       '.memp .release-title .rv{color:var(--dsw-alias-brand-primary);font-family:var(--ds-font-family-code,ui-monospace,monospace);margin-right:6px}',
@@ -4811,6 +4816,8 @@ window.__ModuleLoader__.load({
 
       if (releases.length === 0) return null
       const active = releases.find((r) => r.version === selected) || releases[0]
+      const hoverIndex = hover === '' ? -1 : releases.findIndex((r) => r.version === hover)
+      const hovered = hoverIndex >= 0 ? releases[hoverIndex] : null
       return h('div', { className: 'updates' },
         h('div', { className: 'updates-head' },
           h('b', null, '更新'),
@@ -4828,22 +4835,32 @@ window.__ModuleLoader__.load({
             h('span', { className: 'caret' }, '▾'),
           ),
           open
-            ? h('div', { className: 'ver-list', role: 'listbox' },
-                ...releases.map((release) => h('div', {
-                  key: release.version,
-                  role: 'option',
-                  'aria-selected': release.version === active.version,
-                  className: `ver-row${release.version === active.version ? ' on' : ''}${release.version === hover ? ' hovered' : ''}`,
-                  onMouseEnter: () => setHover(release.version),
-                  onMouseLeave: () => setHover(''),
-                  onClick: () => { setSelected(release.version); setOpen(false); setHover('') },
-                },
-                  h('span', { className: 'ver-row-num' }, release.version),
-                  // 悬停版本号时，右边同行用一张卡片显示该版本的一行更新摘要。
-                  release.version === hover
-                    ? h('span', { className: 'ver-summary', title: release.title }, releaseSummaryLine(release))
-                    : null,
-                )),
+            ? h('div', { className: 'ver-pop' },
+                h('div', { className: 'ver-list', role: 'listbox' },
+                  ...releases.map((release) => h('div', {
+                    key: release.version,
+                    role: 'option',
+                    'aria-selected': release.version === active.version,
+                    className: `ver-row${release.version === active.version ? ' on' : ''}${release.version === hover ? ' hovered' : ''}`,
+                    onMouseEnter: () => setHover(release.version),
+                    onMouseLeave: () => setHover(''),
+                    onClick: () => { setSelected(release.version); setOpen(false); setHover('') },
+                  },
+                    h('span', { className: 'ver-row-num' }, release.version),
+                  )),
+                ),
+                // 悬停摘要卡片在列表**外面**：与列表同处一个横向 flex 容器、浮在其右侧；
+                // 用 CSS 变量按下标把它垂直对齐到悬停那一行。
+                hovered
+                  ? h('div', {
+                      className: 'ver-summary-card',
+                      style: { '--ver-hover-index': hoverIndex },
+                      title: hovered.title,
+                    },
+                      h('span', { className: 'ver-summary-ver' }, hovered.version),
+                      h('span', { className: 'ver-summary-text' }, releaseSummaryLine(hovered)),
+                    )
+                  : null,
               )
             : null,
         ),
