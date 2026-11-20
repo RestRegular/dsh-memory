@@ -157,9 +157,9 @@ window.__ModuleLoader__.load({
       '.memp .ver-row:hover,.memp .ver-row.hovered{border-color:var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-layer-2)}',
       '.memp .ver-row.on .ver-row-num{font-weight:600;color:var(--dsw-alias-brand-primary)}',
       '.memp .ver-row-num{flex:none;font-family:var(--ds-font-family-code,ui-monospace,monospace);color:var(--dsw-alias-label-primary)}',
-      // 摘要卡片在列表外侧右边；margin-top 用 --ver-hover-index(行号)×29px(行高)+4px(列表 padding)
-      // 对齐到悬停那一行，视觉上与版本号同行。
-      '.memp .ver-summary-card{flex:none;align-self:flex-start;margin-top:calc(var(--ver-hover-index,0) * 29px + 4px);display:flex;align-items:center;gap:8px;max-width:min(60vw,420px);height:29px;box-sizing:border-box;padding:2px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 8px 24px rgba(0,0,0,.20);color:var(--dsw-alias-label-primary);font-size:11.5px;white-space:nowrap;overflow:hidden}',
+      // 摘要卡片在列表外侧右边；margin-top = 行号×29px(行高) + 4px(列表 padding) − 列表滚动量。
+      // 减去 scrollTop 后卡片始终贴住光标下那一行，列表滚动时不会往下掉。
+      '.memp .ver-summary-card{flex:none;align-self:flex-start;margin-top:calc(var(--ver-hover-index,0) * 29px + 4px - var(--ver-scroll,0px));display:flex;align-items:center;gap:8px;max-width:min(60vw,420px);height:29px;box-sizing:border-box;padding:2px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 8px 24px rgba(0,0,0,.20);color:var(--dsw-alias-label-primary);font-size:11.5px;white-space:nowrap;overflow:hidden}',
       '.memp .ver-summary-ver{flex:none;font-family:var(--ds-font-family-code,ui-monospace,monospace);font-weight:600;color:var(--dsw-alias-brand-primary)}',
       '.memp .ver-summary-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary)}',
       '.memp .release{border-top:1px solid var(--dsw-alias-border-l1);padding-top:8px}',
@@ -6772,6 +6772,9 @@ window.__ModuleLoader__.load({
       const [selected, setSelected] = React.useState(current)
       const [open, setOpen] = React.useState(false)
       const [hover, setHover] = React.useState('')
+      // 0.42.3：列表滚动量。卡片的垂直位置要跟着滚动补偿，否则锚在"行号×行高"上，
+      // 滚动后光标下的行还在原地、行号却变大，卡片就越掉越远。
+      const [scrollTop, setScrollTop] = React.useState(0)
 
       // 点列表外面 / Esc 收起下拉（与通用 Dropdown 同一口径）。
       React.useEffect(() => {
@@ -6811,7 +6814,11 @@ window.__ModuleLoader__.load({
           ),
           open
             ? h('div', { className: 'ver-pop' },
-                h('div', { className: 'ver-list', role: 'listbox' },
+                h('div', {
+                  className: 'ver-list',
+                  role: 'listbox',
+                  onScroll: (e) => setScrollTop(e && e.target ? e.target.scrollTop : 0),
+                },
                   ...releases.map((release) => h('div', {
                     key: release.version,
                     role: 'option',
@@ -6829,7 +6836,8 @@ window.__ModuleLoader__.load({
                 hovered
                   ? h('div', {
                       className: 'ver-summary-card',
-                      style: { '--ver-hover-index': hoverIndex },
+                      // 0.42.3：减去列表滚动量，卡片始终贴住光标下的那一行。
+                      style: { '--ver-hover-index': hoverIndex, '--ver-scroll': `${scrollTop}px` },
                       title: hovered.title,
                     },
                       h('span', { className: 'ver-summary-ver' }, hovered.version),

@@ -4140,6 +4140,11 @@ test('0.42.1 更新卡片：版本下拉切换内容，悬停版本号右侧同�
   const summaryChild = popChildren.find((c) => String(c.props?.className ?? '').includes('ver-summary-card'))
   assert.ok(listChild && summaryChild, '列表与摘要卡片是同级兄弟（卡片在列表外）')
   assert.equal((summary!.props?.style as Record<string, unknown>)?.['--ver-hover-index'], 1, '按悬停行号对齐')
+  assert.equal((summary!.props?.style as Record<string, unknown>)?.['--ver-scroll'], '0px', '初始滚动量为 0')
+  // 列表滚动 → 卡片样式带上新的 scrollTop，抵消行号带来的偏移（不再往下掉）
+  ;(listChild!.props!.onScroll as (e: unknown) => void)({ target: { scrollTop: 58 } })
+  const scrolled = collect(current).find((n) => String(n.props?.className ?? '').includes('ver-summary-card'))
+  assert.equal((scrolled!.props?.style as Record<string, unknown>)?.['--ver-scroll'], '58px', '滚动时同步补偿卡片位置')
   // 点选 9.9.8 → 下方内容切到旧版
   ;(row98!.props!.onClick as () => void)()
   text = textOf(current)
