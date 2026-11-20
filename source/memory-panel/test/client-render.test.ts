@@ -211,13 +211,9 @@ async function loadBundleImpl() {
   assert.equal(reg.id, PACKAGE_NAME, 'ModuleLoader id must equal the package name')
   const exports = reg.factory(requireShim)
   assert.equal(typeof exports.apply, 'function')
-  assert.deepEqual(exports.inject, [
-    'slots',
-    '@deepseek-ai/dsh-client-ui-context-menu',
-    '@deepseek-ai/dsh-client-ui-workspace',
-    '@deepseek-ai/dsh-api-session-controller',
-    '@deepseek-ai/dsh-api-workspace-controller',
-  ])
+  // exports.inject 是 cordis 服务名（决定 apply 时机），不是 npm 包名。
+  // 0.41.0 曾把四个包名塞进来导致 apply 永不触发、全部面板消失；0.41.1 修回。
+  assert.deepEqual(exports.inject, ['slots'])
   return { exports, hooks, portals }
 }
 

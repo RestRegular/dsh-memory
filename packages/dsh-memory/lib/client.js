@@ -8235,15 +8235,13 @@ window.__ModuleLoader__.load({
       return sessionId
     }
 
-    // 0.41.0：工作区三点菜单需要 contextMenus；新建会话与发首条消息需要
-    // sessions / uiWorkspace / workspaces。宿主按包名注入，缺谁都只降级。
-    const inject = [
-      'slots',
-      '@deepseek-ai/dsh-client-ui-context-menu',
-      '@deepseek-ai/dsh-client-ui-workspace',
-      '@deepseek-ai/dsh-api-session-controller',
-      '@deepseek-ai/dsh-api-workspace-controller',
-    ]
+    // exports.inject 是 cordis 的**服务名**依赖（决定 apply 时机），不是 npm 包名。
+    // 0.41.0 误把四个包名塞进来：cordis 等不到名为包名的"服务"，永不调用 apply，
+    // 于是记忆面板 / 会话视图 / 整理菜单（都注册在同一个 apply 里）一起消失。
+    // 0.41.1 修回只依赖 slots；contextMenus / uiWorkspace / sessions / workspaces
+    // 都是软依赖，apply 内已用 ctx.inject / ctx.get 兜底，缺服务只是少对应入口。
+    // 包名依赖放在 package.json 的 dsh.client.inject（那是模块到达图，不是 cordis 服务）。
+    const inject = ['slots']
 
     /** 侧栏入口打开的主界面页面(整块可滚动,内容就是面板本体)。 */
     function MemoryPage({ openSession, sessionInfo } = {}) {

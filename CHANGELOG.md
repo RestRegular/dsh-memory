@@ -2,6 +2,12 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.41.1 — 修复 0.41.0 全部 UI 消失：client 的 `exports.inject` 误用包名
+
+- **问题**：0.41.0 为了「整理记忆」菜单，把 client 模块导出的 `inject`（cordis 的**服务名**依赖，决定 `apply()` 何时执行）从 `['slots']` 改成五个条目，其中四个是 npm **包名**（`@deepseek-ai/dsh-client-ui-context-menu` 等）。cordis 里没有任何插件以包名注册服务，所以它一直等不到这几个「服务」，整份 client 的 `apply()` 永不执行——而记忆面板、会话「记忆」视图、工作区「整理记忆」菜单全都在同一个 `apply()` 里注册，于是**三处 UI 一起消失**。Agent 侧记忆工具在服务端，不受影响，所以表现为「工具还在、面板全没了」。
+- **修复**：`exports.inject` 改回 `['slots']`（与 dsh-notepad / dsh-powerup / dsh-visual-browser 等一切正常插件一致）。`contextMenus` / `uiWorkspace` / `sessions` / `workspaces` 都是软依赖，`apply()` 里已分别用 `ctx.inject(['contextMenus'], …)` 与 `ctx.get(...)` 兜底，缺谁就少对应入口，不影响其余面板。包名依赖只保留在 `package.json` 的 `dsh.client.inject`——那是客户端**模块到达图**(编译/装配期)，与 cordis 服务注入是两回事。
+- 回归守卫：`client-render.test.ts` 把 inject 断言改回 `['slots']`，防止再把包名塞进 cordis 依赖。
+
 ## 0.41.0 — 工作区「整理记忆」：三点菜单一键在新会话里整理该工作区的记忆，`supersedes` 支持一修多
 
 - **工作区三点菜单新增「整理记忆」**：左侧工作区树每个工作区的「…」菜单里多一项（注册在宿主 `contextMenus` 的 `workspace` 目标，`order:400`，落在重命名 / 打开方式 / 删除之后）。点一下就在该工作区**新建一个会话并自动发出开场提示词**，不用自己开新会话再复制粘贴。实现照搬 dsh-notepad 的生产路径：`sessions.create({workspaceId})`（`workspaceId` 来自菜单目标；缺失时按 cwd 匹配 workspace 快照，再退回 `{cwd}`）→ `uiWorkspace.openSession(id)` → 轮询 `sessions.binding(id).session.prompt` → `session.prompt([{type:'text',text}],'queue')`（带 `beginSubmission` 乐观回显）。create 只登记占位符、live session 要等打开后才绑定，所以轮询不能省。宿主缺 `contextMenus` / `sessions` / `uiWorkspace` 时只少这个菜单，不影响面板其余部分。
