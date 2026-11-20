@@ -2,6 +2,12 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.41.2 — 整理记忆菜单加图标并移到「在文件夹中显示」下面、分隔线上方
+
+- **加图标**：工作区三点菜单的「整理记忆」此前没有图标。现在在宿主 keyed 槽 `contextMenu.icon` 注册一枚 `dsh-memory.organize` 图标（复用侧栏年轮螺旋，`currentColor` 跟随主题、无新依赖），菜单项的 `icon: { key: 'dsh-memory.organize' }` 指向它。
+- **调位置**：`order` 从 400 改成 **250**。宿主工作区菜单内置顺序是重命名(100) →「在文件夹中显示」(200, open-in-app) → 删除(300，`separatorBefore` 即分隔线)；250 正好落在「在文件夹中显示」下面、删除的分隔线上面。
+- 回归守卫：`client-render.test.ts` 断言 order=250、`icon.key` 与图标槽注册一致。
+
 ## 0.41.1 — 修复 0.41.0 全部 UI 消失：client 的 `exports.inject` 误用包名
 
 - **问题**：0.41.0 为了「整理记忆」菜单，把 client 模块导出的 `inject`（cordis 的**服务名**依赖，决定 `apply()` 何时执行）从 `['slots']` 改成五个条目，其中四个是 npm **包名**（`@deepseek-ai/dsh-client-ui-context-menu` 等）。cordis 里没有任何插件以包名注册服务，所以它一直等不到这几个「服务」，整份 client 的 `apply()` 永不执行——而记忆面板、会话「记忆」视图、工作区「整理记忆」菜单全都在同一个 `apply()` 里注册，于是**三处 UI 一起消失**。Agent 侧记忆工具在服务端，不受影响，所以表现为「工具还在、面板全没了」。

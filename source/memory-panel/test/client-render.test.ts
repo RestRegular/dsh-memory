@@ -2264,7 +2264,12 @@ test('client apply 注册记忆视图、轨迹徽标与详情页签', async () =
   const organize = contextMenusRegistered.find((r) => r.id === 'dsh-memory.organize')
   assert.ok(organize, '注册了工作区整理记忆菜单')
   assert.equal(organize!.target, 'workspace')
-  assert.equal(organize!.order, 400)
+  // 0.41.2：落在「在文件夹中显示」(200) 与「删除」(300, separatorBefore) 之间
+  assert.equal(organize!.order, 250)
+  const organizeAction = (organize!.resolve as (t: unknown) => Array<Record<string, unknown>>)({})[0]
+  assert.deepEqual(organizeAction.icon, { key: 'dsh-memory.organize' }, '整理记忆带图标')
+  assert.ok(injected.includes('contextMenu.icon'), '注册了 keyed 图标槽')
+  assert.equal(spec('contextMenu.icon')?.key, 'dsh-memory.organize', '图标 key 与菜单项 icon.key 一致')
   assert.ok(!injected.includes('conversation.session.header.actions'))
   assert.ok(injected.includes('shell.overlay'))
   const visibility = registered.find((entry) => entry.spec.name === 'conversation.input.right')

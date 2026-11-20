@@ -7604,6 +7604,18 @@ window.__ModuleLoader__.load({
         // 0.41.0：工作区树三点菜单的「整理记忆」。ctx.contextMenus 由
         // @deepseek-ai/dsh-client-ui-context-menu 提供，可能晚于本插件就绪；用 ctx.inject
         // 等它出现。缺服务只是没有这个菜单，绝不让 client apply 失败。
+        // 0.41.2：加图标 + 调整位置。工作区菜单内置顺序：重命名(100) →
+        // 「在文件夹中显示」(200, open-in-app) → 删除(300, separatorBefore)；
+        // 本项 order=250 落在「在文件夹中显示」与「删除」的分隔线之间。
+        // 图标走宿主 keyed 槽 contextMenu.icon，复用侧栏那枚年轮螺旋，无新依赖。
+        function OrganizeMenuIcon() { return NavLineIcon({ size: 14 }) }
+        try {
+          slots.inject('contextMenu.icon', () => slots.register(
+            { name: 'contextMenu.icon', key: 'dsh-memory.organize' }, OrganizeMenuIcon,
+          ))
+        } catch (error) {
+          console.warn('[dsh-memory] 整理记忆菜单图标注册失败:', error?.message)
+        }
         try {
           if (typeof ctx.inject === 'function') {
             ctx.inject(['contextMenus'], (scope) => {
@@ -7613,10 +7625,11 @@ window.__ModuleLoader__.load({
                 scope.effect(() => menus.register({
                   id: 'dsh-memory.organize',
                   target: 'workspace',
-                  order: 400,
+                  order: 250,
                   resolve: (target) => [{
                     id: 'organize',
                     label: '整理记忆',
+                    icon: { key: 'dsh-memory.organize' },
                     failureLabel: '整理记忆会话启动失败',
                     run: async () => {
                       const sessionId = await startOrganizeSession(scope, target)
