@@ -366,6 +366,7 @@ async function mountPanel(
   report = modelReport(),
   tab = 'data',
   records: Array<Record<string, unknown>> = [],
+  changelog: unknown = null,
 ) {
   const globals = globalThis as Record<string, unknown>
   globals.fetch = async (url: string) => ({
@@ -374,7 +375,9 @@ async function mountPanel(
       ? { ok: true, value: report }
       : String(url).includes('/status')
         ? { ok: true, value: state }
-        : { ok: true, value: { records } }),
+        : String(url).includes('/changelog')
+          ? { ok: true, value: changelog }
+          : { ok: true, value: { records } }),
   })
   const { exports } = await loadBundle()
   const MemoryPanel = (exports.__test as { MemoryPanel: (p: Record<string, unknown>) => unknown }).MemoryPanel
@@ -4063,6 +4066,64 @@ test('0.41.0 整理记忆提示词：先出报告、合并用 supersedes 一修�
   assert.ok(text.includes('supersedes') && text.includes('数组') && text.includes('一条修正多条'), '合并用一修多')
   assert.ok(text.includes('memory_forget') && text.includes('高度重合'), '高度重合才删除')
   assert.ok(text.includes('kind=rule') && text.includes('不要碰'), '不碰硬性规则')
+
+  // 0.42.0：传入自定义提示词时用自定义，且工作区名/路径仍附在末尾；留空回退默认
+  const custom = (exports.__test as {
+    organizeMemoryPrompt: (target: unknown, custom?: string) => string
+    DEFAULT_ORGANIZE_PROMPT: string
+  }).organizeMemoryPrompt
+  const t = { workspaceId: 'ws-1', path: 'D:/work/proj', displayTitle: '项目 X' }
+  assert.equal(custom(t, '自己写的口径'), '自己写的口径\n工作区：项目 X（D:/work/proj）', '自定义提示词 + 工作区信息')
+  assert.equal(custom(t, ''), (exports.__test as { DEFAULT_ORGANIZE_PROMPT: string }).DEFAULT_ORGANIZE_PROMPT + '\n工作区：项目 X（D:/work/proj）', '空串回退默认')
+  // 设置里新增了可修改的整理记忆提示词组
+  const groups = (exports.__test as {
+    SETTINGS_GROUPS: Array<{ key: string; fields: Array<{ k: string; type: string }> }>
+  }).SETTINGS_GROUPS
+  const organize = groups.find((g) => g.key === 'organize')
+  assert.ok(organize, '有「整理记忆」设置组')
+  assert.equal(organize!.fields[0]!.type, 'text', '提示词用多行文本字段')
+})
+
+test('0.42.0 更新卡片：展示版本更新/修复/完成事项，默认只展开最新版，可展开历史', async () => {
+  const { hooks } = await loadBundle()
+  hooks.resetAll()
+  const UpdateCard = (await loadBundle()).exports.__test as {
+    UpdateCard: (p: Record<string, unknown>) => unknown
+  }
+  const Component = UpdateCard.UpdateCard
+  const changelog = {
+    version: '9.9.9',
+    releases: [
+      {
+        version: '9.9.9', title: '最新版',
+        items: [
+          { kind: 'added', title: '新增', detail: '新功能' },
+          { kind: 'fixed', title: '修复', detail: '修了一个 bug' },
+          { kind: 'done', title: '完成', detail: '做完了事项' },
+        ],
+      },
+      { version: '9.9.8', title: '旧版', items: [{ kind: 'fixed', title: '修复', detail: '旧 bug' }] },
+    ],
+  }
+  let current = render(hooks.React.createElement(Component, { changelog }), hooks)
+  hooks.setRerender(() => { current = render(hooks.React.createElement(Component, { changelog }), hooks) })
+  let text = textOf(current)
+  assert.ok(text.includes('更新'), '有更新卡片标题')
+  assert.ok(text.includes('9.9.9') && text.includes('最新版'), '默认展开最新版')
+  assert.ok(text.includes('新功能') && text.includes('修了一个 bug') && text.includes('做完了事项'), '更新/修复/完成都展示')
+  assert.ok(text.includes('新增') && text.includes('修复') && text.includes('完成'), '三类有中文标签')
+  assert.ok(!text.includes('旧 bug'), '默认不展开历史版本')
+  assert.ok(text.includes('展开历史版本'), '有展开按钮')
+  const more = collect(current).find((n) => n.tag === 'button' && textOf(n).includes('展开历史版本'))
+  assert.ok(more, '展开按钮存在')
+  ;(more!.props!.onClick as () => void)()
+  text = textOf(current)
+  assert.ok(text.includes('旧 bug') && text.includes('9.9.8'), '展开后显示历史版本')
+  assert.ok(text.includes('收起历史版本'), '可收起')
+  // 空数据不渲染卡片
+  current = render(hooks.React.createElement(Component, { changelog: null }), hooks)
+  assert.equal(textOf(current).trim(), '', '无更新日志时卡片不出现')
+  hooks.resetAll()
 })
 
 test('0.41.0 workspaceCreateTarget：有 workspaceId 直接用，没 id 按 cwd 匹配', async () => {

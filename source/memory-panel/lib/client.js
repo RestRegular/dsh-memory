@@ -101,7 +101,9 @@ window.__ModuleLoader__.load({
       '.memp .chev.open{transform:rotate(90deg)}',
       '.memp .badge{border:1px solid var(--dsw-alias-border-l1);border-radius:5px;padding:0 6px;line-height:1.7;color:var(--dsw-alias-label-secondary);flex:none}',
       '.memp .badge.scope{color:var(--dsw-alias-brand-primary);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-      '.memp .badge.corrected{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary)}',
+      // 0.42.0：「修正自」徽标的最大宽度跟着界面最大宽度走,不再写死 220px 导致窄屏溢出;
+      // 完整 supersedes id 只留给工具调用(Agent),面板不展示。
+      '.memp .badge.corrected{color:var(--dsw-alias-brand-primary);border-color:var(--dsw-alias-brand-primary);max-width:min(220px,var(--dsh-chat-content-width,752px),100%);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.memp .badge.expired{color:#C0563B;border-color:color-mix(in srgb,#C0563B 55%,transparent)}',
       '.memp .tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}',
       '.memp .tag{font-size:11px;line-height:1.7;padding:0 6px;border-radius:999px;border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-2)}',
@@ -139,6 +141,24 @@ window.__ModuleLoader__.load({
       '.memp .maint{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}',
       '.memp .maint-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12.5px}',
       '.memp .maint-row .grow{flex:1;min-width:160px}',
+      // 0.42.0：更新卡片（维护卡片下方，展示各版本更新内容/修复/完成事项）
+      '.memp .updates{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px}',
+      '.memp .updates-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}',
+      '.memp .updates-head b{font-size:12.5px}',
+      '.memp .updates-head .ver{font-family:var(--ds-font-family-code,ui-monospace,monospace);font-size:11px;padding:1px 6px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-brand-primary)}',
+      '.memp .updates-hint{font-size:11px;color:var(--dsw-alias-label-secondary)}',
+      '.memp .release{border-top:1px solid var(--dsw-alias-border-l1);padding-top:8px}',
+      '.memp .release-title{font-size:12px;font-weight:600;line-height:1.5}',
+      '.memp .release-title .rv{color:var(--dsw-alias-brand-primary);font-family:var(--ds-font-family-code,ui-monospace,monospace);margin-right:6px}',
+      '.memp .release-items{margin:6px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px}',
+      '.memp .release-item{display:flex;gap:6px;font-size:11.5px;line-height:1.55;color:var(--dsw-alias-label-secondary)}',
+      '.memp .release-item .kind{flex:none;font-size:10px;padding:0 5px;border-radius:5px;border:1px solid var(--dsw-alias-border-l1);line-height:1.7}',
+      '.memp .release-item .kind.added{color:var(--dsw-alias-state-success-primary,#2a8);border-color:color-mix(in srgb,var(--dsw-alias-state-success-primary,#2a8) 45%,transparent)}',
+      '.memp .release-item .kind.fixed{color:#C0563B;border-color:color-mix(in srgb,#C0563B 45%,transparent)}',
+      '.memp .release-item .kind.done{color:var(--dsw-alias-brand-primary);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,transparent)}',
+      '.memp .release-item .rtext{word-break:break-word}',
+      '.memp .updates-more{margin-top:2px;padding:0;border:none;background:transparent;color:var(--dsw-alias-brand-primary);font-size:11.5px;cursor:pointer;align-self:flex-start}',
+      '.memp .updates-more:hover{text-decoration:underline}',
       '.memp .path{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.memp .danger{color:var(--dsw-alias-label-danger, #e05555);border-color:var(--dsw-alias-label-danger, #e05555)}',
       // 模型与硬件(折叠在向量服务卡片里:默认视图保持干净)
@@ -247,6 +267,9 @@ window.__ModuleLoader__.load({
       '.memp .setfield-control{display:flex;align-items:center;gap:5px;flex:none}',
       '.memp .setfield-state{font-size:10px;color:var(--dsw-alias-label-secondary);min-width:38px;text-align:right}',
       '.memp .setfield input[type=number]{width:82px;padding:4px 7px;background:var(--dsw-alias-bg-layer-1)}',
+      // 0.42.0：多行文本设置(整理记忆提示词)占满整行,textarea 用等宽字体方便读提示词。
+      '.memp .setcard-body .setfield-text{grid-column:1/-1;flex-direction:column;align-items:stretch}',
+      '.memp .setcard-body .setfield-text textarea{width:100%;box-sizing:border-box;min-height:180px;background:var(--dsw-alias-bg-layer-1);font-family:var(--ds-font-family-code,ui-monospace,monospace);font-size:11.5px;line-height:1.55;resize:vertical}',
       '.memp .setcard-body .autorecall{grid-column:1/-1}',
       '.memp .setcard-body .autorecall textarea{min-height:132px;background:var(--dsw-alias-bg-layer-1)}',
       '.memp .setcard.datacard .setcard-head{background:var(--dsw-alias-bg-layer-1)}',
@@ -1278,13 +1301,14 @@ window.__ModuleLoader__.load({
           rec.supersedes
             ? h('span', {
                 className: 'badge corrected',
-                title: `修正版:它覆盖了旧记录 #${rec.supersedes}（旧记录仍可检索，只是排序降权）`,
+                // 0.42.0：完整 supersedes id 只供 Agent 调工具,面板一律只给短前缀。
+                title: '修正版：它覆盖了旧记录（旧记录仍可检索，只是排序降权）',
               }, `修正自 ${rec.supersedes.slice(0, 8)}`)
             : null,
           rec.supersededBy
             ? h('span', {
                 className: 'badge',
-                title: `已被 #${rec.supersededBy} 修正（旧记录仍可检索，只是排序降权）`,
+                title: '已被新版本修正（旧记录仍可检索，只是排序降权）',
               }, '已被修正')
             : null,
           isExpired(rec)
@@ -2830,6 +2854,14 @@ window.__ModuleLoader__.load({
           { k: 'enabled', label: '启用', type: 'bool', hint: '关闭只隐藏侧栏入口，设置页仍然可用。' },
         ],
       },
+      {
+        key: 'organize', title: '整理记忆',
+        desc: '工作区三点菜单「整理记忆」用到的新会话开场提示词；可自由修改整理口径。',
+        hint: '工作区的名称与路径会在发送时自动附在提示词末尾，不用手写。',
+        fields: [
+          { k: 'prompt', label: '开场提示词', type: 'text', rows: 12, placeholder: '请整理当前工作区的记忆……', hint: '输入即保存；留空时恢复内置默认提示词。' },
+        ],
+      },
     ]
 
     /**
@@ -2891,6 +2923,26 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * 多行文本设置字段（0.42.0：整理记忆提示词）。用 textarea 而不是单行 input,
+     * 输入即保存(与数值/开关一致——面板没有"保存设置"按钮)。
+     */
+    function SettingTextField({ field, value, onPatch }) {
+      return h('label', { className: 'setfield setfield-text' },
+        h('span', { className: 'setfield-main' },
+          h('span', { className: 'setfield-label' }, field.label),
+          field.hint ? h('span', { className: 'setfield-hint' }, field.hint) : null,
+        ),
+        h('textarea', {
+          rows: field.rows || 10,
+          spellCheck: false,
+          value: value === undefined || value === null ? '' : String(value),
+          placeholder: field.placeholder || '',
+          onChange: (e) => onPatch(e.target.value),
+        }),
+      )
+    }
+
     /** 一张设置卡:标题 + 描述 + 显式的「启用」开关 + 字段网格。 */
     function SettingsCard({ group, value, rulesCount, patch, tags }) {
       const enabledField = group.fields.find((field) => field.k === 'enabled' && field.type === 'bool')
@@ -2922,12 +2974,19 @@ window.__ModuleLoader__.load({
         ),
         fields.length > 0 || group.key === 'autoRecall'
           ? h('div', { className: 'setcard-body' },
-              fields.map((field) => h(SettingField, {
-                key: field.k,
-                field,
-                value: value[field.k],
-                onPatch: (next) => patch(group.key, field.k, next),
-              })),
+              fields.map((field) => field.type === 'text'
+                ? h(SettingTextField, {
+                    key: field.k,
+                    field,
+                    value: value[field.k],
+                    onPatch: (next) => patch(group.key, field.k, next),
+                  })
+                : h(SettingField, {
+                    key: field.k,
+                    field,
+                    value: value[field.k],
+                    onPatch: (next) => patch(group.key, field.k, next),
+                  })),
               group.key === 'autoRecall'
                 ? h(AutoRecallTagsEditor, {
                     tags,
@@ -4703,9 +4762,53 @@ window.__ModuleLoader__.load({
     /** 待嵌入自动刷新:最多 300 次 × 1.5s(后端挂着时不无限轮询)。 */
     const PENDING_POLL_LIMIT = 300
 
+    /**
+     * 0.42.0：更新卡片。数据源是随包 CHANGELOG.md（服务端 /changelog 解析），
+     * 展示各版本的「更新内容 / 修复 / 完成事项」。默认展开最新版，历史按需展开，
+     * 让用户一眼看到最新版包含什么，又不必淹没在几十个历史条目里。
+     */
+    const RELEASE_KIND_LABEL = { added: '新增', fixed: '修复', done: '完成' }
+    function UpdateCard({ changelog }) {
+      const [showAll, setShowAll] = React.useState(false)
+      if (!changelog || !Array.isArray(changelog.releases) || changelog.releases.length === 0) return null
+      const releases = changelog.releases
+      const shown = showAll ? releases : releases.slice(0, 1)
+      return h('div', { className: 'updates' },
+        h('div', { className: 'updates-head' },
+          h('b', null, '更新'),
+          h('span', { className: 'ver' }, `当前 ${changelog.version || releases[0].version}`),
+          h('span', { className: 'updates-hint' }, '各版本的更新内容、修复与完成事项'),
+        ),
+        ...shown.map((release) => h('div', { className: 'release', key: release.version },
+          h('div', { className: 'release-title' },
+            h('span', { className: 'rv' }, release.version),
+            release.title,
+          ),
+          release.items && release.items.length > 0
+            ? h('ul', { className: 'release-items' },
+                ...release.items.map((item, i) => h('li', { className: 'release-item', key: i },
+                  h('span', { className: `kind ${item.kind}` }, RELEASE_KIND_LABEL[item.kind] || '更新'),
+                  h('span', { className: 'rtext' },
+                    item.detail ? `${item.title}：${item.detail}` : item.title,
+                  ),
+                )),
+              )
+            : null,
+        )),
+        releases.length > 1
+          ? h('button', {
+              className: 'updates-more',
+              onClick: () => setShowAll((v) => !v),
+            }, showAll ? '收起历史版本' : `展开历史版本（还有 ${releases.length - 1} 个）`)
+          : null,
+      )
+    }
+
     function MemoryPanel({ openSession, sessionInfo, audience = 'panel', lockSession } = {}) {
       const [records, setRecords] = React.useState([])
       const [scopes, setScopes] = React.useState([])
+      // 0.42.0：更新卡片的数据（随包 CHANGELOG 解析结果），只在打开面板时拉一次。
+      const [changelog, setChangelog] = React.useState(null)
       const [embedServer, setEmbedServer] = React.useState(null)
       const [embedBusy, setEmbedBusy] = React.useState(false)
       const [embedNotice, setEmbedNotice] = React.useState('')
@@ -4802,7 +4905,12 @@ window.__ModuleLoader__.load({
         }
         setLoading(false)
       }
-      React.useEffect(() => { load('', '') }, [])
+      React.useEffect(() => {
+        load('', '')
+        loadOrganizePrompt()
+        // 更新日志不会变：打开面板拉一次即可，失败就静默隐藏更新卡片。
+        api('changelog').then(setChangelog).catch(() => setChangelog(null))
+      }, [])
 
       /** 审计里的记忆 ID → 切到「记录」页并展开对应记录。 */
       const openRecord = (id, scope, record = null) => {
@@ -5294,7 +5402,7 @@ window.__ModuleLoader__.load({
         ' · ',
         h('a', { href: 'https://github.com/RestRegular/dsh-memory/issues/new', target: '_blank', rel: 'noreferrer' }, '💬 反馈建议 / 提 issue'),
       )
-      const overviewBody = h('div', { className: 'memp-body' }, serverCard, maintenanceCard, footer)
+      const overviewBody = h('div', { className: 'memp-body' }, serverCard, maintenanceCard, h(UpdateCard, { changelog }), footer)
 
       // ---- 「记录」页的二级标签页:记忆 / 作用域(0.28.0) ----
       // 作用域子标签页回答的是「有哪些域、各自干什么、多少条」——用途与
@@ -6169,19 +6277,45 @@ window.__ModuleLoader__.load({
      * 旧记录完整 id（一修多），高度重合的才物理删除。提示词明确"报告前不要改数据"，
      * 对应 task.md 里"先出报告、人工确认"的决策。
      */
-    function organizeMemoryPrompt(target) {
+    /**
+     * 0.41.0 内置的默认提示词（服务端 normalizeInjectSettings 里的默认值同口径）。
+     * 面板「设置 → 整理记忆」留空时回退到这一段。
+     */
+    const DEFAULT_ORGANIZE_PROMPT = [
+      '请整理当前工作区的记忆。这是一次性整理会话，严格按下面四步执行：',
+      '1. 扫描：用 memory_scopes({action:"list"}) 看有哪些作用域，再用 memory_list 和 memory_search 找出与这个工作区相关的记忆。排除 kind=rule（硬性规则不参与整理）。',
+      '2. 只分析、出整体报告（这一步不要写任何记忆）：告诉我一共多少条、大致分成哪些主题、每组里哪些是过时结论、哪些是同主题重复、哪些高度重合可以删除。用中文写一份总体情况说明，不要逐条列出来让我逐条确认。',
+      '3. 等我回复确认后再动手（我没确认前不要修改任何记忆）。确认后：同主题的多条记忆合并成一条更完整的，用 memory_save 的 supersedes 传数组一次指向所有旧记忆的完整 id（一条修正多条），旧版本默认退出检索、历史仍可用 memory_get 查到；scope 必须显式传旧记录所在作用域，本会话无写权限时先用 memory_scopes({action:"request"}) 申请。',
+      '4. 高度重合、内容几乎一样的重复记忆才用 memory_forget 删除；拿不准的一律用 supersedes 合并而不是删。删除前在报告里说清是哪几条，我没有单独反对才做。全程不要碰 kind=rule。',
+    ].join('\n')
+
+    /**
+     * 0.42.0：提示词可在「设置 → 整理记忆」里改。customPrompt 为 undefined 时读内存里
+     * 缓存的设置（面板打开时拉过一次），没有则用内置默认值。工作区名/路径始终动态附在末尾。
+     */
+    function organizeMemoryPrompt(target, customPrompt) {
       const workspace = typeof target === 'string' ? target : (target?.path ?? '')
       const label = typeof target === 'string' ? '' : (target?.displayTitle ?? '')
       const where = label !== '' && workspace !== ''
         ? `\n工作区：${label}（${workspace}）`
         : workspace !== '' ? `\n工作区路径：${workspace}` : ''
-      return [
-        '请整理当前工作区的记忆。这是一次性整理会话，严格按下面四步执行：' + where,
-        '1. 扫描：用 memory_scopes({action:"list"}) 看有哪些作用域，再用 memory_list 和 memory_search 找出与这个工作区相关的记忆。排除 kind=rule（硬性规则不参与整理）。',
-        '2. 只分析、出整体报告（这一步不要写任何记忆）：告诉我一共多少条、大致分成哪些主题、每组里哪些是过时结论、哪些是同主题重复、哪些高度重合可以删除。用中文写一份总体情况说明，不要逐条列出来让我逐条确认。',
-        '3. 等我回复确认后再动手（我没确认前不要修改任何记忆）。确认后：同主题的多条记忆合并成一条更完整的，用 memory_save 的 supersedes 传数组一次指向所有旧记忆的完整 id（一条修正多条），旧版本默认退出检索、历史仍可用 memory_get 查到；scope 必须显式传旧记录所在作用域，本会话无写权限时先用 memory_scopes({action:"request"}) 申请。',
-        '4. 高度重合、内容几乎一样的重复记忆才用 memory_forget 删除；拿不准的一律用 supersedes 合并而不是删。删除前在报告里说清是哪几条，我没有单独反对才做。全程不要碰 kind=rule。',
-      ].join('\n')
+      const configured = typeof customPrompt === 'string' && customPrompt.trim() !== ''
+        ? customPrompt
+        : (typeof organizePromptCache === 'string' && organizePromptCache.trim() !== ''
+            ? organizePromptCache : DEFAULT_ORGANIZE_PROMPT)
+      return configured + where
+    }
+
+    /** 面板生命周期内缓存的「整理记忆」提示词设置（打开面板时异步拉取一次）。 */
+    let organizePromptCache = ''
+
+    /** 从服务端读一次「整理记忆」提示词设置；失败静默回退到内置默认。 */
+    async function loadOrganizePrompt() {
+      try {
+        const settings = await api('settings')
+        const prompt = settings && settings.organize && settings.organize.prompt
+        organizePromptCache = typeof prompt === 'string' ? prompt : ''
+      } catch { /* 设置读不到就用默认值 */ }
     }
 
     /** 把工作区菜单目标解析成 sessions.create 的 {workspaceId} 或 {cwd}。 */
@@ -6243,6 +6377,9 @@ window.__ModuleLoader__.load({
       if (typeof uiWorkspace.openSession === 'function') uiWorkspace.openSession(sessionId)
       const live = await waitForSessionPrompt(ctx, sessionId)
       if (!live) return sessionId // 会话建好了但发不出去，仍把 id 交给调用方提示
+      // 0.42.0：发出前读一次最新设置，保证「设置 → 整理记忆」改过的提示词立即生效
+      // （菜单运行在 apply 里，不经过 MemoryPanel 的 load）。
+      await loadOrganizePrompt()
       const text = organizeMemoryPrompt(target)
       let echo
       try {
@@ -7832,6 +7969,10 @@ window.__ModuleLoader__.load({
       organizeMemoryPrompt: organizeMemoryPrompt,
       workspaceCreateTarget: workspaceCreateTarget,
       startOrganizeSession: startOrganizeSession,
+      // 0.42.0：更新卡片 + 可配置提示词（测试直接驱动）
+      UpdateCard: UpdateCard,
+      DEFAULT_ORGANIZE_PROMPT: DEFAULT_ORGANIZE_PROMPT,
+      SETTINGS_GROUPS: SETTINGS_GROUPS,
     }
     return module.exports
   },

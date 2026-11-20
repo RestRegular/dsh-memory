@@ -311,7 +311,8 @@ test('面板 /status:宿主提供 sessionTitle/sessions 时用会话标题', asy
     const res = fakeRes()
     await handleRequest(ctx, ROUTE, get(`${ROUTE}/status`), res)
     const labels = Object.fromEntries(res.out.body.value.scopes.map((s) => [s.scope, s.label]))
-    assert.equal(labels['session:sess-abc12345'], 'session:重构记忆作用域(sess-abc12345)', '标题也带 session: 前缀')
+    // 0.42.0：会话名称放括号内，短 id 在前当定位符
+    assert.equal(labels['session:sess-abc12345'], 'session:sess-abc12345(重构记忆作用域)', '标题也带 session: 前缀')
   } finally {
     svc.flushSync()
     rmSync(dir, { recursive: true, force: true })
@@ -377,7 +378,7 @@ test('面板 /status:超过 50 个会话 scope 时列表仍然完整,标题只�
     const labels = Object.fromEntries(scopes.map((s) => [s.scope, s.label]))
     // 前 5 个(最近活跃)拿到标题
     for (let i = 0; i < TITLED; i++) {
-      assert.equal(labels[scopesOf(i)], `session:标题-${String(i).padStart(2, '0')}(` + shortOf(i) + ')')
+      assert.equal(labels[scopesOf(i)], 'session:' + shortOf(i) + '(标题-' + String(i).padStart(2, '0') + ')')
     }
     // 其余 55 个一律回退标签(一个都不缺)
     for (let i = TITLED; i < TOTAL; i++) {

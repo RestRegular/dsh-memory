@@ -29,7 +29,65 @@
 // 会把它落成产物里的 `../provider/scope.js`(`lib/panel.js` → `lib/provider/scope.js`),
 // 在源码树里同一路径直接命中 source/memory-local/src —— 测试与真实加载都能解析。
 import { normalizeScopeInput, resolveCurrentScopes, scopeDisplayName, sessionShortId } from './provider/scope.js'
+import { readFileSync } from 'node:fs'
 
+
+/**
+ * 「更新卡片」的版本数据源:读随包发布的 CHANGELOG.md(构建脚本把它放进包根)。
+ * 路径有两套:源码树里本文件在 source/memory-panel/lib/,CHANGELOG 在仓库根(../../);
+ * 产物里本文件在 lib/panel.js,CHANGELOG 在包根(../)。两处都试,谁存在用谁。
+ */
+const CHANGELOG_URLS = [
+  new URL('../CHANGELOG.md', import.meta.url),       // 产物 lib/panel.js → 包根
+  new URL('../../../CHANGELOG.md', import.meta.url), // 源码 source/memory-panel/lib/ → 仓库根
+  new URL('../../CHANGELOG.md', import.meta.url),    // 其它布局兜底
+]
+
+/**
+ * 把 CHANGELOG.md 解析成面板要的 `{ version, releases }`。
+ * 规整格式:`## <版本> — <标题>` 起一段,段内 `- **要点**：说明` 为条目(可带子项)。
+ * 分类按关键词:**修复** → fixed,其余(新增/加/feat) → added,完成事项 → done。
+ * 解析失败一律降级为空,面板绝不因为读不到更新日志而报错。
+ */
+function parseChangelog(text) {
+  const releases = []
+  let current = null
+  for (const line of String(text).split(/\r?\n/)) {
+    const heading = /^##\s+(\d+\.\d+\.\d+(?:[-+][\w.]+)?)\s*[—–-]\s*(.+?)\s*$/.exec(line)
+    if (heading) {
+      current = { version: heading[1], title: heading[2], items: [] }
+      releases.push(current)
+      continue
+    }
+    if (!current) continue
+    const item = /^\s*-\s+\*\*(.+?)\*\*\s*(?:[：:]|[—–-]\s*)?\s*(.*)$/.exec(line)
+    if (!item) continue
+    const title = item[1].trim()
+    const detail = item[2].trim()
+    const both = `${title} ${detail}`
+    const kind = /修复|修掉|fix|hotfix/i.test(both)
+      ? 'fixed'
+      : /完成|done|改进|优化|调整|移除|去掉/i.test(both)
+        ? 'done'
+        : 'added'
+    current.items.push({ kind, title, detail })
+  }
+  return { version: releases[0]?.version ?? '', releases }
+}
+
+let changelogCache
+function readChangelog() {
+  if (changelogCache !== undefined) return changelogCache
+  let result = { version: '', releases: [] }
+  for (const url of CHANGELOG_URLS) {
+    try {
+      result = parseChangelog(readFileSync(url, 'utf8'))
+      break
+    } catch { /* 换下一个候选路径 */ }
+  }
+  changelogCache = result
+  return result
+}
 
 function writeJson(res, body, status = 200) {
   try {
@@ -165,7 +223,9 @@ function fallbackScopeLabel(scope) {
  * (宿主 `sessionTitle` 服务的 `get(session)` → `{ title }`,见 @deepseek-ai/dsh-session-title)。
  * 所有宿主服务访问都在 try/catch 里:面板绝不能因为拿不到标题而失败。
  *
- * 带标题时形如 `session:修层级(1a2b3c4d)` —— 类型前缀仍在最前面,名字部分换成标题。
+ * 带标题时形如 `session:1a2b3c4d(修层级)` —— 类型前缀 + 短 id 在前,会话名称放括号里。
+ * 用户口径(0.42.0):会话名称要显示在括号内,而不是让短 id 当名字。短 id 仍保留在最前面
+ * (可复制、能区分同名会话),只是退居定位符而不是展示主体。
  */
 function scopeLabel(ctx, scope) {
   if (!scope.startsWith('session:')) return scopeDisplayName(scope)
@@ -175,7 +235,7 @@ function scopeLabel(ctx, scope) {
     const session = ctx?.get?.('sessions')?.get?.(id)
     if (session !== undefined) {
       const title = ctx.get('sessionTitle')?.get?.(session)?.title
-      if (typeof title === 'string' && title.length > 0) return scopeDisplayName(scope, `${title}(${short})`)
+      if (typeof title === 'string' && title.length > 0) return scopeDisplayName(scope, `${short}(${title})`)
     }
   } catch { /* 标题是尽力而为 */ }
   return scopeDisplayName(scope)
@@ -966,6 +1026,12 @@ async function handle(ctx, routePath, req, res) {
       let rules = null
       try { rules = typeof memory.ruleStats === 'function' ? memory.ruleStats() : null } catch { rules = null }
       writeJson(res, { ok: true, value: { scopes, embedServer, rules } })
+      return
+    }
+    // 0.42.0：更新卡片的数据源。CHANGELOG 随版本发布、进程内不会变，读一次缓存住；
+    // 读不到(旧包没带/权限)就给空,releases 为空时客户端隐藏卡片,不影响面板其余部分。
+    if (method === 'GET' && path === '/changelog') {
+      writeJson(res, { ok: true, value: readChangelog() })
       return
     }
     // 归档 / 屏蔽的列表与解除（0.32.0）。面板「记录」页默认把这两类折叠起来，

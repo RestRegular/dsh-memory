@@ -100,6 +100,11 @@ export const DEFAULT_AUTO_RECALL_TAGS           = [
                   
  
 
+/** 「整理记忆」工作区菜单打开的新会话开场提示词（面板「设置」页可改）。 */
+                                   
+                
+ 
+
                                  
                         
                         
@@ -111,9 +116,19 @@ export const DEFAULT_AUTO_RECALL_TAGS           = [
                                 
                           
                           
+                            
  
 
 export const DEFAULT_STATE_TTL_MS = 7 * 86_400_000
+
+/** 「整理记忆」开场提示词的默认值（面板可改；工作区路径/名称在发出时动态附上）。 */
+export const DEFAULT_ORGANIZE_PROMPT = [
+  '请整理当前工作区的记忆。这是一次性整理会话，严格按下面四步执行：',
+  '1. 扫描：用 memory_scopes({action:"list"}) 看有哪些作用域，再用 memory_list 和 memory_search 找出与这个工作区相关的记忆。排除 kind=rule（硬性规则不参与整理）。',
+  '2. 只分析、出整体报告（这一步不要写任何记忆）：告诉我一共多少条、大致分成哪些主题、每组里哪些是过时结论、哪些是同主题重复、哪些高度重合可以删除。用中文写一份总体情况说明，不要逐条列出来让我逐条确认。',
+  '3. 等我回复确认后再动手（我没确认前不要修改任何记忆）。确认后：同主题的多条记忆合并成一条更完整的，用 memory_save 的 supersedes 传数组一次指向所有旧记忆的完整 id（一条修正多条），旧版本默认退出检索、历史仍可用 memory_get 查到；scope 必须显式传旧记录所在作用域，本会话无写权限时先用 memory_scopes({action:"request"}) 申请。',
+  '4. 高度重合、内容几乎一样的重复记忆才用 memory_forget 删除；拿不准的一律用 supersedes 合并而不是删。删除前在报告里说清是哪几条，我没有单独反对才做。全程不要碰 kind=rule。',
+].join('\n')
 
 export const defaultInjectSettings                 = {
   recall: { enabled: true, topK: 5, tokenBudget: 500 },
@@ -132,6 +147,7 @@ export const defaultInjectSettings                 = {
   },
   turnEnd: { enabled: false },
   sidebar: { enabled: false },
+  organize: { prompt: DEFAULT_ORGANIZE_PROMPT },
 }
 
 const clampInt = (value         , min        , max        , fallback        )         => {
@@ -173,6 +189,7 @@ export function normalizeInjectSettings(raw         , base                 = def
   const autoRecall = section('autoRecall')
   const turnEnd = section('turnEnd')
   const sidebar = section('sidebar')
+  const organize = section('organize')
   // 兼容方案里的 `inject.stateTtlMs` 写法;新配置统一放到 state.ttlMs。
   const legacyStateTtl = (r                            ).stateTtlMs
   const stateTtlInput = state.ttlMs ?? legacyStateTtl
@@ -229,6 +246,11 @@ export function normalizeInjectSettings(raw         , base                 = def
     },
     turnEnd: { enabled: bool(turnEnd.enabled, base.turnEnd.enabled) },
     sidebar: { enabled: bool(sidebar.enabled, base.sidebar.enabled) },
+    organize: {
+      prompt: typeof organize.prompt === 'string' && organize.prompt.trim() !== ''
+        ? organize.prompt
+        : base.organize.prompt,
+    },
   }
 }
 

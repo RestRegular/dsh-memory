@@ -40,6 +40,9 @@ test('面板 /settings:GET 返回默认设置', async () => {
     assert.equal(res.out.body.ok, true)
     assert.equal(res.out.body.value.recall.enabled, true)
     assert.equal(res.out.body.value.turnEnd.enabled, false)
+    // 0.42.0：整理记忆提示词是可改设置，默认非空
+    assert.equal(typeof res.out.body.value.organize.prompt, 'string')
+    assert.ok(res.out.body.value.organize.prompt.includes('整理当前工作区的记忆'))
     svc.flushSync()
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -249,5 +252,31 @@ test('面板 /audit v2:查询过滤、分页游标、stats 与 store 解耦', as
   assert.equal(exported.out.status, 200)
   assert.equal(typeof exported.out.body, 'string')
   assert.ok((exported.out.body as string).includes('"id":"s1:2"'))
+})
+
+test('面板 /changelog:解析随包 CHANGELOG，返回版本与更新/修复/完成条目', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-changelog-'))
+  const svc = new LocalMemoryService({ storeDir: dir, scopes: { global: true, project: true } })
+  try {
+    const res = fakeRes()
+    await handleRequest(ctxWith(svc), ROUTE, get(`${ROUTE}/changelog`), res)
+    assert.equal(res.out.status, 200)
+    assert.equal(res.out.body.ok, true)
+    const value = res.out.body.value
+    assert.equal(typeof value.version, 'string')
+    assert.ok(value.version.length > 0, '给出当前版本号')
+    assert.ok(Array.isArray(value.releases) && value.releases.length > 1, '有多个版本')
+    const latest = value.releases[0]
+    assert.equal(latest.version, value.version, '第一个就是最新版')
+    assert.ok(latest.title.length > 0, '带版本标题')
+    assert.ok(latest.items.length > 0, '带更新条目')
+    for (const item of latest.items) {
+      assert.ok(['added', 'fixed', 'done'].includes(item.kind), '条目有合法分类')
+      assert.ok(item.title.length > 0, '条目有标题')
+    }
+    svc.flushSync()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
