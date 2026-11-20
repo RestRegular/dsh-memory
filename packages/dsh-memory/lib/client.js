@@ -147,6 +147,16 @@ window.__ModuleLoader__.load({
       '.memp .updates-head b{font-size:12.5px}',
       '.memp .updates-head .ver{font-family:var(--ds-font-family-code,ui-monospace,monospace);font-size:11px;padding:1px 6px;border-radius:999px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-brand-primary)}',
       '.memp .updates-hint{font-size:11px;color:var(--dsw-alias-label-secondary)}',
+      // 0.42.1：版本下拉 + 悬停摘要卡片（版本号在左，摘要卡片在右边同行）
+      '.memp .ver-select{position:relative;display:inline-flex;flex-direction:column;align-items:flex-start;align-self:flex-start}',
+      '.memp .ver-select-btn{display:inline-flex;align-items:center;gap:6px;min-width:150px;padding:4px 9px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-brand-primary);font-family:var(--ds-font-family-code,ui-monospace,monospace);font-size:12px;cursor:pointer}',
+      '.memp .ver-select-btn:hover{border-color:var(--dsw-alias-brand-primary)}',
+      '.memp .ver-list{position:absolute;z-index:12;top:100%;left:0;margin-top:4px;min-width:340px;max-width:min(90vw,560px);max-height:300px;overflow:auto;padding:4px;border:1px solid var(--dsw-alias-border-l1);border-radius:9px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 8px 24px rgba(0,0,0,.20)}',
+      '.memp .ver-row{display:flex;align-items:center;gap:10px;padding:5px 8px;border-radius:6px;cursor:pointer;font-size:12px;border:1px solid transparent;white-space:nowrap}',
+      '.memp .ver-row:hover,.memp .ver-row.hovered{border-color:var(--dsw-alias-brand-primary);background:var(--dsw-alias-bg-layer-2)}',
+      '.memp .ver-row.on .ver-row-num{font-weight:600;color:var(--dsw-alias-brand-primary)}',
+      '.memp .ver-row-num{flex:none;font-family:var(--ds-font-family-code,ui-monospace,monospace);color:var(--dsw-alias-label-primary)}',
+      '.memp .ver-summary{display:inline-block;flex:1;min-width:0;max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.6}',
       '.memp .release{border-top:1px solid var(--dsw-alias-border-l1);padding-top:8px}',
       '.memp .release-title{font-size:12px;font-weight:600;line-height:1.5}',
       '.memp .release-title .rv{color:var(--dsw-alias-brand-primary);font-family:var(--ds-font-family-code,ui-monospace,monospace);margin-right:6px}',
@@ -157,8 +167,6 @@ window.__ModuleLoader__.load({
       '.memp .release-item .kind.fixed{color:#C0563B;border-color:color-mix(in srgb,#C0563B 45%,transparent)}',
       '.memp .release-item .kind.done{color:var(--dsw-alias-brand-primary);border-color:color-mix(in srgb,var(--dsw-alias-brand-primary) 45%,transparent)}',
       '.memp .release-item .rtext{word-break:break-word}',
-      '.memp .updates-more{margin-top:2px;padding:0;border:none;background:transparent;color:var(--dsw-alias-brand-primary);font-size:11.5px;cursor:pointer;align-self:flex-start}',
-      '.memp .updates-more:hover{text-decoration:underline}',
       '.memp .path{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.memp .danger{color:var(--dsw-alias-label-danger, #e05555);border-color:var(--dsw-alias-label-danger, #e05555)}',
       // 模型与硬件(折叠在向量服务卡片里:默认视图保持干净)
@@ -6743,39 +6751,91 @@ window.__ModuleLoader__.load({
      * 让用户一眼看到最新版包含什么，又不必淹没在几十个历史条目里。
      */
     const RELEASE_KIND_LABEL = { added: '新增', fixed: '修复', done: '完成' }
+
+    /** 一个版本的一行摘要：取第一条要点正文，多条时补「等 N 项」，给下拉悬停卡片用。 */
+    function releaseSummaryLine(release) {
+      const items = release && Array.isArray(release.items) ? release.items : []
+      if (items.length === 0) return (release && release.title) || '（无更新条目）'
+      const first = items[0]
+      const text = first.detail ? `${first.title}：${first.detail}` : first.title
+      return items.length > 1 ? `${text} 等 ${items.length} 项` : text
+    }
+
     function UpdateCard({ changelog }) {
-      const [showAll, setShowAll] = React.useState(false)
-      if (!changelog || !Array.isArray(changelog.releases) || changelog.releases.length === 0) return null
-      const releases = changelog.releases
-      const shown = showAll ? releases : releases.slice(0, 1)
+      const releases = changelog && Array.isArray(changelog.releases) ? changelog.releases : []
+      const current = (changelog && changelog.version) || (releases[0] && releases[0].version) || ''
+      const [selected, setSelected] = React.useState(current)
+      const [open, setOpen] = React.useState(false)
+      const [hover, setHover] = React.useState('')
+
+      // 点列表外面 / Esc 收起下拉（与通用 Dropdown 同一口径）。
+      React.useEffect(() => {
+        if (!open) return undefined
+        const doc = typeof document !== 'undefined' ? document : undefined
+        if (doc === undefined || typeof doc.addEventListener !== 'function') return undefined
+        const inside = (target) => Boolean(target && typeof target.closest === 'function' && target.closest('.ver-select'))
+        const onDown = (event) => { if (!inside(event && event.target)) setOpen(false) }
+        const onKey = (event) => { if (event && event.key === 'Escape') setOpen(false) }
+        doc.addEventListener('click', onDown)
+        doc.addEventListener('keydown', onKey)
+        return () => {
+          doc.removeEventListener('click', onDown)
+          doc.removeEventListener('keydown', onKey)
+        }
+      }, [open])
+
+      if (releases.length === 0) return null
+      const active = releases.find((r) => r.version === selected) || releases[0]
       return h('div', { className: 'updates' },
         h('div', { className: 'updates-head' },
           h('b', null, '更新'),
-          h('span', { className: 'ver' }, `当前 ${changelog.version || releases[0].version}`),
-          h('span', { className: 'updates-hint' }, '各版本的更新内容、修复与完成事项'),
+          h('span', { className: 'ver' }, `当前 ${current}`),
+          h('span', { className: 'updates-hint' }, '选择版本查看更新内容'),
         ),
-        ...shown.map((release) => h('div', { className: 'release', key: release.version },
-          h('div', { className: 'release-title' },
-            h('span', { className: 'rv' }, release.version),
-            release.title,
+        h('div', { className: 'ver-select' },
+          h('button', {
+            className: 'ver-select-btn',
+            'aria-haspopup': 'listbox',
+            'aria-expanded': open,
+            onClick: () => setOpen(!open),
+          },
+            h('span', { className: 'ver-select-name' }, active.version),
+            h('span', { className: 'caret' }, '▾'),
           ),
-          release.items && release.items.length > 0
-            ? h('ul', { className: 'release-items' },
-                ...release.items.map((item, i) => h('li', { className: 'release-item', key: i },
-                  h('span', { className: `kind ${item.kind}` }, RELEASE_KIND_LABEL[item.kind] || '更新'),
-                  h('span', { className: 'rtext' },
-                    item.detail ? `${item.title}：${item.detail}` : item.title,
-                  ),
+          open
+            ? h('div', { className: 'ver-list', role: 'listbox' },
+                ...releases.map((release) => h('div', {
+                  key: release.version,
+                  role: 'option',
+                  'aria-selected': release.version === active.version,
+                  className: `ver-row${release.version === active.version ? ' on' : ''}${release.version === hover ? ' hovered' : ''}`,
+                  onMouseEnter: () => setHover(release.version),
+                  onMouseLeave: () => setHover(''),
+                  onClick: () => { setSelected(release.version); setOpen(false); setHover('') },
+                },
+                  h('span', { className: 'ver-row-num' }, release.version),
+                  // 悬停版本号时，右边同行用一张卡片显示该版本的一行更新摘要。
+                  release.version === hover
+                    ? h('span', { className: 'ver-summary', title: release.title }, releaseSummaryLine(release))
+                    : null,
                 )),
               )
             : null,
-        )),
-        releases.length > 1
-          ? h('button', {
-              className: 'updates-more',
-              onClick: () => setShowAll((v) => !v),
-            }, showAll ? '收起历史版本' : `展开历史版本（还有 ${releases.length - 1} 个）`)
-          : null,
+        ),
+        h('div', { className: 'release', key: active.version },
+          h('div', { className: 'release-title' },
+            h('span', { className: 'rv' }, active.version),
+            active.title,
+          ),
+          active.items && active.items.length > 0
+            ? h('ul', { className: 'release-items' },
+                ...active.items.map((item, i) => h('li', { className: 'release-item', key: i },
+                  h('span', { className: `kind ${item.kind}` }, RELEASE_KIND_LABEL[item.kind] || '更新'),
+                  h('span', { className: 'rtext' }, item.detail ? `${item.title}：${item.detail}` : item.title),
+                )),
+              )
+            : null,
+        ),
       )
     }
 
@@ -9946,6 +10006,7 @@ window.__ModuleLoader__.load({
       startOrganizeSession: startOrganizeSession,
       // 0.42.0：更新卡片 + 可配置提示词（测试直接驱动）
       UpdateCard: UpdateCard,
+      releaseSummaryLine: releaseSummaryLine,
       DEFAULT_ORGANIZE_PROMPT: DEFAULT_ORGANIZE_PROMPT,
       SETTINGS_GROUPS: SETTINGS_GROUPS,
     }

@@ -4084,13 +4084,14 @@ test('0.41.0 整理记忆提示词：先出报告、合并用 supersedes 一修�
   assert.equal(organize!.fields[0]!.type, 'text', '提示词用多行文本字段')
 })
 
-test('0.42.0 更新卡片：展示版本更新/修复/完成事项，默认只展开最新版，可展开历史', async () => {
+test('0.42.1 更新卡片：版本下拉切换内容，悬停版本号右侧同行显示一行更新摘要', async () => {
   const { hooks } = await loadBundle()
   hooks.resetAll()
-  const UpdateCard = (await loadBundle()).exports.__test as {
+  const api = (await loadBundle()).exports.__test as {
     UpdateCard: (p: Record<string, unknown>) => unknown
+    releaseSummaryLine: (r: unknown) => string
   }
-  const Component = UpdateCard.UpdateCard
+  const Component = api.UpdateCard
   const changelog = {
     version: '9.9.9',
     releases: [
@@ -4108,18 +4109,40 @@ test('0.42.0 更新卡片：展示版本更新/修复/完成事项，默认只�
   let current = render(hooks.React.createElement(Component, { changelog }), hooks)
   hooks.setRerender(() => { current = render(hooks.React.createElement(Component, { changelog }), hooks) })
   let text = textOf(current)
-  assert.ok(text.includes('更新'), '有更新卡片标题')
-  assert.ok(text.includes('9.9.9') && text.includes('最新版'), '默认展开最新版')
-  assert.ok(text.includes('新功能') && text.includes('修了一个 bug') && text.includes('做完了事项'), '更新/修复/完成都展示')
-  assert.ok(text.includes('新增') && text.includes('修复') && text.includes('完成'), '三类有中文标签')
-  assert.ok(!text.includes('旧 bug'), '默认不展开历史版本')
-  assert.ok(text.includes('展开历史版本'), '有展开按钮')
-  const more = collect(current).find((n) => n.tag === 'button' && textOf(n).includes('展开历史版本'))
-  assert.ok(more, '展开按钮存在')
-  ;(more!.props!.onClick as () => void)()
+  assert.ok(text.includes('更新') && text.includes('当前 9.9.9'), '有标题与当前版本')
+  assert.ok(text.includes('选择版本查看更新内容'), '提示用下拉选版本')
+  assert.ok(text.includes('9.9.9') && text.includes('最新版'), '默认展示最新版内容')
+  assert.ok(text.includes('新功能') && text.includes('修了一个 bug') && text.includes('做完了事项'), '展示更新/修复/完成')
+  assert.ok(!text.includes('旧 bug'), '默认不展示旧版内容')
+  assert.ok(!text.includes('展开历史版本'), '不再用展开按钮')
+
+  // 打开版本下拉
+  const selectBtn = collect(current).find((n) => n.tag === 'button' && textOf(n).includes('9.9.9'))
+  assert.ok(selectBtn, '有版本下拉按钮')
+  ;(selectBtn!.props!.onClick as () => void)()
   text = textOf(current)
-  assert.ok(text.includes('旧 bug') && text.includes('9.9.8'), '展开后显示历史版本')
-  assert.ok(text.includes('收起历史版本'), '可收起')
+  assert.ok(text.includes('9.9.8'), '下拉列出历史版本')
+  // 悬停 9.9.8 → 右边同行出现一行摘要卡片
+  const row98 = collect(current).find(
+    (n) => String(n.props?.className ?? '').includes('ver-row') && textOf(n).includes('9.9.8'),
+  )
+  assert.ok(row98, '下拉里有 9.9.8 行')
+  ;(row98!.props!.onMouseEnter as () => void)()
+  text = textOf(current)
+  assert.ok(text.includes('修复：旧 bug') || text.includes('旧 bug'), '悬停显示该版本的一行更新摘要')
+  const summary = collect(current).find((n) => String(n.props?.className ?? '').includes('ver-summary'))
+  assert.ok(summary, '摘要卡片节点存在（与版本号同行）')
+  // 点选 9.9.8 → 下方内容切到旧版
+  ;(row98!.props!.onClick as () => void)()
+  text = textOf(current)
+  assert.ok(text.includes('旧版') && text.includes('旧 bug'), '切换后展示所选版本内容')
+  assert.ok(!text.includes('新功能'), '不再展示旧版以外的内容')
+
+  // 摘要行纯函数：多条时补「等 N 项」
+  assert.equal(api.releaseSummaryLine(changelog.releases[0]), '新增：新功能 等 3 项')
+  assert.equal(api.releaseSummaryLine(changelog.releases[1]), '修复：旧 bug')
+  assert.equal(api.releaseSummaryLine({ version: 'x', title: '空版', items: [] }), '空版')
+
   // 空数据不渲染卡片
   current = render(hooks.React.createElement(Component, { changelog: null }), hooks)
   assert.equal(textOf(current).trim(), '', '无更新日志时卡片不出现')
