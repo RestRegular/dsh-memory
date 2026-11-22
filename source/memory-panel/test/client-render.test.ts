@@ -1526,6 +1526,33 @@ test('记录页「是否被修正」筛选:默认隐藏旧版本,可切到全部
   hooks.resetAll()
 })
 
+test('记录页筛选统计框:条数 / 各分类 / 被修正隐藏 / 待嵌入（0.44.0）', async () => {
+  const { hooks } = await loadBundle()
+  hooks.resetAll()
+  const old = makeRecord({ id: 'old', kind: 'fact', content: '旧事实正文', supersededBy: 'new' })
+  const f1 = makeRecord({ id: 'f1', kind: 'fact', content: '事实一' })
+  const d1 = makeRecord({ id: 'd1', kind: 'decision', content: '决策一' })
+  const pending = makeRecord({ id: 'p1', kind: 'note', content: '待嵌入一条', embedded: false })
+  const tree = await mountPanel(hooks, {
+    scopes: [{ scope: 'project:C:/demo', records: 4, pendingEmbeds: 1 }],
+    embedServer: { enabled: true, configured: true, reachable: true, mode: 'managed', baseUrl: 'http://127.0.0.1:1' },
+  }, undefined, 'data', [old, f1, d1, pending])
+  const panel = collect(tree()).find((n) => String(n.props?.className ?? '').split(/\s+/).includes('stats-panel'))
+  assert.ok(panel, '统计区是一个圆角矩形框 stats-panel')
+  assert.ok(collect(panel!).some((n) => String(n.props?.className ?? '').split(/\s+/).includes('filtered-stats')), '框内右侧有筛选统计')
+  const text = textOf(panel!)
+  assert.match(text, /当前筛选展示/, '有右半部分标题')
+  assert.match(text, /3\s*条/, '当前展示 3 条（旧记录默认隐藏）')
+  assert.match(text, /1\s*事实/, 'fact 类型 1 条（旧 fact 已被修正隐藏）')
+  assert.match(text, /1\s*决策/, 'decision 类型 1 条')
+  assert.match(text, /1\s*笔记/, 'note 类型 1 条')
+  assert.match(text, /1\s*被修正隐藏/, '被修正隐藏 1 条')
+  assert.match(text, /1\s*待嵌入/, '待嵌入 1 条')
+  // 0 条的类型不应出现在框里
+  assert.doesNotMatch(text, /0\s*规则/, '条数为 0 的类型不显示')
+  hooks.resetAll()
+})
+
 test('服务页底部:Star 与 issue 链接', async () => {
   const { hooks } = await loadBundle()
   hooks.resetAll()

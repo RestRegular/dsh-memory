@@ -58,6 +58,18 @@ window.__ModuleLoader__.load({
       '.memp .stat{min-width:104px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:8px 14px;background:var(--dsw-alias-bg-layer-1)}',
       '.memp .stat b{display:block;font-size:17px;font-weight:600;line-height:1.35}',
       '.memp .stat span{font-size:11px;color:var(--dsw-alias-label-secondary)}',
+      // 0.44.0：统计整体 = 一个圆角矩形框，分左右两部分。左边是既有统计，右边是当前筛选展示统计。
+      '.memp .stats-panel{display:flex;gap:14px;align-items:stretch;flex-wrap:wrap;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:8px 12px;background:var(--dsw-alias-bg-layer-1)}',
+      // 外层已有圆角框，里面的统计卡不再各自画边框/底色，避免套娃。
+      '.memp .stats-panel .stat{border:none;background:none;padding:0 12px;border-right:1px solid var(--dsw-alias-border-l1);min-width:88px}',
+      '.memp .stats-panel .stat:last-child{border-right:none}',
+      // 右半部分：当前筛选的展示统计（条数 / 各分类 / 被修正隐藏 / 待嵌入）。
+      '.memp .filtered-stats{border-left:1px solid var(--dsw-alias-border-l1);padding-left:14px;display:flex;flex-direction:column;gap:5px;min-width:170px}',
+      '.memp .filtered-stats .fs-head{font-size:11px;color:var(--dsw-alias-label-secondary);font-weight:600}',
+      '.memp .filtered-stats .fs-row{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:12px}',
+      '.memp .filtered-stats .fs-item{white-space:nowrap}',
+      '.memp .filtered-stats .fs-item b{font-variant-numeric:tabular-nums;font-weight:650}',
+      '.memp .filtered-stats .fs-item span{color:var(--dsw-alias-label-secondary)}',
       '.memp .muted{font-size:11.5px;color:var(--dsw-alias-label-secondary)}',
       '.memp .mono{font-family:var(--ds-font-family-code, ui-monospace, monospace);font-size:11px;color:var(--dsw-alias-label-secondary)}',
       // 向量服务
@@ -492,7 +504,7 @@ window.__ModuleLoader__.load({
       // 拖动时给画布一点反馈:光标变化由上面的 canvas 规则给,这里补 2D 的
       '.memp .graph-stage{cursor:grab}',
       '.memp .graph-stage.dragging{cursor:grabbing}',
-      '@media (max-width:620px){.memp .tree-stats{width:100%;margin-left:0}.memp .tree-toolbar input[type=text]{max-width:none}}',
+      '@media (max-width:620px){.memp .tree-stats{width:100%;margin-left:0}.memp .tree-toolbar input[type=text]{max-width:none}.memp .stats-panel{flex-direction:column}.memp .filtered-stats{border-left:none;border-top:1px solid var(--dsw-alias-border-l1);padding-left:0;padding-top:8px}}',
       // ===== 审计 =====
       '.memp .audit{display:flex;flex-direction:column;gap:10px;min-height:0;height:calc(100vh - 210px);max-height:calc(100vh - 210px);overflow:hidden}',
       '.memp .audit-head{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}',
@@ -5473,6 +5485,46 @@ window.__ModuleLoader__.load({
       const displayRecords = focusRecordData !== null && !supersededRecords.some((rec) => rec.id === focusRecordData.id)
         ? [focusRecordData, ...supersededRecords]
         : supersededRecords
+
+      // 0.44.0：当前筛选的展示统计（与左侧既有统计并排，包在同一个圆角框里）。
+      // 数据口径全部来自已经筛好的 records / displayRecords —— 所见即所得。
+      const filteredStats = (() => {
+        const shownIds = new Set(displayRecords.map((r) => r.id))
+        const byKind = new Map()
+        for (const rec of displayRecords) {
+          const k = String(rec.kind || 'unknown')
+          byKind.set(k, (byKind.get(k) ?? 0) + 1)
+        }
+        // 被修正隐藏：带 supersededBy 但没进当前展示列表的记录数。
+        const supersededHidden = records.filter((rec) => Boolean(rec.supersededBy) && !shownIds.has(rec.id)).length
+        // 待嵌入：当前展示记录里还没有向量的条数。
+        const pendingShown = displayRecords.filter((rec) => !rec.embedded).length
+        return { count: displayRecords.length, byKind, supersededHidden, pendingShown }
+      })()
+      const kindItems = KIND_ORDER
+        .filter((k) => (filteredStats.byKind.get(k) ?? 0) > 0)
+        .map((k) => h('span', { className: 'fs-item', key: k }, h('b', null, String(filteredStats.byKind.get(k))), ' ', h('span', null, kindMeta(k).label)))
+      // 数据里有但不在已知类型表里的 kind（自定义 kind）也要如实显示。
+      for (const [k, n] of filteredStats.byKind) {
+        if (n > 0 && !KIND_ORDER.includes(k)) {
+          kindItems.push(h('span', { className: 'fs-item', key: k }, h('b', null, String(n)), ' ', h('span', null, k)))
+        }
+      }
+      const filteredStatsCard = h('div', { className: 'filtered-stats' },
+        h('div', { className: 'fs-head' }, '当前筛选展示'),
+        h('div', { className: 'fs-row' },
+          h('span', { className: 'fs-item' }, h('b', null, String(filteredStats.count)), ' ', h('span', null, '条')),
+        ),
+        h('div', { className: 'fs-row' }, ...kindItems),
+        h('div', { className: 'fs-row' },
+          h('span', { className: 'fs-item' }, h('b', null, String(filteredStats.supersededHidden)), ' ', h('span', null, '被修正隐藏')),
+          configured && vectorEnabled
+            ? h('span', { className: 'fs-item' }, h('b', null, String(filteredStats.pendingShown)), ' ', h('span', null, '待嵌入'))
+            : null,
+        ),
+      )
+      const statsPanel = h('div', { className: 'stats-panel' }, statsCard, filteredStatsCard)
+
       const listBody = !loading && !error && displayRecords.length === 0
         ? h('div', { className: 'empty' },
             emptyText,
@@ -5642,7 +5694,7 @@ window.__ModuleLoader__.load({
       // 记录页:统计 + 工具栏 + 新建表单固定在上面,只有列表在滚动容器里 —— 记忆多了也不把面板撑长。
       const dataBody = h('div', { className: 'memp-body' },
         viewSwitch,
-        statsCard,
+        statsPanel,
         dataView === 'scopes' ? scopeToolbar : toolbar,
         dataView === 'scopes' ? null : searchNoteNode,
         dataView === 'scopes'
