@@ -238,3 +238,49 @@ test('读取范围用 provider 的解析结果', () => {
   assert.ok(delta.includes('项目规则'))
   assert.ok(delta.includes('全局规则'))
 })
+
+// ------------------------------------------------- 0.45.0 可改表头与去重的相容性
+
+test('表头可改:渲染用设置里的表头', () => {
+  const rule = rec('规则甲', { id: 'a' })
+  const custom = { ...rulesCfg, prompt: '规则头-自定义：', deltaPrompt: '增量头-自定义：' }
+  const block = renderRulesBlock([rule], custom)!
+  assert.ok(block.startsWith('规则头-自定义：'))
+  const delta = renderRulesDeltaBlock([rule], custom)!
+  assert.ok(delta.startsWith('增量头-自定义：'))
+})
+
+test('表头改了以后,历史里的旧表头仍能被解析(否则会整批重提醒)', () => {
+  const a = rec('规则甲', { id: 'a' })
+  const b = rec('规则乙', { id: 'b' })
+  // 历史是用**旧**表头渲染的；当前设置已经换成新表头。
+  const history = [
+    systemMessage(`${RULES_HEADER}\n${ruleLine(a)}\n\n后续段`),
+    userMessage(`${RULES_DELTA_HEADER}\n${ruleLine(b)}`, 'memory'),
+  ]
+  const custom = { ...rulesCfg, prompt: '规则头-自定义：', deltaPrompt: '增量头-自定义：' }
+  const seen = seenRuleLines(history, custom)
+  assert.ok(seen.has(ruleLine(a)), '旧表头的系统提示段仍要认出来')
+  assert.ok(seen.has(ruleLine(b)), '旧表头的增量块仍要认出来')
+
+  // 新表头渲染的历史同样要认。
+  const newHistory = [systemMessage(`${custom.prompt}\n${ruleLine(a)}\n\n后续段`)]
+  assert.ok(seenRuleLines(newHistory, custom).has(ruleLine(a)))
+})
+
+test('表头改了以后,已见过的规则不会因为换表头被重新提醒', () => {
+  const a = rec('规则甲', { id: 'a' })
+  const b = rec('规则乙', { id: 'b' })
+  const injector = new RulesDeltaInjector()
+  const id = 'header-change-session'
+  // 第一轮用默认表头跑过一遍。
+  injector.maybeInject(agentWith([systemMessage(promptWith([a, b]))], id), memoryWith([a, b]), rulesCfg)
+  // 用户改了表头，历史仍是旧表头渲染的 —— 不能把 a/b 当成"没见过"再提醒一次。
+  const custom = { ...rulesCfg, prompt: '规则头-自定义：' }
+  const delta = injector.maybeInject(
+    agentWith([systemMessage(promptWith([a, b]))], id),
+    memoryWith([a, b]),
+    custom,
+  )
+  assert.equal(delta, undefined, '换表头不应触发重新提醒')
+})

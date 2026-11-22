@@ -2798,6 +2798,7 @@ window.__ModuleLoader__.load({
           { k: 'enabled', label: '启用', type: 'bool', hint: '关闭后每轮不再按问题检索记忆。' },
           { k: 'topK', label: '最多条数', type: 'num', min: 1, max: 20, step: 1, hint: '每次最多注入几条相关记忆。' },
           { k: 'tokenBudget', label: 'token 预算', type: 'num', min: 50, max: 4000, step: 50, hint: '召回块允许占用的最大 token 数。' },
+          { k: 'prompt', label: '注入提示词', type: 'text', rows: 6, placeholder: '以下是与此请求可能相关的记忆，供参考……', hint: '这段会放在召回块最前面（表头）。留空时恢复内置默认提示词。' },
         ],
       },
       {
@@ -2806,6 +2807,7 @@ window.__ModuleLoader__.load({
         fields: [
           { k: 'enabled', label: '启用', type: 'bool', hint: '关闭后召回直接给长文摘要。' },
           { k: 'chars', label: '每条字数', type: 'num', min: 40, max: 800, step: 20, hint: '每条记忆在召回块里保留多少字。' },
+          { k: 'prompt', label: '注入提示词', type: 'text', rows: 6, placeholder: '以下是与你这次请求可能相关的记忆摘要……', hint: '印象形态召回块的表头。留空时恢复内置默认提示词。' },
         ],
       },
       {
@@ -2817,6 +2819,9 @@ window.__ModuleLoader__.load({
           { k: 'tokenBudget', label: '正文预算', type: 'num', min: 50, max: 4000, step: 50, hint: '正文摘要的 token 预算；超出部分转成标签索引。' },
           { k: 'hintBudget', label: '标签预算', type: 'num', min: 30, max: 1000, step: 10, hint: '标签索引独立预算，不占正文。' },
           { k: 'hintMaxItems', label: '标签条数', type: 'num', min: 1, max: 30, step: 1, hint: '标签索引最多列几条。' },
+          { k: 'prompt', label: '摘要提示词', type: 'text', rows: 6, placeholder: '以下是本项目 / 全局已有的记忆摘要……', hint: '摘要正文的表头。留空时恢复内置默认提示词。' },
+          { k: 'hintPrompt', label: '索引提示词', type: 'text', rows: 3, placeholder: '相关记忆索引（正文未注入）：', hint: '被截断记录那段标签索引的表头。留空时恢复内置默认提示词。' },
+          { k: 'hintFooter', label: '索引结尾提示词', type: 'text', rows: 3, placeholder: '这些条目的正文尚未加载……', hint: '标签索引末尾的指路句（告诉模型怎么取正文）。留空时恢复内置默认。' },
         ],
       },
       {
@@ -2824,6 +2829,7 @@ window.__ModuleLoader__.load({
         desc: '系统提示常驻段：什么时候该查记忆、查到后怎么用、查不到怎么办、无关记忆什么时候该屏蔽。',
         fields: [
           { k: 'enabled', label: '启用', type: 'bool', hint: '关闭只移除这段提示，不影响记忆检索。' },
+          { k: 'prompt', label: '策略提示词', type: 'text', rows: 18, placeholder: '## 记忆系统……', hint: '整段可改（含标题行）。留空时恢复内置默认提示词。' },
         ],
       },
       {
@@ -2843,6 +2849,8 @@ window.__ModuleLoader__.load({
           { k: 'maxItems', label: '最多条数', type: 'num', min: 1, max: 40, step: 1, hint: '规则段最多列几条。' },
           { k: 'tokenBudget', label: 'token 预算', type: 'num', min: 50, max: 4000, step: 50, hint: '规则段的 token 上限；mandatory 溢出会额外警告。' },
           { k: 'delta', label: '变更提醒', type: 'bool', hint: '旧会话在下一轮第一步补一条新增 / 编辑过的规则；没变化不重复。' },
+          { k: 'prompt', label: '规则提示词', type: 'text', rows: 5, placeholder: '以下是必须遵守的硬性规则……', hint: '系统提示里规则段的表头。留空时恢复内置默认提示词。' },
+          { k: 'deltaPrompt', label: '变更提醒提示词', type: 'text', rows: 4, placeholder: '以下是新增或变更的硬性规则……', hint: '旧会话补的那条增量消息的表头。留空时恢复内置默认提示词。' },
         ],
       },
       {
@@ -2853,6 +2861,7 @@ window.__ModuleLoader__.load({
           { k: 'enabled', label: '启用', type: 'bool', hint: '关闭后流程只能靠 memory_search 主动检索。' },
           { k: 'maxItems', label: '最多条数', type: 'num', min: 1, max: 30, step: 1, hint: '流程索引最多列几条。' },
           { k: 'tokenBudget', label: 'token 预算', type: 'num', min: 50, max: 4000, step: 50, hint: '流程索引的 token 上限。' },
+          { k: 'prompt', label: '索引提示词', type: 'text', rows: 5, placeholder: '以下是当前工作区 / 任务相关的流程索引……', hint: '流程索引的表头。留空时恢复内置默认提示词。' },
         ],
       },
       {
@@ -2870,6 +2879,7 @@ window.__ModuleLoader__.load({
         desc: '下一轮开头提醒把本轮结论落盘；默认关闭，避免打断连续对话。',
         fields: [
           { k: 'enabled', label: '启用', type: 'bool', hint: '开启后每轮结束会给一条“有结论就记一条”的提醒。' },
+          { k: 'prompt', label: '提醒提示词', type: 'text', rows: 5, placeholder: '上一轮若产生了可复用的结论……', hint: '下一轮开头注入的那句提醒。留空时恢复内置默认提示词。' },
         ],
       },
       {

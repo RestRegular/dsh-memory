@@ -9,6 +9,7 @@
 import { estimateTokens } from '../provider/rerank.js'
 import { normalizeScopeInput } from '../provider/scope.js'
 import { textHasTag } from './signals.js'
+import { DEFAULT_IMPRESSION_PROMPT, DEFAULT_RECALL_PROMPT, resolvePrompt } from '../provider/inject-prompts.js'
 import { recordKindPrefix } from './digest.js'
 import { InjectionState } from './state.js'
 
@@ -23,6 +24,11 @@ import { InjectionState } from './state.js'
                                                                      
      
                         
+     
+                                      
+                                                 
+     
+                 
  
 
 export const defaultInjectConfig               = {
@@ -210,6 +216,8 @@ export function hasRecallMessage(
                 
                    
                       
+                                      
+                 
                                                 
                     
      
@@ -260,9 +268,10 @@ export function renderRecallBlock(
   }
   const impression = options.impression === true
   const chars = impression ? (options.chars ?? 120) : 300
+  // 表头可改(0.45.0)：留空回退内置默认，注入路径不能因为清空文本框就少一段上下文。
   const header = impression
-    ? '以下是与你这次请求可能相关的记忆摘要：'
-    : '以下是与此请求可能相关的记忆，供参考（需要正文用 memory_get；与本轮无关的用 memory_block 屏蔽，可逆、不删数据）：'
+    ? resolvePrompt(options.prompt, DEFAULT_IMPRESSION_PROMPT)
+    : resolvePrompt(cfg.prompt, DEFAULT_RECALL_PROMPT)
   let tokens = estimateTokens(header) + 4
   const lines           = []
   const ids           = []

@@ -19,15 +19,30 @@
                                               
 import { estimateTokens } from '../provider/rerank.js'
                                                                               
+import {
+  DEFAULT_RULES_DELTA_PROMPT,
+  DEFAULT_RULES_PROMPT,
+  resolvePrompt,
+} from '../provider/inject-prompts.js'
 import { supersededIds } from './digest.js'
 
-export const RULES_HEADER =
-  '以下是必须遵守的硬性规则（来自 kind=rule 的记忆，只注入摘要；每条开头的短 ID 可用于取全文，' +
-  '需要原文或细节时用 memory_get 按 ID 获取。除非用户明确要求破例，否则按它做）：'
+/**
+ * 两段的**内置默认**表头。0.45.0 起表头可改（`rules.prompt` / `rules.deltaPrompt`），
+ * 渲染时一律用 `rulesHeader(cfg)` / `rulesDeltaHeader(cfg)` 取生效值。
+ */
+export const RULES_HEADER = DEFAULT_RULES_PROMPT
 
-export const RULES_DELTA_HEADER =
-  '以下是新增或变更的硬性规则（来自 kind=rule 的记忆，只注入摘要；' +
-  '需要原文或细节时用 memory_get 按 ID 获取；从现在起按它做）：'
+export const RULES_DELTA_HEADER = DEFAULT_RULES_DELTA_PROMPT
+
+/** 生效的常驻段表头：设置里留空回退内置默认。 */
+export function rulesHeader(cfg               )         {
+  return resolvePrompt(cfg.prompt, RULES_HEADER)
+}
+
+/** 生效的增量块表头。 */
+export function rulesDeltaHeader(cfg               )         {
+  return resolvePrompt(cfg.deltaPrompt, RULES_DELTA_HEADER)
+}
 
 /** mandatory/pinned 是显式的标签约定,不把全部 kind=rule 自动升级。 */
 const MANDATORY_TAGS = new Set(['mandatory', 'pinned', '必含', '强制'])
@@ -199,7 +214,7 @@ function renderLines(
 
 /** 渲染规则段(系统提示常驻)及其审计统计。没有可展示的规则时 text 为空串。 */
 export function renderRules(records                         , cfg               )              {
-  return renderLines(records, RULES_HEADER, cfg, cfg.tokenBudget)
+  return renderLines(records, rulesHeader(cfg), cfg, cfg.tokenBudget)
 }
 
 /** 渲染规则段(系统提示常驻),只要文本;空文本返回 null。 */
@@ -213,7 +228,7 @@ export function renderRulesBlock(records                         , cfg          
  * 时才需要的补充,用同一个 300 token 的上限容易把最该提醒的一条又截掉。
  */
 export function renderRulesDelta(records                         , cfg               )              {
-  return renderLines(records, RULES_DELTA_HEADER, cfg, Math.max(cfg.tokenBudget, 600))
+  return renderLines(records, rulesDeltaHeader(cfg), cfg, Math.max(cfg.tokenBudget, 600))
 }
 
 export function renderRulesDeltaBlock(records                         , cfg               )                {
@@ -248,6 +263,21 @@ export function extractSection(text        , header        )                    
   return end < 0 ? rest : rest.slice(0, end)
 }
 
+/**
+ * 按多个候选表头依次尝试抽段。
+ *
+ * 表头 0.45.0 起可改，而历史里的那段是用**当时**的表头渲染的：用户改过表头后，
+ * 用当前表头去解析旧消息会抽不到，去重就会误判成"没见过" → 把同一批规则再提醒
+ * 一遍。所以解析时把当前生效表头与内置默认一起当候选。
+ */
+export function extractSectionByAny(text        , headers                   )                     {
+  for (const header of headers) {
+    const section = extractSection(text, header)
+    if (section !== undefined) return section
+  }
+  return undefined
+}
+
 /** 段里的条目行(以 `- ` 开头、已 trim 的行)。 */
 export function sectionLines(section                    )           {
   if (!section) return []
@@ -271,18 +301,27 @@ export function latestSystemText(history                               )        
 /**
  * 这个会话"已经看见过"的规则行 = 最新系统提示里的规则段
  * ∪ 历史上注入过的增量块(同一条规则只会提醒一次,重启宿主也不会重复)。
+ *
+ * 表头可改(0.45.0)，历史里的段可能用旧表头渲染；两个表头都当候选，
+ * 避免改一次表头就把所有规则重新提醒一遍。
  */
-export function seenRuleLines(history                               )              {
+export function seenRuleLines(history                               , cfg                )              {
   const seen = new Set        ()
+  const headers = cfg === undefined ? [RULES_HEADER] : uniqueHeaders([rulesHeader(cfg), RULES_HEADER])
+  const deltaHeaders = cfg === undefined ? [RULES_DELTA_HEADER] : uniqueHeaders([rulesDeltaHeader(cfg), RULES_DELTA_HEADER])
   const systemText = latestSystemText(history)
   if (systemText !== undefined) {
-    for (const line of sectionLines(extractSection(systemText, RULES_HEADER))) seen.add(line)
+    for (const line of sectionLines(extractSectionByAny(systemText, headers))) seen.add(line)
   }
   for (const message of history) {
     if (message.role !== 'user' || message.source?.kind !== 'memory') continue
-    for (const line of sectionLines(extractSection(messageText(message), RULES_DELTA_HEADER))) seen.add(line)
+    for (const line of sectionLines(extractSectionByAny(messageText(message), deltaHeaders))) seen.add(line)
   }
   return seen
+}
+
+function uniqueHeaders(headers                   )           {
+  return [...new Set(headers.filter((header) => header.trim() !== ''))]
 }
 
 

@@ -14,13 +14,33 @@
                                               
 import { estimateTokens } from '../provider/rerank.js'
                                                                                
+import {
+  DEFAULT_DIGEST_HINT_FOOTER,
+  DEFAULT_DIGEST_HINT_PROMPT,
+  DEFAULT_DIGEST_PROMPT,
+  resolvePrompt,
+} from '../provider/inject-prompts.js'
 
-const HEADER =
-  '以下是本项目 / 全局已有的记忆摘要（按重要度挑出的前几条；' +
-  '需要原文用 memory_get，定位用 memory_search；无关条目用 memory_block 屏蔽，过时/写错的才用 memory_forget 删除）：'
+/** 内置默认表头（0.45.0 起可改，渲染用下面的三个 helper 取生效值）。 */
+const HEADER = DEFAULT_DIGEST_PROMPT
 
-const HINT_HEADER = '相关记忆索引（正文未注入）：'
-const HINT_FOOTER = '这些条目的正文尚未加载；遇到相关任务时，按 ID 用 memory_get 取正文，按标签用 memory_search 定位；与本轮无关的用 memory_block 屏蔽。'
+const HINT_HEADER = DEFAULT_DIGEST_HINT_PROMPT
+const HINT_FOOTER = DEFAULT_DIGEST_HINT_FOOTER
+
+/** 生效的摘要表头：设置里留空回退内置默认。 */
+export function digestHeader(cfg                )         {
+  return resolvePrompt(cfg.prompt, HEADER)
+}
+
+/** 生效的标签索引表头。 */
+export function digestHintHeader(cfg                )         {
+  return resolvePrompt(cfg.hintPrompt, HINT_HEADER)
+}
+
+/** 生效的标签索引结尾指路。 */
+export function digestHintFooter(cfg                )         {
+  return resolvePrompt(cfg.hintFooter, HINT_FOOTER)
+}
 
 /** 一条正文被省略的原因。统计口径互斥:每条记录只归入一个原因。 */
                                                                                      
@@ -174,7 +194,9 @@ function renderHintIndex(omitted                         , cfg                )
   if (omitted.length === 0) {
     return { text: null, tokens: 0, injected: 0, omittedTopK: 0, omittedBudget: 0, injectedIds: [] }
   }
-  let tokens = estimateTokens(HINT_HEADER) + 4
+  const hintHeader = digestHintHeader(cfg)
+  const hintFooter = digestHintFooter(cfg)
+  let tokens = estimateTokens(hintHeader) + 4
   const lines           = []
   const injectedIds           = []
   let omittedTopK = 0
@@ -191,7 +213,7 @@ function renderHintIndex(omitted                         , cfg                )
   if (lines.length === 0) {
     return { text: null, tokens: 0, injected: 0, omittedTopK, omittedBudget, injectedIds }
   }
-  let text = `${HINT_HEADER}\n${lines.join('\n')}\n${HINT_FOOTER}`
+  let text = `${hintHeader}\n${lines.join('\n')}\n${hintFooter}`
   const extra           = []
   if (omittedTopK > 0) extra.push(`条数上限 ${omittedTopK}`)
   if (omittedBudget > 0) extra.push(`预算 ${omittedBudget}`)
@@ -246,7 +268,8 @@ export function renderDigest(records                         , cfg              
   const ranked = rankForDigest(active, now)
   const selected                 = []
   const hintCandidates                 = []
-  let tokens = estimateTokens(HEADER) + 4
+  const header = digestHeader(cfg)
+  let tokens = estimateTokens(header) + 4
   let omittedTopK = 0
   let omittedBudget = 0
   let budgetExhausted = false
@@ -278,7 +301,7 @@ export function renderDigest(records                         , cfg              
 
   const hint = renderHintIndex(hintCandidates, cfg)
   const bodyText = selected.length > 0
-    ? `${HEADER}\n${selected.map((record) => digestLine(record)).join('\n')}`
+    ? `${header}\n${selected.map((record) => digestLine(record)).join('\n')}`
     : ''
   const text = [bodyText, hint.text].filter((part) => part !== null && part !== '').join('\n\n')
   if (text === '') return null

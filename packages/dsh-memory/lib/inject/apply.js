@@ -75,6 +75,7 @@ import {
                       
 } from './signals.js'
 import { normalizeInjectSettings,                     } from '../provider/inject-settings.js'
+import { DEFAULT_TURN_END_PROMPT, resolvePrompt } from '../provider/inject-prompts.js'
 import { canonicalWorkspacePath } from '../provider/scope.js'
 
                                      
@@ -127,10 +128,11 @@ import { canonicalWorkspacePath } from '../provider/scope.js'
    
  
 
-/** 轮末提醒的文案:短、祈使句,不占预算。 */
-const NUDGE_TEXT =
-  '上一轮若产生了可复用的结论（决策、踩坑、流程、口径），先 memory_save 记一条再继续；' +
-  '没有就忽略这条提醒。'
+/**
+ * 轮末提醒的内置默认文案:短、祈使句,不占预算。
+ * 0.45.0 起可改(`turnEnd.prompt`)，注入与审计都用 `nudgeText()` 取生效值。
+ */
+const NUDGE_TEXT = DEFAULT_TURN_END_PROMPT
 
 /** 可见域配置的最小子集(避免注入半边依赖 provider 的实现类型)。 */
                                   
@@ -236,15 +238,22 @@ export function apply(ctx         , config                     = {}) {
     return fallback
   }
 
+  /** 生效的「记忆使用策略」全文(面板可整段改;留空回退内置默认)。 */
+  const policyText = ()         => resolvePrompt(settingsOf().policy.prompt, POLICY_TEXT)
+
+  /** 生效的轮末提醒文案(面板可改;留空回退内置默认)。 */
+  const nudgeText = ()         => resolvePrompt(settingsOf().turnEnd.prompt, NUDGE_TEXT)
+
   const recallCfg = ()               => {
     const settings = settingsOf().recall
-    return { enabled: enabled && settings.enabled, topK: settings.topK, tokenBudget: settings.tokenBudget }
+    return { enabled: enabled && settings.enabled, topK: settings.topK, tokenBudget: settings.tokenBudget, prompt: settings.prompt }
   }
   const impressionCfg = ()                      => {
     const settings = settingsOf().impression
     return {
       impression: settings.enabled,
       chars: settings.chars,
+      prompt: settings.prompt,
       // 0.35.4：自动召回也走 before-inject 钩子 —— 之前只有规则段与摘要接了，
       // 每轮按用户问题召回的正文没过钩子，是三个注入通道里的漏网之鱼。
       // sessionId 由 injector 在渲染时传入（注入半边没有 agent 对象）。
@@ -888,7 +897,7 @@ export function apply(ctx         , config                     = {}) {
       systemPrompt.section({
         name: 'memory:policy',
         order: 650,
-        text: () => (enabled && settingsOf().policy.enabled ? POLICY_TEXT : ''),
+        text: () => (enabled && settingsOf().policy.enabled ? policyText() : ''),
       })
       systemPrompt.section({
         name: 'memory:rules',
@@ -1154,11 +1163,13 @@ export function apply(ctx         , config                     = {}) {
         stage(auditBase('nudge', { kind: 'evaluation', stage: 'skipped', outcome: 'skipped', reasonCode: 'disabled' }))
       } else if (pendingNudge) {
         pendingNudge = false
-        parts.push(NUDGE_TEXT)
+        // 审计必须记**实际注入**的那份文本：提示词可改后，哈希内置常量就不再等价。
+        const text = nudgeText()
+        parts.push(text)
         messageChannels.add('nudge')
         stage(auditBase('nudge', {
           kind: 'evaluation', stage: 'rendered', outcome: 'success', reasonCode: 'turn_end',
-          delivery: { status: 'unknown', appended: null, textChars: NUDGE_TEXT.length, textHash: hashAuditText(NUDGE_TEXT) },
+          delivery: { status: 'unknown', appended: null, textChars: text.length, textHash: hashAuditText(text) },
         }))
       } else {
         stage(auditBase('nudge', { kind: 'evaluation', stage: 'skipped', outcome: 'skipped', reasonCode: 'not_due' }))
@@ -1283,9 +1294,11 @@ export function apply(ctx         , config                     = {}) {
     // 策略段是常量系统提示；只记录它存在，不声称“模型读了”。
     if (step === 1) {
       if (settings.policy.enabled) {
+        // 策略段现在可改：审计记生效文本，不记内置常量。
+        const text = policyText()
         stage(auditBase('policy', {
           kind: 'evaluation', stage: 'system_prompt', outcome: 'success', reasonCode: 'constant_text',
-          delivery: { status: 'unknown', appended: null, textChars: POLICY_TEXT.length, textHash: hashAuditText(POLICY_TEXT) },
+          delivery: { status: 'unknown', appended: null, textChars: text.length, textHash: hashAuditText(text) },
         }))
       } else {
         stage(auditBase('policy', { kind: 'evaluation', stage: 'skipped', outcome: 'skipped', reasonCode: 'disabled' }))

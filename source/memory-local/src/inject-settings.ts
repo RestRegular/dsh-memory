@@ -4,11 +4,31 @@
  * 为什么放在 provider 侧:设置要落盘(进程重启后还在)、要能通过面板 HTTP
  * 接口读写,而注入半边只是一组纯函数 + 一个 pre-step 监听器。所以 provider
  * 负责存与发事件,注入半边只负责"每步读一次"。
+ *
+ * 0.45.0 起：每条会往上下文里注入文本的通道都带一个可改的**提示词**字段
+ * (`prompt` / `deltaPrompt` / `hintPrompt` / `hintFooter`)，默认值集中在
+ * `inject-prompts.ts`；设置里留空 = 回退默认，不会让某条通道静默失效。
  */
+import {
+  DEFAULT_DIGEST_HINT_FOOTER,
+  DEFAULT_DIGEST_HINT_PROMPT,
+  DEFAULT_DIGEST_PROMPT,
+  DEFAULT_IMPRESSION_PROMPT,
+  DEFAULT_POLICY_PROMPT,
+  DEFAULT_PROCEDURES_PROMPT,
+  DEFAULT_RECALL_PROMPT,
+  DEFAULT_RULES_DELTA_PROMPT,
+  DEFAULT_RULES_PROMPT,
+  DEFAULT_TURN_END_PROMPT,
+  resolvePrompt,
+} from './inject-prompts.ts'
+
 export interface RecallSettings {
   enabled: boolean
   topK: number
   tokenBudget: number
+  /** 召回块的表头提示词（面板可改；留空回退内置默认）。 */
+  prompt: string
 }
 
 export interface DigestSettings {
@@ -20,17 +40,27 @@ export interface DigestSettings {
   hintBudget: number
   /** 标签索引最多列几条。 */
   hintMaxItems: number
+  /** 摘要正文表头。 */
+  prompt: string
+  /** 标签索引表头。 */
+  hintPrompt: string
+  /** 标签索引结尾那句「这些条目正文尚未加载…」。 */
+  hintFooter: string
 }
 
 export interface ImpressionSettings {
   /** 每轮召回的"印象"形态:每条只给开头这么多字,细节让模型再 memory_search。 */
   enabled: boolean
   chars: number
+  /** 印象形态的召回表头（与完整召回的 prompt 分开，因为口径不同）。 */
+  prompt: string
 }
 
 export interface PolicySettings {
   /** 系统提示里的「记忆使用策略」常驻段。 */
   enabled: boolean
+  /** 策略段全文（面板可整段改写；留空回退内置默认）。 */
+  prompt: string
 }
 
 /** 状态型记忆(kind=state)的默认有效期。过期后默认隐藏,但 memory_get 仍可取。 */
@@ -44,6 +74,8 @@ export interface ProceduresSettings {
   enabled: boolean
   maxItems: number
   tokenBudget: number
+  /** 流程索引表头（面板可改；留空回退内置默认）。 */
+  prompt: string
 }
 
 export interface RulesSettings {
@@ -57,6 +89,10 @@ export interface RulesSettings {
    * 规则段又有预算上限,新规则可能被旧规则挤掉 —— 所以补这一条。
    */
   delta: boolean
+  /** 规则常驻段的表头。 */
+  prompt: string
+  /** 规则增量块的表头。 */
+  deltaPrompt: string
 }
 
 /**
@@ -93,6 +129,8 @@ export const DEFAULT_AUTO_RECALL_TAGS: string[] = [
 export interface TurnEndSettings {
   /** 轮末提醒:下一轮开头提示"上一轮若有可复用结论就记一条"。默认关闭。 */
   enabled: boolean
+  /** 轮末提醒正文（面板可改；留空回退内置默认）。 */
+  prompt: string
 }
 
 /** 界面:是否在左侧栏「插件」下方显示记忆入口(点击在主界面打开面板)。 */
@@ -131,13 +169,25 @@ export const DEFAULT_ORGANIZE_PROMPT = [
 ].join('\n')
 
 export const defaultInjectSettings: InjectSettings = {
-  recall: { enabled: true, topK: 5, tokenBudget: 500 },
-  digest: { enabled: true, topK: 8, tokenBudget: 800, hintBudget: 160, hintMaxItems: 6 },
-  impression: { enabled: true, chars: 120 },
-  policy: { enabled: true },
+  recall: {
+    enabled: true, topK: 5, tokenBudget: 500,
+    prompt: DEFAULT_RECALL_PROMPT,
+  },
+  digest: {
+    enabled: true, topK: 8, tokenBudget: 800, hintBudget: 160, hintMaxItems: 6,
+    prompt: DEFAULT_DIGEST_PROMPT,
+    hintPrompt: DEFAULT_DIGEST_HINT_PROMPT,
+    hintFooter: DEFAULT_DIGEST_HINT_FOOTER,
+  },
+  impression: { enabled: true, chars: 120, prompt: DEFAULT_IMPRESSION_PROMPT },
+  policy: { enabled: true, prompt: DEFAULT_POLICY_PROMPT },
   state: { ttlMs: DEFAULT_STATE_TTL_MS },
-  procedures: { enabled: true, maxItems: 10, tokenBudget: 500 },
-  rules: { enabled: true, maxItems: 10, tokenBudget: 300, delta: true },
+  procedures: { enabled: true, maxItems: 10, tokenBudget: 500, prompt: DEFAULT_PROCEDURES_PROMPT },
+  rules: {
+    enabled: true, maxItems: 10, tokenBudget: 300, delta: true,
+    prompt: DEFAULT_RULES_PROMPT,
+    deltaPrompt: DEFAULT_RULES_DELTA_PROMPT,
+  },
   autoRecall: {
     enabled: true,
     useToolDescription: true,
@@ -145,7 +195,7 @@ export const defaultInjectSettings: InjectSettings = {
     tags: DEFAULT_AUTO_RECALL_TAGS,
     useMemoryTags: true,
   },
-  turnEnd: { enabled: false },
+  turnEnd: { enabled: false, prompt: DEFAULT_TURN_END_PROMPT },
   sidebar: { enabled: false },
   organize: { prompt: DEFAULT_ORGANIZE_PROMPT },
 }
@@ -210,6 +260,7 @@ export function normalizeInjectSettings(raw: unknown, base: InjectSettings = def
       enabled: bool(recall.enabled, base.recall.enabled),
       topK: clampInt(recall.topK, 1, 20, base.recall.topK),
       tokenBudget: clampInt(recall.tokenBudget, 50, 4000, base.recall.tokenBudget),
+      prompt: resolvePrompt(recall.prompt, DEFAULT_RECALL_PROMPT),
     },
     digest: {
       enabled: bool(digest.enabled, base.digest.enabled),
@@ -217,12 +268,19 @@ export function normalizeInjectSettings(raw: unknown, base: InjectSettings = def
       tokenBudget: clampInt(digest.tokenBudget, 50, 4000, base.digest.tokenBudget),
       hintBudget: clampInt(digest.hintBudget, 30, 1000, base.digest.hintBudget),
       hintMaxItems: clampInt(digest.hintMaxItems, 1, 30, base.digest.hintMaxItems),
+      prompt: resolvePrompt(digest.prompt, DEFAULT_DIGEST_PROMPT),
+      hintPrompt: resolvePrompt(digest.hintPrompt, DEFAULT_DIGEST_HINT_PROMPT),
+      hintFooter: resolvePrompt(digest.hintFooter, DEFAULT_DIGEST_HINT_FOOTER),
     },
     impression: {
       enabled: bool(impression.enabled, base.impression.enabled),
       chars: clampInt(impression.chars, 40, 800, base.impression.chars),
+      prompt: resolvePrompt(impression.prompt, DEFAULT_IMPRESSION_PROMPT),
     },
-    policy: { enabled: bool(policy.enabled, base.policy.enabled) },
+    policy: {
+      enabled: bool(policy.enabled, base.policy.enabled),
+      prompt: resolvePrompt(policy.prompt, DEFAULT_POLICY_PROMPT),
+    },
     state: {
       ttlMs: clampInt(stateTtlInput, 60_000, 365 * 86_400_000, base.state.ttlMs),
     },
@@ -230,12 +288,15 @@ export function normalizeInjectSettings(raw: unknown, base: InjectSettings = def
       enabled: bool(procedures.enabled, base.procedures.enabled),
       maxItems: clampInt(procedures.maxItems, 1, 30, base.procedures.maxItems),
       tokenBudget: clampInt(procedures.tokenBudget, 50, 4000, base.procedures.tokenBudget),
+      prompt: resolvePrompt(procedures.prompt, DEFAULT_PROCEDURES_PROMPT),
     },
     rules: {
       enabled: bool(rules.enabled, base.rules.enabled),
       maxItems: clampInt(rules.maxItems, 1, 40, base.rules.maxItems),
       tokenBudget: clampInt(rules.tokenBudget, 50, 4000, base.rules.tokenBudget),
       delta: bool(rules.delta, base.rules.delta),
+      prompt: resolvePrompt(rules.prompt, DEFAULT_RULES_PROMPT),
+      deltaPrompt: resolvePrompt(rules.deltaPrompt, DEFAULT_RULES_DELTA_PROMPT),
     },
     autoRecall: {
       enabled: bool(autoRecall.enabled, base.autoRecall.enabled),
@@ -244,7 +305,10 @@ export function normalizeInjectSettings(raw: unknown, base: InjectSettings = def
       tags: normalizedTags,
       useMemoryTags: bool(autoRecall.useMemoryTags, base.autoRecall.useMemoryTags),
     },
-    turnEnd: { enabled: bool(turnEnd.enabled, base.turnEnd.enabled) },
+    turnEnd: {
+      enabled: bool(turnEnd.enabled, base.turnEnd.enabled),
+      prompt: resolvePrompt(turnEnd.prompt, DEFAULT_TURN_END_PROMPT),
+    },
     sidebar: { enabled: bool(sidebar.enabled, base.sidebar.enabled) },
     organize: {
       prompt: typeof organize.prompt === 'string' && organize.prompt.trim() !== ''

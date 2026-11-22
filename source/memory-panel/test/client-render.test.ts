@@ -1280,6 +1280,75 @@ test('设置标签页:读取注入设置、渲染各组开关并能保存', asyn
   }
 })
 
+test('设置页:每条注入通道都有可改的提示词文本框,输入即保存', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const settingsValue = {
+    recall: { enabled: true, topK: 5, tokenBudget: 500, prompt: '召回默认头' },
+    digest: { enabled: true, topK: 8, tokenBudget: 400, hintBudget: 160, hintMaxItems: 6, prompt: '摘要默认头', hintPrompt: '索引默认头', hintFooter: '索引默认结尾' },
+    impression: { enabled: true, chars: 120, prompt: '印象默认头' },
+    policy: { enabled: true, prompt: '## 记忆系统\n默认策略' },
+    procedures: { enabled: true, maxItems: 10, tokenBudget: 500, prompt: '流程默认头' },
+    rules: { enabled: true, maxItems: 10, tokenBudget: 300, delta: true, prompt: '规则默认头', deltaPrompt: '增量默认头' },
+    turnEnd: { enabled: false, prompt: '提醒默认文案' },
+    organize: { prompt: '整理默认提示词' },
+  }
+  const calls: Array<{ url: string; method?: string; body?: string }> = []
+  let posted: Record<string, unknown> | null = null
+  ;(globalThis as Record<string, unknown>).fetch = async (url: unknown, init?: { method?: string; body?: string }) => {
+    const u = String(url)
+    calls.push({ url: u, method: init?.method, body: init?.body })
+    if (u.includes('/settings')) {
+      if (init?.method === 'POST') {
+        posted = JSON.parse(String(init.body))
+        return { status: 200, json: async () => ({ ok: true, value: posted }) }
+      }
+      return { status: 200, json: async () => ({ ok: true, value: settingsValue }) }
+    }
+    if (u.includes('/status')) return { status: 200, json: async () => ({ ok: true, value: { scopes: [], embedServer: null } }) }
+    if (u.includes('/embed/model')) return { status: 200, json: async () => ({ ok: true, value: modelReport() }) }
+    return { status: 200, json: async () => ({ ok: true, value: { records: [] } }) }
+  }
+
+  const MemoryPanel = (exports.__test as { MemoryPanel: (p: Record<string, unknown>) => unknown }).MemoryPanel
+  const element = () => hooks.React.createElement(MemoryPanel, {})
+  let current: RenderNode | null = render(element(), hooks)
+  hooks.setRerender(() => { current = render(element(), hooks) })
+  const flush = async () => { for (let i = 0; i < 8; i++) await Promise.resolve() }
+  hooks.runEffects(); await flush(); hooks.runEffects(); await flush()
+
+  const tab = collect(current).find((n) => n.tag === 'button' && textOf(n).trim() === '设置')
+  assert.ok(tab, '面板里有「设置」标签')
+  ;(tab!.props!.onClick as () => void)()
+  hooks.runEffects(); await flush(); hooks.runEffects(); await flush()
+
+  // 每条通道一个 textarea:文本字段都渲染成 textarea,并且预填当前生效的提示词。
+  const textareas = collect(current).filter((n) => n.tag === 'textarea')
+  const values = textareas.map((n) => String(n.props?.value ?? ''))
+  for (const expected of ['召回默认头', '印象默认头', '摘要默认头', '索引默认头', '索引默认结尾', '默认策略', '流程默认头', '规则默认头', '增量默认头', '提醒默认文案']) {
+    assert.ok(values.some((v) => v.includes(expected)), `设置页应显示可编辑的「${expected}」`)
+  }
+
+  // 每个文本框上方都要有 label 与说明,不能只有一片裸 textarea。
+  // 注意:自动召回「模式」编辑器的 textarea 不是提示词字段(它存标签),所以单列。
+  const textFields = collect(current)
+    .filter((n) => String(n.props?.className ?? '') === 'setfield setfield-text')
+  assert.equal(textFields.length, textareas.length - 1, '提示词文本框都在 setfield-text 里(另一个是标签编辑器)')
+  for (const field of textFields) {
+    assert.equal(collect(field).filter((n) => n.tag === 'textarea').length, 1, '每个文本字段一个 textarea')
+    assert.ok(collect(field).some((n) => String(n.props?.className ?? '') === 'setfield-label'), '文本字段缺少 label')
+    assert.ok(collect(field).some((n) => String(n.props?.className ?? '') === 'setfield-hint'), '文本字段缺少 hint')
+  }
+
+  // 改轮末提醒的提示词 → 自动保存到 turnEnd.prompt（没有「保存设置」按钮）。
+  const turnEndArea = textareas[values.findIndex((v) => v.includes('提醒默认文案'))]
+  ;(turnEndArea!.props!.onChange as (e: unknown) => void)({ target: { value: '记得记一条。' } })
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  assert.ok(posted, '改动即自动保存')
+  assert.equal(((posted as Record<string, unknown>).turnEnd as { prompt?: string }).prompt, '记得记一条。')
+  assert.ok(calls.some((c) => c.method === 'POST' && c.url.includes('/settings')))
+})
+
 test('记录页:点「新建」出现表单,可选 rule 类型;设置页有导入/导出', async () => {
   const { exports, hooks } = await loadBundle()
   hooks.resetAll()

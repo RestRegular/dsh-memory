@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { handleRequest } from '../lib/index.js'
 import { LocalMemoryService } from '../../memory-local/src/index.ts'
+import { defaultInjectSettings } from '../../memory-local/src/inject-settings.ts'
 
 const ROUTE = '/memory/api'
 const LOOPBACK = { host: '127.0.0.1:19387' }
@@ -43,7 +44,57 @@ test('面板 /settings:GET 返回默认设置', async () => {
     // 0.42.0：整理记忆提示词是可改设置，默认非空
     assert.equal(typeof res.out.body.value.organize.prompt, 'string')
     assert.ok(res.out.body.value.organize.prompt.includes('整理当前工作区的记忆'))
+    // 0.45.0：每条注入通道的提示词也可改，默认必须非空（否则等于少注入一段上下文）
+    for (const [group, key] of [
+      ['recall', 'prompt'],
+      ['impression', 'prompt'],
+      ['digest', 'prompt'],
+      ['digest', 'hintPrompt'],
+      ['digest', 'hintFooter'],
+      ['policy', 'prompt'],
+      ['rules', 'prompt'],
+      ['rules', 'deltaPrompt'],
+      ['procedures', 'prompt'],
+      ['turnEnd', 'prompt'],
+    ]) {
+      const value = res.out.body.value[group][key]
+      assert.equal(typeof value, 'string', `${group}.${key} 应是可改的字符串`)
+      assert.ok(value.trim().length > 0, `${group}.${key} 的默认值不能为空`)
+    }
     svc.flushSync()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('面板 /settings:POST 可改注入提示词,留空回退默认并持久化', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-settings-'))
+  const svc = new LocalMemoryService({ storeDir: dir, scopes: { global: true, project: true } })
+  try {
+    const res = fakeRes()
+    await handleRequest(ctxWith(svc), ROUTE, post(`${ROUTE}/settings`, {
+      turnEnd: { enabled: true, prompt: '记一条再走。' },
+      rules: { prompt: '规则头' },
+      policy: { prompt: '## 我的策略' },
+    }), res)
+    assert.equal(res.out.status, 200)
+    assert.equal(res.out.body.value.turnEnd.prompt, '记一条再走。')
+    assert.equal(res.out.body.value.rules.prompt, '规则头')
+    assert.equal(res.out.body.value.policy.prompt, '## 我的策略')
+    // 没传的通道保持默认
+    assert.ok(res.out.body.value.digest.prompt.length > 0)
+
+    // 清空 = 回退默认，不能把某条通道的提示词存成空串
+    const cleared = fakeRes()
+    await handleRequest(ctxWith(svc), ROUTE, post(`${ROUTE}/settings`, { turnEnd: { prompt: '' } }), cleared)
+    assert.equal(cleared.out.body.value.turnEnd.prompt, defaultInjectSettings.turnEnd.prompt)
+    assert.ok(cleared.out.body.value.turnEnd.prompt.length > 0)
+
+    svc.flushSync()
+    const reopened = new LocalMemoryService({ storeDir: dir, scopes: { global: true, project: true } })
+    assert.equal(reopened.injectSettings().rules.prompt, '规则头')
+    assert.equal(reopened.injectSettings().turnEnd.enabled, true)
+    reopened.flushSync()
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

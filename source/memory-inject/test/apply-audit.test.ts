@@ -11,7 +11,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { registerHooks } from 'node:module'
-import { InjectAuditStore } from '../src/audit.ts'
+import { InjectAuditStore, hashAuditText } from '../src/audit.ts'
 import { memorySaveResultIds } from '../src/signals.ts'
 import { defaultInjectSettings } from '../../memory-local/src/inject-settings.ts'
 
@@ -701,3 +701,103 @@ test('memory_save 去重命中（内容相同）同样算正文已在上下文',
 
 
 
+
+/**
+ * 0.45.0：注入提示词可改。这里走真实 pre-step，验证**设置里的文本**真的进了上下文，
+ * 而不是只验证渲染函数（渲染层在 prompts.test.ts 里单独测）。
+ */
+function promptOnlySettings(overrides: Record<string, unknown>) {
+  return {
+    ...defaultInjectSettings,
+    autoRecall: { ...defaultInjectSettings.autoRecall, enabled: false },
+    recall: { ...defaultInjectSettings.recall, enabled: false },
+    digest: { ...defaultInjectSettings.digest, enabled: false },
+    rules: { ...defaultInjectSettings.rules, enabled: false, delta: false },
+    procedures: { ...defaultInjectSettings.procedures, enabled: false },
+    policy: { ...defaultInjectSettings.policy, enabled: false },
+    turnEnd: { ...defaultInjectSettings.turnEnd, enabled: false },
+    ...overrides,
+  }
+}
+
+test('轮末提醒:注入的是设置里的提示词,审计记的是实际注入的那份文本', async () => {
+  const prompt = '记得把本轮结论落盘（自定义）。'
+  const settings = promptOnlySettings({
+    turnEnd: { enabled: true, prompt },
+  })
+  const { handlers, attached } = setup({ settings })
+
+  // 先跑一个两步的轮次，让 turn-stopping 判定"这轮干过活"。
+  await runPreStep(handlers, undefined, { turn: 1, step: 1 })
+  await runPreStep(handlers, undefined, { turn: 1, step: 2 })
+  handlers.get('agent/turn-stopping')!({})
+
+  const decision = await runPreStep(handlers, undefined, { turn: 2, step: 1 }) as { messages: any[] }
+  assert.equal(decision.messages.length, 1, '轮末提醒应该追加一条消息')
+  const text = decision.messages[0].content[0].text
+  assert.ok(text.includes(prompt), `注入的应是设置里的提示词，实际：${text}`)
+  assert.ok(!text.includes('先 memory_save 记一条再继续'), '不应再注入内置默认文案')
+
+  const nudge = attached.current!.list().find((entry) => entry.channel === 'nudge' && entry.kind === 'evaluation')
+  assert.ok(nudge)
+  assert.equal(nudge!.delivery?.textChars, prompt.length, '审计的字数应是生效文本的长度')
+  assert.equal(nudge!.delivery?.textHash, hashAuditText(prompt), '审计的哈希应是生效文本的哈希')
+})
+
+test('轮末提醒:设置里留空时回退内置默认文案', async () => {
+  const settings = promptOnlySettings({ turnEnd: { enabled: true, prompt: '   ' } })
+  const { handlers } = setup({ settings })
+  await runPreStep(handlers, undefined, { turn: 1, step: 1 })
+  await runPreStep(handlers, undefined, { turn: 1, step: 2 })
+  handlers.get('agent/turn-stopping')!({})
+  const decision = await runPreStep(handlers, undefined, { turn: 2, step: 1 }) as { messages: any[] }
+  assert.equal(decision.messages.length, 1)
+  assert.ok(decision.messages[0].content[0].text.includes('先 memory_save 记一条再继续'))
+})
+
+test('策略段:系统提示用的是设置里的提示词,审计记生效文本', async () => {
+  const prompt = '## 自定义记忆策略\n先查再问。'
+  const settings = promptOnlySettings({ policy: { enabled: true, prompt } })
+  const { handlers, sections, attached } = setup({ settings })
+  await runPreStep(handlers, undefined, { turn: 1, step: 1 })
+
+  const policySection = sections.find((section) => section.name === 'memory:policy')
+  assert.ok(policySection, '系统提示里应有策略段')
+  assert.equal(policySection.text(), prompt)
+
+  const policy = attached.current!.list().find((entry) => entry.channel === 'policy')
+  assert.ok(policy)
+  assert.equal(policy!.delivery?.textChars, prompt.length)
+  assert.equal(policy!.delivery?.textHash, hashAuditText(prompt))
+})
+
+test('召回块:系统注入的是设置里的表头(长文形态与印象形态各用各的)', async () => {
+  const hit = { record: record('mem-1', '发布前先检查 devcred 凭据', ['release']), score: 0.9 }
+
+  // 长文形态:关掉印象形态，用 recall.prompt。
+  const plainPrompt = '自定义召回头：'
+  const plain = setup({
+    settings: promptOnlySettings({
+      recall: { ...defaultInjectSettings.recall, enabled: true, prompt: plainPrompt },
+      impression: { ...defaultInjectSettings.impression, enabled: false },
+    }),
+    search: async () => [hit],
+  })
+  const plainDecision = await runPreStep(plain.handlers) as { messages: any[] }
+  assert.equal(plainDecision.messages.length, 1)
+  const plainText = plainDecision.messages[0].content[0].text
+  assert.ok(plainText.startsWith(plainPrompt), `召回块表头应来自设置，实际：${plainText.slice(0, 60)}`)
+
+  // 印象形态:用 impression.prompt，不能被 recall.prompt 顶掉。
+  const impressionPrompt = '自定义印象头：'
+  const impression = setup({
+    settings: promptOnlySettings({
+      recall: { ...defaultInjectSettings.recall, enabled: true, prompt: plainPrompt },
+      impression: { ...defaultInjectSettings.impression, enabled: true, prompt: impressionPrompt },
+    }),
+    search: async () => [hit],
+  })
+  const impressionDecision = await runPreStep(impression.handlers) as { messages: any[] }
+  const impressionText = impressionDecision.messages[0].content[0].text
+  assert.ok(impressionText.startsWith(impressionPrompt), `印象形态表头应来自 impression.prompt，实际：${impressionText.slice(0, 60)}`)
+})

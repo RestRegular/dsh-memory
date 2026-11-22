@@ -103,7 +103,7 @@ maybeInjectDetailed(agent         , memory                  , cfg               
   }
 
   const sessionId = sessionIdOf(agent)
-  const seen = seenRuleLines(history)
+  const seen = seenRuleLines(history, cfg)
   const baseline = (sessionId === undefined ? undefined : this.baselines.get(sessionId)) ?? seedBaseline(records, seen)
   const changes                                                  = []
   const unseen = records.filter((record) => {

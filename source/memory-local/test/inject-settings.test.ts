@@ -52,6 +52,94 @@ test('mergeInjectSettings: 只合并已知字段,其余保持原值', () => {
   assert.equal(Object.hasOwn(merged, 'nope'), false)
 })
 
+test('0.45.0: 每条注入通道都有可改提示词,默认非空且留空回退默认', () => {
+  // 默认值：每条会注入上下文的通道都得有一份内置文案（不能是空串，否则等于没注入）。
+  const prompts = [
+    defaultInjectSettings.recall.prompt,
+    defaultInjectSettings.impression.prompt,
+    defaultInjectSettings.digest.prompt,
+    defaultInjectSettings.digest.hintPrompt,
+    defaultInjectSettings.digest.hintFooter,
+    defaultInjectSettings.policy.prompt,
+    defaultInjectSettings.rules.prompt,
+    defaultInjectSettings.rules.deltaPrompt,
+    defaultInjectSettings.procedures.prompt,
+    defaultInjectSettings.turnEnd.prompt,
+  ]
+  for (const prompt of prompts) {
+    assert.equal(typeof prompt, 'string')
+    assert.ok(prompt.trim().length > 0, `内置默认提示词不能为空：${JSON.stringify(prompt)}`)
+  }
+
+  // 改了就生效。
+  const custom = normalizeInjectSettings({
+    recall: { prompt: '召回表头-自定义' },
+    impression: { prompt: '印象表头-自定义' },
+    digest: { prompt: '摘要表头-自定义', hintPrompt: '索引表头-自定义', hintFooter: '索引结尾-自定义' },
+    policy: { prompt: '策略-自定义' },
+    rules: { prompt: '规则表头-自定义', deltaPrompt: '增量表头-自定义' },
+    procedures: { prompt: '流程表头-自定义' },
+    turnEnd: { prompt: '提醒-自定义' },
+  })
+  assert.equal(custom.recall.prompt, '召回表头-自定义')
+  assert.equal(custom.impression.prompt, '印象表头-自定义')
+  assert.equal(custom.digest.prompt, '摘要表头-自定义')
+  assert.equal(custom.digest.hintPrompt, '索引表头-自定义')
+  assert.equal(custom.digest.hintFooter, '索引结尾-自定义')
+  assert.equal(custom.policy.prompt, '策略-自定义')
+  assert.equal(custom.rules.prompt, '规则表头-自定义')
+  assert.equal(custom.rules.deltaPrompt, '增量表头-自定义')
+  assert.equal(custom.procedures.prompt, '流程表头-自定义')
+  assert.equal(custom.turnEnd.prompt, '提醒-自定义')
+
+  // 留空 / 纯空白 / 非字符串一律回退内置默认：清空文本框不能让某条通道静默失效。
+  for (const dirty of ['', '   \n\t ', null, 42, {}, []]) {
+    const fallback = normalizeInjectSettings({
+      recall: { prompt: dirty },
+      impression: { prompt: dirty },
+      digest: { prompt: dirty, hintPrompt: dirty, hintFooter: dirty },
+      policy: { prompt: dirty },
+      rules: { prompt: dirty, deltaPrompt: dirty },
+      procedures: { prompt: dirty },
+      turnEnd: { prompt: dirty },
+    })
+    assert.equal(fallback.recall.prompt, defaultInjectSettings.recall.prompt, `recall 应回退：${String(dirty)}`)
+    assert.equal(fallback.impression.prompt, defaultInjectSettings.impression.prompt)
+    assert.equal(fallback.digest.prompt, defaultInjectSettings.digest.prompt)
+    assert.equal(fallback.digest.hintPrompt, defaultInjectSettings.digest.hintPrompt)
+    assert.equal(fallback.digest.hintFooter, defaultInjectSettings.digest.hintFooter)
+    assert.equal(fallback.policy.prompt, defaultInjectSettings.policy.prompt)
+    assert.equal(fallback.rules.prompt, defaultInjectSettings.rules.prompt)
+    assert.equal(fallback.rules.deltaPrompt, defaultInjectSettings.rules.deltaPrompt)
+    assert.equal(fallback.procedures.prompt, defaultInjectSettings.procedures.prompt)
+    assert.equal(fallback.turnEnd.prompt, defaultInjectSettings.turnEnd.prompt)
+  }
+})
+
+test('0.45.0: 提示词随 settings.json 落盘,重启后读回来;merge 只改传入的那条', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-settings-'))
+  try {
+    const svc = fresh(dir)
+    svc.updateInjectSettings({ turnEnd: { enabled: true, prompt: '记一条再走。' }, rules: { prompt: '规则头' } })
+    svc.flushSync()
+
+    const reopened = fresh(dir)
+    assert.equal(reopened.injectSettings().turnEnd.prompt, '记一条再走。')
+    assert.equal(reopened.injectSettings().rules.prompt, '规则头')
+    // 没传的通道仍是默认值。
+    assert.equal(reopened.injectSettings().policy.prompt, defaultInjectSettings.policy.prompt)
+
+    // 只改一条提示词不能把同组其它字段带回默认值。
+    const merged = reopened.updateInjectSettings({ rules: { deltaPrompt: '增量头' } })
+    assert.equal(merged.rules.prompt, '规则头')
+    assert.equal(merged.rules.deltaPrompt, '增量头')
+    assert.equal(merged.rules.enabled, defaultInjectSettings.rules.enabled)
+    reopened.flushSync()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('provider: updateInjectSettings 落盘,重启后读回来', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-settings-'))
   try {

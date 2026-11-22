@@ -15,11 +15,17 @@
 import type { MemoryRecord } from 'dsh-memory'
 import { estimateTokens } from '../../memory-local/src/rerank.ts'
 import type { ProceduresSettings } from '../../memory-local/src/inject-settings.ts'
+import { DEFAULT_PROCEDURES_PROMPT, resolvePrompt } from '../../memory-local/src/inject-prompts.ts'
 import { supersededIds } from './digest.ts'
 import { textHasTag } from './signals.ts'
 
-export const PROCEDURES_HEADER =
-  '以下是当前工作区 / 任务相关的流程索引（按需用 memory_get <id> 取全文）：'
+/** 内置默认表头。0.45.0 起可改（`procedures.prompt`），渲染用 `proceduresHeader(cfg)`。 */
+export const PROCEDURES_HEADER = DEFAULT_PROCEDURES_PROMPT
+
+/** 生效的表头：设置里留空回退内置默认。 */
+export function proceduresHeader(cfg: ProceduresSettings): string {
+  return resolvePrompt(cfg.prompt, PROCEDURES_HEADER)
+}
 
 export interface ProcedureContext {
   /** 本轮用户消息(可能还没有;系统提示可能先于 pre-step 组装)。 */
@@ -137,7 +143,8 @@ export function renderProcedureIndex(
       a.content.localeCompare(b.content),
   )
 
-  let tokens = estimateTokens(PROCEDURES_HEADER) + 4
+  const header = proceduresHeader(cfg)
+  let tokens = estimateTokens(header) + 4
   const lines: string[] = []
   const ids: string[] = []
   let omittedTopK = 0
@@ -169,7 +176,7 @@ export function renderProcedureIndex(
 
   if (lines.length === 0) return null
   return {
-    text: `${PROCEDURES_HEADER}\n${lines.join('\n')}`,
+    text: `${header}\n${lines.join('\n')}`,
     tokens,
     count: lines.length,
     ids,

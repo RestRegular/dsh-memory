@@ -9,6 +9,7 @@ import type { MemoryHit, MemoryRecord } from 'dsh-memory'
 import { estimateTokens } from '../../memory-local/src/rerank.ts'
 import { normalizeScopeInput } from '../../memory-local/src/scope.ts'
 import { textHasTag } from './signals.ts'
+import { DEFAULT_IMPRESSION_PROMPT, DEFAULT_RECALL_PROMPT, resolvePrompt } from '../../memory-local/src/inject-prompts.ts'
 import { recordKindPrefix } from './digest.ts'
 import { InjectionState } from './state.ts'
 
@@ -23,6 +24,11 @@ export interface InjectConfig {
    * 默认集合是 provider 给的 [当前会话, 当前项目, global] —— 与 memory_search 的默认一致。
    */
   extraScopes?: string[]
+  /**
+   * 召回块的表头(面板「设置」里可改)。缺省 / 空白 → 内置默认。
+   * 印象形态用 RecallRenderOptions.prompt,两者口径不同所以分开。
+   */
+  prompt?: string
 }
 
 export const defaultInjectConfig: InjectConfig = {
@@ -210,6 +216,8 @@ export interface RecallRenderOptions {
   chars?: number
   /** 是否用"印象"形态。 */
   impression?: boolean
+  /** 印象形态的表头(面板可改);缺省 / 空白 → 内置默认。 */
+  prompt?: string
   /** 0.35.4：当前会话 id，传给 transform（钩子按会话判断时用）。 */
   sessionId?: string
   /**
@@ -260,9 +268,10 @@ export function renderRecallBlock(
   }
   const impression = options.impression === true
   const chars = impression ? (options.chars ?? 120) : 300
+  // 表头可改(0.45.0)：留空回退内置默认，注入路径不能因为清空文本框就少一段上下文。
   const header = impression
-    ? '以下是与你这次请求可能相关的记忆摘要：'
-    : '以下是与此请求可能相关的记忆，供参考（需要正文用 memory_get；与本轮无关的用 memory_block 屏蔽，可逆、不删数据）：'
+    ? resolvePrompt(options.prompt, DEFAULT_IMPRESSION_PROMPT)
+    : resolvePrompt(cfg.prompt, DEFAULT_RECALL_PROMPT)
   let tokens = estimateTokens(header) + 4
   const lines: string[] = []
   const ids: string[] = []
