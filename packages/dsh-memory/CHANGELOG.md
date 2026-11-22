@@ -2,6 +2,16 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.43.0 — memory_list 支持按日期筛选（since / until / timeField）
+
+- **新功能**：`memory_list` 新增 `since` / `until` / `timeField` 三个参数，按时间窗口筛选记忆，不再只能取"最近 N 条"。
+  - `since` / `until` 接受 ISO 8601 日期、日期时间或毫秒时间戳，均为**闭区间**（含边界）。纯 `YYYY-MM-DD` 按**本地时区**解释：`since` = 当天 00:00:00.000，`until` = 当天 23:59:59.999（整天都算进来，不再有 `new Date('YYYY-MM-DD')` 被当 UTC 午夜的坑）。
+  - `timeField` = `updatedAt`（默认，与列表排序 / 上下文去重版本一致）或 `createdAt`。
+  - 时间筛选在 provider 的 `list()` 里**先于 `slice` 应用**，工具层再兜一层过滤（兼容老 provider），翻页时拿到的是筛选后的正确窗口，而不是全量头部。
+  - 非法日期 / 时间戳立即报 `INVALID_TIME_FILTER`、`timeField` 非法报 `INVALID_TIME_FIELD`，不静默返回空列表。
+- **为什么顺带解决"翻页只见同一批 ID"**：`memory_list` 没有 offset 游标，重复调用总取同一批 top-N，叠加上上下文去重后正文被清空、只剩裸 ID。按日期切片后每批是不同的记录，`(id, updatedAt)` 未被标记过，正文正常返回。
+- 回归守卫：新增 `time-filter.test.ts`（纯日期本地边界 / 闭区间 / createdAt 回退 / 非法值）与 4 条 `tools.test.ts` 用例（窗口过滤、timeField、参数透传、非法值报错）。全套 709 例 0 失败。
+
 ## 0.42.3 — 修复下拉列表滚动时悬停摘要卡片往下掉
 
 - **问题**：0.42.2 里摘要卡片的垂直位置锚在「行号 × 行高」这个绝对偏移上。列表滚动后，光标下的行在屏幕上没动，但它的行号变大，`margin-top` 跟着变大，卡片就越掉越远。

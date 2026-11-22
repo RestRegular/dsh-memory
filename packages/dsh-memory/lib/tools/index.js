@@ -13,6 +13,7 @@
                                              
 import { isAbsolute, resolve } from 'node:path'
 import { canonicalWorkspacePath, defaultScopeDescription, normalizeScopeInput, resolveScopeRef } from '../provider/scope.js'
+import { resolveTimeWindow, withinTimeWindow,                 } from '../provider/time-filter.js'
 
 /** Shape each tool shares: JSON-schema parameters + canonical output value. */
                                  
@@ -1846,6 +1847,18 @@ function listWantsFullTime(fields                               )          {
                                                                
      
                    
+     
+                                           
+                                            
+     
+                         
+     
+                                                    
+                             
+     
+                         
+                                                               
+                                       
                                       
                       
  
@@ -1873,7 +1886,7 @@ function listWantsFullTime(fields                               )          {
 export function memoryListTool(opts                    )                                 {
   return {
     name: 'memory_list',
-    description: 'List saved memories, most recently updated first.',
+    description: 'List saved memories, most recently updated first. Optional since/until filter by date (inclusive); timeField picks updatedAt (default) or createdAt.',
     parameters: {
       scope: { type: 'string', description: "省略=当前会话；'all'=所有作用域；其他值只列该作用域。" },
       kind: { type: 'string' },
@@ -1883,6 +1896,19 @@ export function memoryListTool(opts                    )                        
         type: 'array',
         items: { type: 'string' },
         description: '可选字段。`full_time` = 每条记忆给出精确到秒的完整时间戳（createdAt / updatedAt / expiresAt）；不传则不带。',
+      },
+      since: {
+        type: 'string',
+        description: '起始时间（含）：ISO 8601 日期（YYYY-MM-DD，按本地时区取当天 00:00）/日期时间，或毫秒时间戳字符串。只列该时刻之后更新（或创建）的记忆。',
+      },
+      until: {
+        type: 'string',
+        description: '结束时间（含）：格式同 since；纯 YYYY-MM-DD 按本地时区取当天 23:59:59.999，整天都算进来。只列该时刻之前更新（或创建）的记忆。',
+      },
+      timeField: {
+        type: 'string',
+        enum: ['updatedAt', 'createdAt'],
+        description: '时间筛选针对哪个字段：updatedAt（默认，与列表排序/上下文去重版本一致）或 createdAt。',
       },
     },
     async execute(args          , exec          )                      {
@@ -1915,15 +1941,24 @@ export function memoryListTool(opts                    )                        
       let withheld                        
       try {
         const limit = args.limit !== undefined ? Math.min(200, Math.max(1, args.limit)) : 50
+        // 0.43.0：先解析时间窗（非法日期立刻报错，不让调用方拿到静默空列表）。
+        const window             = resolveTimeWindow({ since: args.since, until: args.until, timeField: args.timeField })
+        const hasWindow = window.since !== undefined || window.until !== undefined
         const raw = await service.list({
           ...(resolved.scope !== undefined ? { scope: resolved.scope } : {}),
           ...(scopes !== undefined ? { scopes } : {}),
           ...(args.kind ? { kind: args.kind } : {}),
+          // 时间筛选传给 provider，让它在 slice 之前过滤；老 provider 会忽略这些字段。
+          ...(window.since !== undefined ? { since: window.since } : {}),
+          ...(window.until !== undefined ? { until: window.until } : {}),
+          ...(hasWindow ? { timeField: window.timeField } : {}),
           // 多取一些候选,避免范围外记录挤掉范围内结果。
           limit: Math.min(200, Math.max(limit, limit * 2)),
         })
-        const inside = raw.filter((record) => recordAllowed(decide, policy, record.scope, record.kind))
-        const outside = raw.filter((record) => !recordAllowed(decide, policy, record.scope, record.kind))
+        // 工具层再兜一层：老 provider 忽略时间字段时这里仍然按窗口过滤。
+        const filtered = hasWindow ? raw.filter((r) => withinTimeWindow(r, window)) : raw
+        const inside = filtered.filter((record) => recordAllowed(decide, policy, record.scope, record.kind))
+        const outside = filtered.filter((record) => !recordAllowed(decide, policy, record.scope, record.kind))
         const needsApproval = outside.filter((record) => recordRequestable(decide, policy, record.scope, record.kind))
         let verdict                             
         if (needsApproval.length > 0 && level === 'normal') {
@@ -1948,7 +1983,7 @@ export function memoryListTool(opts                    )                        
               : needsApproval.filter((record) => verdict .allowedIds .has(record.id))
         const insideIds = new Set(inside.map((record) => record.id))
         const approvedOutsideIds = new Set(approvedOutside.map((record) => record.id))
-        const selected = raw
+        const selected = filtered
           .filter((record) => insideIds.has(record.id) || approvedOutsideIds.has(record.id))
           .slice(0, limit)
         const wantFullTime = listWantsFullTime(args.fields)

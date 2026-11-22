@@ -262,6 +262,16 @@ memory_list({ "limit": 20 })
 memory_forget({ "id": "3f2a9c1d", "description": "删除过期的临时结论" }) // 按内容删：memory_forget({ query, scope })
 ```
 
+**`memory_list` 按日期筛选（0.43.0）**：`since` / `until` 都是**闭区间**，接受 ISO 8601 日期、日期时间或毫秒时间戳；纯 `YYYY-MM-DD` 按**本地时区**取整天（`since` = 00:00:00.000，`until` = 23:59:59.999）。`timeField` 选 `updatedAt`（默认，与排序 / 去重版本一致）或 `createdAt`。
+
+```jsonc
+memory_list({ "since": "2026-11-22", "description": "列 11-22 当天更新的记忆" })              // 本地时区整天
+memory_list({ "since": "2026-11-20", "until": "2026-11-22", "description": "列这三天" })
+memory_list({ "since": "2026-11-01T00:00:00Z", "timeField": "createdAt", "description": "本月创建的" })
+```
+
+这同时绕开了「翻页只见同一批裸 ID」：`memory_list` 没有 offset 游标，重复调用总取同一批 top-N，叠加上上下文去重后正文被清空只剩 ID；按日期切片后每批是不同的记录，`(id, updatedAt)` 未被标记过，正文正常返回。需要某条正文时仍可直接 `memory_get({ ids: [...] })`（不走去重）。
+
 `memory_search` 不再返回正文：每条只有 8 位 id、作用域、类型、标签和摘要（默认 160 字，
 `summaryChars` 可调 20~2000）。判断相关后用 `memory_get` 取正文或元数据：
 

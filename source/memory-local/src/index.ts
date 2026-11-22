@@ -15,6 +15,7 @@ import type {
   MemoryServiceApi,
 } from 'dsh-memory'
 import { MemoryStore, newId, normalizeSupersedes, scopeFileName, supersedesOf, type ScopeStore, type SupersedesValue } from './store.ts'
+import { resolveTimeWindow, withinTimeWindow } from './time-filter.ts'
 import {
   canonicalWorkspacePath,
   defaultScopeDescription,
@@ -4067,6 +4068,12 @@ export class LocalMemoryService implements MemoryServiceApi {
       }
     }
     if (input.kind) records = records.filter((r) => r.kind === input.kind)
+    // 0.43.0：时间筛选必须在 slice 之前，否则 limit 截的是全量头部，翻页拿不到正确窗口。
+    const timeInput = internal as MemoryListInput & { since?: unknown; until?: unknown; timeField?: unknown }
+    if (timeInput.since !== undefined || timeInput.until !== undefined) {
+      const window = resolveTimeWindow({ since: timeInput.since, until: timeInput.until, timeField: timeInput.timeField })
+      records = records.filter((r) => withinTimeWindow(r, window))
+    }
     if (visibleFilter !== undefined) records = records.filter((r) => visibleFilter(r.scope, r.kind))
     if (blockedFilter !== undefined) records = records.filter((r) => !blockedFilter({ id: r.id, scope: r.scope }))
     records.sort((a, b) => b.updatedAt - a.updatedAt)

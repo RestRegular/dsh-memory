@@ -256,6 +256,76 @@ test('memory_list fields=full_time：给出精确到秒的完整时间戳且渲�
   assert.ok(text.includes('过期 2027-01-01T00:00:00Z'))
 })
 
+test('memory_list 按 since/until 过滤：只返回时间窗内的记录（含边界），不依赖 provider 支持 (0.43.0)', async () => {
+  const day = (d: number) => Date.UTC(2026, 10, d)
+  const mk = (id: string, updatedAt: number, createdAt = updatedAt) => ({
+    id, scope: 'global', kind: 'fact' as const, content: `记录 ${id}`,
+    tags: [], importance: 0.5, createdAt, updatedAt,
+  })
+  const records = [
+    mk('r1', day(20)),
+    mk('r2', day(21)),
+    mk('r3', day(22)),
+    mk('r4', day(23)),
+  ]
+  // list 忽略一切筛选参数 → 逼工具层自己兜底过滤（老 provider 场景）
+  const listService = { ...service, list: async () => records }
+  const tool = memoryListTool({ getService: () => listService })
+
+  const since = await tool.execute({ since: '2026-11-21T00:00:00.000Z', until: '2026-11-22T23:59:59.999Z' })
+  assert.deepEqual(since.records.map((r) => r.id), ['r2', 'r3'], '闭区间命中两天')
+
+  const exact = await tool.execute({ since: day(22), until: day(22) })
+  assert.deepEqual(exact.records.map((r) => r.id), ['r3'], '同一毫秒是闭区间单点')
+
+  const open = await tool.execute({ since: day(23) })
+  assert.deepEqual(open.records.map((r) => r.id), ['r4'], '只给 since 时无上界')
+})
+
+test('memory_list timeField=createdAt：按创建时间而非更新时间筛选 (0.43.0)', async () => {
+  const day = (d: number) => Date.UTC(2026, 10, d)
+  const mk = (id: string, createdAt: number, updatedAt: number) => ({
+    id, scope: 'global', kind: 'fact' as const, content: `记录 ${id}`,
+    tags: [], importance: 0.5, createdAt, updatedAt,
+  })
+  // r1 创建早但最近更新；r2 创建晚但没动过。按 createdAt 过滤时只认 r2。
+  const records = [mk('r1', day(1), day(25)), mk('r2', day(22), day(22))]
+  const listService = { ...service, list: async () => records }
+  const tool = memoryListTool({ getService: () => listService })
+
+  const byCreated = await tool.execute({ since: day(20), timeField: 'createdAt' })
+  assert.deepEqual(byCreated.records.map((r) => r.id), ['r2'])
+
+  const byUpdated = await tool.execute({ since: day(20), timeField: 'updatedAt' })
+  assert.deepEqual(byUpdated.records.map((r) => r.id).sort(), ['r1', 'r2'])
+})
+
+test('memory_list 把时间窗参数透传给 provider，让它在 slice 之前过滤 (0.43.0)', async () => {
+  let seen: Record<string, unknown> | undefined
+  const listService = {
+    ...service,
+    list: async (input: Record<string, unknown>) => { seen = input; return [] },
+  }
+  const tool = memoryListTool({ getService: () => listService })
+  const since = Date.UTC(2026, 10, 22)
+  await tool.execute({ since, until: since + 1, timeField: 'createdAt' })
+  assert.equal(seen?.since, since)
+  assert.equal(seen?.until, since + 1)
+  assert.equal(seen?.timeField, 'createdAt')
+})
+
+test('memory_list 非法日期立即报错，不静默返回空列表 (0.43.0)', async () => {
+  const tool = memoryListTool({ getService: () => service })
+  await assert.rejects(
+    () => tool.execute({ since: '不是日期' }),
+    (error: { code?: string }) => error.code === 'INVALID_TIME_FILTER',
+  )
+  await assert.rejects(
+    () => tool.execute({ timeField: 'lastAccessedAt' as never }),
+    (error: { code?: string }) => error.code === 'INVALID_TIME_FIELD',
+  )
+})
+
 test('memory_search 范围外命中默认只给索引,不弹审批;requestApproval=true 才逐条允许', async () => {
   const outside = {
     id: 'outside-1',
