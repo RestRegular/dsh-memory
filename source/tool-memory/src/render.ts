@@ -20,7 +20,7 @@ import { scopeDisplayName } from '../../memory-local/src/scope.ts'
 export type ScopeLabel = (scope: string) => string
 
 /** 有内容没返回时的原因。 */
-export type WithheldInfo = { count: number; reason: WithheldReason }
+export type WithheldInfo = { count: number; reason: WithheldReason; detail?: string }
 
 /**
  * 上下文去重的提示语(0.21.0)。memory_search / memory_list 里已经出现过的条目
@@ -47,7 +47,7 @@ export function renderWithheldNote(withheld: WithheldInfo | undefined): string {
     case 'out-of-scope':
       return `另有 ${count} 条记忆在本会话的可见域外（限制等级：普通限制），本次没有弹审批。要看正文需要显式发起：用 memory_search 带 requestApproval=true 重发同一次搜索（会弹审批），或用 memory_scopes(action="request") 申请该作用域的会话权限。`
     case 'rejected':
-      return `另有 ${count} 条记忆在本会话的可见域外，用户拒绝了本次访问（限制等级：普通限制），未返回。如确实需要，请让用户调整「记忆范围」后重试。`
+      return `另有 ${count} 条记忆在本会话的可见域外，用户拒绝了本次访问（限制等级：普通限制），未返回。${withheld.detail !== undefined && withheld.detail !== '' ? `用户给出的拒绝原因：${withheld.detail}。` : ''}如确实需要，请让用户调整「记忆范围」后重试。`
     case 'timeout':
       return `另有 ${count} 条记忆在本会话的可见域外，审批在 5 分钟内没有得到答复，已按拒绝处理，未返回。如确实需要，请让用户调整「记忆范围」后重试。`
     case 'unavailable':

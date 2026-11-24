@@ -760,6 +760,8 @@ export function resolveConfig(config                    = {})                 {
                                            
                                     
                        
+                                               
+                 
  
 
 /**
@@ -769,6 +771,13 @@ export function resolveConfig(config                    = {})                 {
  * 裸字符串（`'allowed-once'` / `'rejected'` / `'timeout'`）。新代码一律按对象读取，
  * 但为了让老实现继续工作，这里统一折一次。
  */
+/** 拒绝原因的清洗：只收字符串、压空白、截到 500 字；空串视为没有。 */
+function normalizedApprovalReason(raw         )                     {
+  if (typeof raw !== 'string') return undefined
+  const text = raw.replace(/\s+/g, ' ').trim().slice(0, 500)
+  return text === '' ? undefined : text
+}
+
 export function normalizeApprovalAnswer(raw         )                           {
   if (typeof raw === 'string') {
     const outcome                            = raw === 'allowed-once' || raw === 'rejected' || raw === 'timeout'
@@ -777,14 +786,20 @@ export function normalizeApprovalAnswer(raw         )                           
     return { outcome }
   }
   if (raw !== null && typeof raw === 'object') {
-    const item = raw                                               
+    const item = raw                                                                 
     const outcome                            = item.outcome === 'allowed-once' || item.outcome === 'rejected' || item.outcome === 'timeout'
       ? item.outcome
       : 'rejected'
     const ids = Array.isArray(item.allowedIds)
       ? [...new Set(item.allowedIds.map(String).filter((id) => id !== ''))]
       : undefined
-    return ids !== undefined ? { outcome, allowedIds: ids } : { outcome }
+    // 0.50.0：拒绝原因只挂在 rejected 上，且只在用户真的填了时才带。
+    const reason = outcome === 'rejected' ? normalizedApprovalReason(item.reason) : undefined
+    return {
+      outcome,
+      ...(ids !== undefined ? { allowedIds: ids } : {}),
+      ...(reason !== undefined ? { reason } : {}),
+    }
   }
   return { outcome: 'rejected' }
 }
@@ -816,6 +831,8 @@ export function normalizeApprovalAnswer(raw         )                           
                      
                            
                         
+                               
+                 
  
 
 /** 一条屏蔽的对外视图（面板 / 工具）。 */
@@ -911,6 +928,8 @@ export class LocalMemoryService                             {
   /** 普通限制下等待用户审批的范围外访问(按审批 id)。 */
                    pendingApprovals = new Map                                   ()
           approvalSeq = 0
+  /** 最近一次钩子审批被拒时用户填写的原因（0.50.0，只在内存里暂存给工具回报）。 */
+          lastHookRejectReason                    
   /**
    * 会话 id → live session 的只读查询(用于沿 parentSession 链继承可见范围)。
    * 宿主侧 apply.ts 注入;旧宿主 / 测试里没有时退化为只看当前会话。
@@ -1106,7 +1125,14 @@ export class LocalMemoryService                             {
       this.hooks.approve(id, hashHookCode(hook.code))
       return 'approved'
     }
+    // 0.50.0：拒绝原因只影响回报文案，不改变钩子的未批准状态。
+    if (answer.outcome === 'rejected' && answer.reason !== undefined) this.lastHookRejectReason = answer.reason
     return answer.outcome === 'timeout' ? 'timeout' : answer.outcome === 'unavailable' ? 'unavailable' : 'rejected'
+  }
+
+  /** 最近一次钩子审批被拒时用户填写的原因（0.50.0）。 */
+  hookRejectReason()                     {
+    return this.lastHookRejectReason
   }
 
   /** 真正跑一批钩子（工具 / 注入共用）。未批准的钩子不会执行。 */
@@ -2839,20 +2865,28 @@ export class LocalMemoryService                             {
   }
 
   /** 面板:回答一条待审批。返回 false = 已经不存在/已超时。 */
-  answerVisibilityApproval(id        , outcome                             , allowedIds                    )          {
+  answerVisibilityApproval(
+    id        ,
+    outcome                             ,
+    allowedIds                    ,
+    reason         ,
+  )          {
     const pending = this.pendingApprovals.get(id)
     if (pending === undefined) return false
     this.pendingApprovals.delete(id)
     if (pending.timer !== undefined) clearTimeout(pending.timer)
+    // 0.50.0：用户在拒绝框里填的原因，只挂在最终真的按拒绝处理的答复上。
+    const cleanReason = normalizedApprovalReason(reason)
+    const rejectedReason = cleanReason !== undefined ? { reason: cleanReason } : {}
     let answer                          
     if (outcome !== 'allowed-once') {
-      answer = { outcome }
+      answer = { outcome, ...(outcome === 'rejected' ? rejectedReason : {}) }
     } else if (Array.isArray(allowedIds)) {
       const known = new Set(pending.items.map((item) => item.id))
       const picked = [...new Set(allowedIds.map(String).filter((itemId) => known.has(itemId)))]
       // 一条都没勾选 = 拒绝;全部勾选退化成老口径(不传 allowedIds = 全部允许)。
       answer = picked.length === 0
-        ? { outcome: 'rejected' }
+        ? { outcome: 'rejected', ...rejectedReason }
         : picked.length === known.size
           ? { outcome: 'allowed-once' }
           : { outcome: 'allowed-once', allowedIds: picked }
@@ -2869,6 +2903,7 @@ export class LocalMemoryService                             {
       mode: pending.mode ?? 'records',
       scopes: [...new Set(pending.items.map((item) => item.scope))],
       count: pending.items.length,
+      ...(answer.reason !== undefined ? { reason: answer.reason } : {}),
       outcome: answer.outcome,
     })
     pending.resolve(answer)
@@ -3120,7 +3155,11 @@ export class LocalMemoryService                             {
         ...(input.signal !== undefined ? { signal: input.signal } : {}),
       }))
       if (answer.outcome !== 'allowed-once') {
-        return { outcome: answer.outcome === 'timeout' ? 'timeout' : 'rejected', blocks: [], records, containsRule }
+        return {
+          outcome: answer.outcome === 'timeout' ? 'timeout' : 'rejected',
+          ...(answer.reason !== undefined ? { reason: answer.reason } : {}),
+          blocks: [], records, containsRule,
+        }
       }
       // 用户可能只勾了其中几条：只写被允许的那些。
       const allowed = answer.allowedIds !== undefined ? new Set(answer.allowedIds) : undefined

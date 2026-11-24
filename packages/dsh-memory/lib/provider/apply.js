@@ -430,6 +430,11 @@ export class CordisMemoryService extends Service {
     return this.impl.requestHookApproval(agent, id, options)
   }
 
+  /** 最近一次钩子审批被拒时用户填写的原因（0.50.0）。 */
+  hookRejectReason()                     {
+    return this.impl.hookRejectReason()
+  }
+
   runHooks(phase                                               , input                                               )                                             {
     return this.impl.runHooks(phase, input)
   }
@@ -653,9 +658,9 @@ export class CordisMemoryService extends Service {
     return this.impl.pendingVisibilityApprovalPresence(sessionId)
   }
 
-  /** 面板:回答一条待审批(可带逐条勾选的 allowedIds)。 */
-  answerVisibilityApproval(id        , outcome                             , allowedIds                    )          {
-    return this.impl.answerVisibilityApproval(id, outcome, allowedIds)
+  /** 面板:回答一条待审批(可带逐条勾选的 allowedIds 与拒绝原因)。 */
+  answerVisibilityApproval(id        , outcome                             , allowedIds                    , reason         )          {
+    return this.impl.answerVisibilityApproval(id, outcome, allowedIds, reason)
   }
 
   /** 写路径默认 scope(省略 scope 时落到哪)。 */

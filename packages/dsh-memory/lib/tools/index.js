@@ -57,6 +57,8 @@ import { resolveTimeWindow, withinTimeWindow,                 } from '../provide
                           
                                                   
                        
+                               
+                 
  
 
 /** provider 的 requestOutOfScope 可以返回裸字符串(旧口径)或带 allowedIds 的对象。 */
@@ -367,6 +369,8 @@ import { resolveTimeWindow, withinTimeWindow,                 } from '../provide
                                            
                                       
                                                                                                                                                                                          
+                                    
+                                         
                           
                                                                     
      
@@ -712,6 +716,14 @@ function withheldReasonFor(
 }
 
 /**
+ * 从审批结局取用户填写的拒绝原因（0.50.0）。只有真的拒绝且填了才返回，
+ * 让模型知道被拒的真实理由，而不是只听到一句笼统的「用户拒绝了」。
+ */
+function rejectionDetail(verdict                             )                     {
+  return verdict?.outcome === 'rejected' ? verdict.reason : undefined
+}
+
+/**
  * 0.27.0：普通限制下**没有发起审批**的范围外命中给模型的原因。
  * 与 withheldReasonFor 的差别：「整个作用域不在范围内」（普通限制下本可审批、
  * 现在只给索引）不再报成 read-disabled，而是 'out-of-scope'；
@@ -822,6 +834,8 @@ function recordsToApprovalItems(
                           
                                               
                           
+                               
+                 
  
 
 async function askOutOfScope(
@@ -855,9 +869,13 @@ async function askOutOfScope(
     const ids = outcome === 'allowed-once' && Array.isArray(decision.allowedIds)
       ? new Set(decision.allowedIds.map(String))
       : undefined
+    // 0.50.0：用户填写的拒绝原因（只挂在拒绝结局上）。
+    const reason = outcome === 'rejected' && typeof decision.reason === 'string' && decision.reason.trim() !== ''
+      ? decision.reason.replace(/\s+/g, ' ').trim().slice(0, 500)
+      : undefined
     // 逐条勾选但一条都没选中 = 用户拒绝了这次访问。
-    if (ids !== undefined && ids.size === 0) return { outcome: 'rejected' }
-    return { outcome, ...(ids !== undefined ? { allowedIds: ids } : {}) }
+    if (ids !== undefined && ids.size === 0) return { outcome: 'rejected', ...(reason !== undefined ? { reason } : {}) }
+    return { outcome, ...(ids !== undefined ? { allowedIds: ids } : {}), ...(reason !== undefined ? { reason } : {}) }
   } catch {
     return { outcome: 'unavailable' }
   }
@@ -870,12 +888,12 @@ function verdictAllows(verdict                 , id        )          {
 }
 
 /** 审批没通过时给模型的真实原因(写/删路径直接抛这个错误)。 */
-function visibilityError(outcome                , action                    , scope        )                  {
+function visibilityError(outcome                , action                    , scope        , detail         )                  {
   const verb = action === 'write' ? '写入' : '删除'
   if (outcome === 'rejected') {
     return new MemoryToolError(
       'VISIBILITY_REJECTED',
-      `用户拒绝了本次${verb}请求（作用域 ${scope}，当前限制等级：普通限制），没有执行。如需${verb}，请让用户调整「记忆范围」后重试。`,
+      `用户拒绝了本次${verb}请求（作用域 ${scope}，当前限制等级：普通限制），没有执行。${detail !== undefined && detail !== '' ? `用户给出的拒绝原因：${detail}。` : ''}如需${verb}，请让用户调整「记忆范围」后重试。`,
     )
   }
   if (outcome === 'timeout') {
@@ -1236,7 +1254,7 @@ export function memorySaveTool(opts                    )                        
           descriptionOf(args.description),
         )
         if (!verdictAllows(verdict, draft.id)) {
-          throw visibilityError(verdict.outcome === 'allowed-once' ? 'rejected' : verdict.outcome, 'write', target)
+          throw visibilityError(verdict.outcome === 'allowed-once' ? 'rejected' : verdict.outcome, 'write', target, rejectionDetail(verdict))
         }
         approved = true
       }
@@ -1559,7 +1577,7 @@ function applySummaryDedupe(opts                    , exec         , records    
                                        
                                           
      
-                                                      
+                                                                       
      
                                           
                          
@@ -1696,7 +1714,10 @@ export function memorySearchTool(opts                    )                      
           const reason = verdict !== undefined
             ? withheldReasonFor(decide, policy, deniedRecords.map((hit) => ({ scope: hit.record.scope, kind: hit.record.kind })), verdict)
             : outOfScopeReason(decide, policy, deniedRecords.map((hit) => ({ scope: hit.record.scope, kind: hit.record.kind })))
-          if (reason !== undefined) result.withheld = { count: denied, reason }
+          if (reason !== undefined) {
+            const detail = rejectionDetail(verdict)
+            result.withheld = { count: denied, reason, ...(detail !== undefined ? { detail } : {}) }
+          }
         }
         // 0.28.0：范围外清单（不含任何记忆内容）——命中了哪些作用域、各几条、
         // 这些作用域是干什么的。只在普通限制下给出：absolute 没有任何审批放行路径，
@@ -1798,7 +1819,7 @@ export function memoryForgetTool(opts                    )                      
               descriptionOf(args.description),
             )
             if (!verdictAllows(verdict, args.id)) {
-              throw visibilityError(verdict.outcome === 'allowed-once' ? 'rejected' : verdict.outcome, 'delete', blocked[0] .scope)
+              throw visibilityError(verdict.outcome === 'allowed-once' ? 'rejected' : verdict.outcome, 'delete', blocked[0] .scope, rejectionDetail(verdict))
             }
             approved = true
           }
@@ -1848,7 +1869,7 @@ export function memoryForgetTool(opts                    )                      
           descriptionOf(args.description),
         )
         if (!verdictAllows(verdict, `query:${scope}`)) {
-          throw visibilityError(verdict.outcome === 'allowed-once' ? 'rejected' : verdict.outcome, 'delete', scope)
+          throw visibilityError(verdict.outcome === 'allowed-once' ? 'rejected' : verdict.outcome, 'delete', scope, rejectionDetail(verdict))
         }
         approved = true
       }
@@ -1919,7 +1940,7 @@ function listWantsFullTime(fields                               )          {
                                   
                                  
      
-                                                      
+                                                                       
  
 
 export function memoryListTool(opts                    )                                 {
@@ -2049,7 +2070,10 @@ export function memoryListTool(opts                    )                        
           const approvedIdSet = new Set(approvedOutside.map((record) => record.id))
           const deniedRecords = outside.filter((record) => !approvedIdSet.has(record.id))
           const reason = withheldReasonFor(decide, policy, deniedRecords.map((record) => ({ scope: record.scope, kind: record.kind })), verdict)
-          if (reason !== undefined) withheld = { count: denied, reason }
+          if (reason !== undefined) {
+            const detail = rejectionDetail(verdict)
+            withheld = { count: denied, reason, ...(detail !== undefined ? { detail } : {}) }
+          }
         }
         // 0.40.0：before-inject 钩子也管工具结果 —— 正文返回前先过一遍脚本。
         // 放在去重之前：去重会把 content 清空，清空后就没有可改写的文本了。
@@ -2411,7 +2435,7 @@ export const DEFAULT_GET_FIELDS             = ['content', 'scope', 'kind', 'tags
                                        
                                                      
      
-                                                      
+                                                                       
  
 
 const FIELD_BY_LOWER = new Map                  (GET_FIELDS.map((field) => [field.toLowerCase(), field]))
@@ -2568,7 +2592,7 @@ export function memoryGetTool(opts                    )                         
           // 被可见域挡住的 id 不是"不存在":它们进 withheld 说明原因,不进 missing。
           missing: ids.filter((token) => !all.some((r) => r.id === token || r.id.startsWith(token))),
           ...(reason !== undefined
-            ? { withheld: { count: denied, reason } }
+            ? { withheld: { count: denied, reason, ...(rejectionDetail(verdict) !== undefined ? { detail: rejectionDetail(verdict) } : {}) } }
             : {}),
         }
       } catch (error) {
@@ -2610,6 +2634,7 @@ export function memoryGetTool(opts                    )                         
                   
                                      
                         
+                                            
                
  
 
@@ -2717,7 +2742,7 @@ export function memoryBlockTool(opts                    )                       
           notes.push(level === 'workspace' ? BLOCK_NOTE_WORKSPACE : BLOCK_NOTE_SESSION)
           if (result.containsRule === true) notes.push(BLOCK_NOTE_RULE)
         } else if (result.outcome === 'rejected') {
-          notes.push('用户拒绝了这次屏蔽；记忆保持原样。')
+          notes.push(`用户拒绝了这次屏蔽${result.reason !== undefined && result.reason !== '' ? `（原因：${result.reason}）` : ''}；记忆保持原样。`)
         } else if (result.outcome === 'timeout') {
           notes.push('审批超时，屏蔽没有生效；记忆保持原样。')
         } else {
@@ -2934,7 +2959,7 @@ export function memoryHooksTool(opts                    )                       
           action,
           hooks: [withApproval(saved)],
           ...(settings !== undefined ? { settings } : {}),
-          note: approvalNote(approval),
+          note: approvalNote(approval, approval === 'rejected' ? service.hookRejectReason?.() : undefined),
         }
       }
 
@@ -2986,7 +3011,7 @@ export function memoryHooksTool(opts                    )                       
         return {
           action,
           hooks: fresh !== undefined ? [withApproval(fresh)] : [],
-          note: approvalNote(outcome),
+          note: approvalNote(outcome, outcome === 'rejected' ? service.hookRejectReason?.() : undefined),
         }
       }
 
@@ -3121,14 +3146,14 @@ function throwErr(error       )        {
 }
 
 /** 审批结局 → 给模型的一句话。 */
-function approvalNote(outcome        )         {
+function approvalNote(outcome        , reason         )         {
   switch (outcome) {
     case 'approved':
       return '用户已批准这段代码，从现在起会按这个时机运行。'
     case 'not-needed':
       return '这段代码之前已经批准过（同一份代码不会重复打扰用户）。'
     case 'rejected':
-      return '用户拒绝运行这段代码：钩子已保存但**处于未批准状态，不会运行**。改脚本或让用户批准后才能生效。'
+      return `用户拒绝运行这段代码${reason !== undefined && reason !== '' ? `（原因：${reason}）` : ''}：钩子已保存但**处于未批准状态，不会运行**。改脚本或让用户批准后才能生效。`
     case 'timeout':
       return '等待用户批准超时：钩子已保存但**不会运行**，需要用户批准后才生效。'
     default:

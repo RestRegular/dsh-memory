@@ -753,6 +753,12 @@ window.__ModuleLoader__.load({
       '.mem-approval-hint{color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.55;flex:none}',
       // 这三行的 overflow:auto 会让 flex 的自动最小尺寸变成 0;若不锁 flex:none,
       // 条目列表一长,它们会和列表一起被压缩到 0 高 —— 审批时完全看不到查询/说明(0.22.2)。
+      // 0.50.0：申请信息统一成「标签 + 值」的两列网格。Agent 写的叫「申请理由」，
+      // 用户填的叫「拒绝原因」，两者不再混在一行里让人分不清是谁写的。
+      '.mem-approval-info{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 40%,transparent);flex:none}',
+      '.mem-approval-info-row{display:flex;align-items:flex-start;gap:10px;font-size:12px;line-height:1.55}',
+      '.mem-approval-info-label{flex:none;width:56px;text-align:right;color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:20px}',
+      '.mem-approval-info-value{flex:1;min-width:0}',
       '.mem-approval-command{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:13px;line-height:20px;word-break:break-word;white-space:pre-wrap;max-height:72px;overflow:auto;flex:none}',
       '.mem-approval-list{display:flex;flex-direction:column;gap:6px;overflow:auto;min-height:0;padding-bottom:2px}',
       '.mem-approval-item{display:flex;align-items:flex-start;gap:8px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 55%,transparent)}',
@@ -780,6 +786,14 @@ window.__ModuleLoader__.load({
       '.mem-approval-check:focus-visible{outline:1px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
       '.mem-approval-check .tick{font-size:11px;line-height:1}',
       '.mem-approval-err{padding:5px 8px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#d33) 10%,transparent);color:var(--dsw-alias-state-error-primary,#d33);font-size:12px;line-height:1.5}',
+      // 0.50.0：拒绝原因输入（可选）。放在动作行上方一整行，标签与输入框上下排布，
+      // 用户想填就填、不填也能直接拒绝；只在展开详情时出现，折叠时保持卡片简洁。
+      '.mem-approval-reason{display:flex;flex-direction:column;gap:4px;padding:10px 16px 0}',
+      '.mem-approval-reason-label{display:flex;align-items:baseline;gap:6px;font-size:11.5px;color:var(--dsw-alias-label-secondary)}',
+      '.mem-approval-reason-label .optional{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:11px}',
+      '.mem-approval-reason-input{box-sizing:border-box;width:100%;min-height:38px;max-height:96px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-family:inherit;font-size:12.5px;line-height:1.55;resize:vertical;outline:none;transition:border-color .12s ease}',
+      '.mem-approval-reason-input::placeholder{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary))}',
+      '.mem-approval-reason-input:focus{border-color:var(--dsw-alias-state-business-primary,#4176e6)}',
       '.mem-approval-actionrow{justify-content:flex-end;gap:8px;padding:14px 16px;display:flex}',
       '.mem-approval-reject{display:inline-flex;align-items:center;justify-content:center;height:32px;padding:0 16px;border:1px solid var(--dsw-alias-border-l2,var(--dsw-alias-border-l1));border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;cursor:pointer;transition:background .12s ease,border-color .12s ease,color .12s ease}',
       '.mem-approval-reject:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger,color-mix(in srgb,var(--dsw-alias-state-error-primary,#d33) 10%,transparent));color:var(--dsw-alias-state-error-primary,#d33);border-color:transparent}',
@@ -7434,6 +7448,8 @@ window.__ModuleLoader__.load({
       // approval id → 是否折叠了详情(0.22.1)。折叠只藏正文,strip 与动作行仍在,
       // 用户不必展开就能拒绝 / 允许。
       const [collapsed, setCollapsed] = React.useState({})
+      // approval id → 用户填写的拒绝原因(0.50.0，可选)。折叠 / 切会话时保留，回答后清掉。
+      const [rejectReason, setRejectReason] = React.useState({})
       const activeRef = React.useRef(true)
       const sessionRef = React.useRef(sessionId)
       sessionRef.current = sessionId
@@ -7461,6 +7477,7 @@ window.__ModuleLoader__.load({
         setApprovals([])
         setPicked({})
         setCollapsed({})
+        setRejectReason({})
         setError('')
         setBusy('')
         if (typeof sessionId !== 'string' || sessionId === '') return undefined
@@ -7540,10 +7557,20 @@ window.__ModuleLoader__.load({
         if (outcome === 'allowed-once' && selectable && Array.isArray(ids) && ids.length > 0 && ids.length < allIds.length) {
           body.allowedIds = ids
         }
+        // 0.50.0：拒绝原因只在拒绝时随请求带上；空串不发，避免无意义字段。
+        if (outcome === 'rejected') {
+          const text = typeof rejectReason[pending.id] === 'string' ? rejectReason[pending.id].trim() : ''
+          if (text !== '') body.reason = text
+        }
         api('approvals', body)
           .then(() => {
             setApprovals((prev) => prev.filter((item) => item.id !== pending.id))
             setPicked((prev) => {
+              const next = { ...prev }
+              delete next[pending.id]
+              return next
+            })
+            setRejectReason((prev) => {
               const next = { ...prev }
               delete next[pending.id]
               return next
@@ -7626,14 +7653,20 @@ window.__ModuleLoader__.load({
                     ? `工具 ${pending.tool || 'memory'} 申请访问可见域外的作用域`
                     : `工具 ${pending.tool || 'memory'} 请求${actionLabel}可见域外的记忆`),
                 h('div', { className: 'mem-approval-hint' }, actionHint),
-                h('div', { className: 'mem-approval-command' }, blockMode
-                  ? `屏蔽目标：${pending.query || '（未提供）'}`
-                  : grantMode
-                    ? `申请理由：${pending.query || '（未提供）'}`
-                    : `Agent 查询：${pending.query || '（未提供）'}`),
-                description !== ''
-                  ? h('div', { className: 'mem-approval-desc', title: description }, `Agent 说明：${description}`)
-                  : null,
+                // 0.50.0：申请信息分区成「标签 + 值」两列网格。标签明确是谁写的：
+                // 「Agent 申请 / 说明」= Agent 的请求理由，「屏蔽目标 / 申请理由」= 目标。
+                h('div', { className: 'mem-approval-info' },
+                  h('div', { className: 'mem-approval-info-row' },
+                    h('span', { className: 'mem-approval-info-label' }, blockMode ? '屏蔽目标' : grantMode ? '申请理由' : 'Agent 申请'),
+                    h('span', { className: 'mem-approval-info-value mem-approval-command' }, pending.query || '（未提供）'),
+                  ),
+                  description !== ''
+                    ? h('div', { className: 'mem-approval-info-row' },
+                        h('span', { className: 'mem-approval-info-label' }, 'Agent 说明'),
+                        h('span', { className: 'mem-approval-info-value mem-approval-desc', title: description }, description),
+                      )
+                    : null,
+                ),
                 selectable
                   ? h('div', { className: 'mem-approval-bulk' },
                       h('span', null, `已选 ${selectedCount} / ${allIds.length}`),
@@ -7729,6 +7762,28 @@ window.__ModuleLoader__.load({
                   }),
                 ),
               ),
+          // 0.50.0：拒绝原因（可选）。展开详情时出现；折叠时保持卡片简洁，
+          // 想填原因先点「展开」。textArea 有值就随「拒绝」一起提交。
+          !isCollapsed
+            ? h('div', { className: 'mem-approval-reason' },
+                h('label', { className: 'mem-approval-reason-label' },
+                  '拒绝原因',
+                  h('span', { className: 'optional' }, '（可选，填了会告诉 Agent）'),
+                ),
+                h('textarea', {
+                  className: 'mem-approval-reason-input',
+                  rows: 2,
+                  maxLength: 500,
+                  placeholder: '例如：这条记忆与当前任务无关 / 涉及敏感信息，暂不授权',
+                  value: typeof rejectReason[pending.id] === 'string' ? rejectReason[pending.id] : '',
+                  disabled: busy === pending.id,
+                  onChange: (event) => {
+                    const value = event && event.target && typeof event.target.value === 'string' ? event.target.value : ''
+                    setRejectReason((prev) => ({ ...prev, [pending.id]: value }))
+                  },
+                }),
+              )
+            : null,
           error ? h('div', { className: 'mem-approval-err' }, error) : null,
           h('div', { className: 'mem-approval-actionrow' },
             h('button', {

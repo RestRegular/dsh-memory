@@ -40,7 +40,13 @@ export interface ApprovalAuditEvent {
   permissions?: Array<'read' | 'write'>
   /** records 模式下涉及的条目数。 */
   count?: number
+  /** Agent 为这次申请写的用途说明（0.22.0）。 */
   description?: string
+  /**
+   * 用户拒绝时填写的原因（0.50.0，可选）。与 `description` 严格区分：
+   * description 是 Agent 写的申请理由，reason 是用户写的拒绝原因。
+   */
+  reason?: string
   outcome?: string
 }
 

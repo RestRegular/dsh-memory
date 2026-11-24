@@ -163,6 +163,40 @@ test('面板 /approvals:列待审批并回答一次', async () => {
   }
 })
 
+test('面板 /approvals:拒绝时可带用户填写的原因,进入答复与审批审计', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-visibility-'))
+  const svc = makeService(dir)
+  const session = { id: 's1', header: { id: 's1', cwd: 'D:/w' } }
+  try {
+    const verdict = svc.requestOutOfScope({ session }, {
+      tool: 'memory_search',
+      query: '发布流程',
+      items: [{
+        id: 'abc12345deadbeef', scope: 'global', kind: 'rule', content: '范围外规则正文',
+        tags: [], importance: 0.9, updatedAt: Date.now(), reason: 'scope',
+      }],
+    })
+    const list = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, get(`${ROUTE}/approvals?session=s1`), list)
+    const id = list.out.body.value.approvals[0].id
+
+    const answer = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, post(`${ROUTE}/approvals`, {
+      id, outcome: 'rejected', reason: '  这条记忆涉及敏感信息，  暂不授权  ',
+    }), answer)
+    assert.equal(answer.out.body.value.answered, true)
+    assert.deepEqual(await verdict, { outcome: 'rejected', reason: '这条记忆涉及敏感信息， 暂不授权' }, '拒绝原因清洗空白后带进答复')
+
+    const audit = svc.approvalAuditList()
+    const denied = audit.find((event) => event.id === id && event.event === 'denied')
+    assert.equal(denied?.reason, '这条记忆涉及敏感信息， 暂不授权', '审计里记下用户拒绝原因')
+    assert.equal(denied?.description, undefined, '拒绝原因不混进 Agent 的 description')
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('面板 /approvals?summary=1:只回审批身份与会话,不带条目正文', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-visibility-'))
   const svc = makeService(dir)

@@ -914,9 +914,11 @@ async function handle(ctx, routePath, req, res) {
         throw new ApiError(400, 'APPROVAL_IDS_INVALID', 'allowedIds 必须是字符串数组')
       }
       const allowedIds = Array.isArray(rawIds) ? rawIds.filter((value) => typeof value === 'string' && value !== '') : undefined
+      // 0.50.0：拒绝时可附带用户填写的原因（可选，空串/非字符串一律忽略）。
+      const reason = outcome === 'rejected' && typeof body?.reason === 'string' ? body.reason : undefined
       const answered = allowedIds === undefined
-        ? memory.answerVisibilityApproval(id, outcome)
-        : memory.answerVisibilityApproval(id, outcome, allowedIds)
+        ? memory.answerVisibilityApproval(id, outcome, undefined, reason)
+        : memory.answerVisibilityApproval(id, outcome, allowedIds, reason)
       writeJson(res, { ok: true, value: { answered } })
       return
     }

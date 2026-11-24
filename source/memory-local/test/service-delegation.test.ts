@@ -71,6 +71,8 @@ test('CordisMemoryService 暴露记忆钩子接口', () => {
     'runHooks', 'runHookTrial', 'parseForInject',
     // 0.40.0：工具结果通道 / 统计重置 / 调用审计。
     'parseForToolResult', 'resetHookStats', 'hookCallLog',
+    // 0.50.0：拒绝原因回读，漏转发则钩子审批卡填的原因到不了模型。
+    'hookRejectReason',
   ]) {
     assert.equal(
       typeof proto[name],
