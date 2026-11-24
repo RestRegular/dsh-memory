@@ -46,6 +46,7 @@ import {
 } from './blocks.ts'
 import { ScopeArchiveStore, type ScopeArchiveEntry } from './scope-archive.ts'
 import { SessionGrantsStore, type GrantPermission, type ScopeGrant } from './grants.ts'
+import { DelegationCapStore, type DelegationCap, type ScopeCapEntry } from './delegation-cap.ts'
 import { ApprovalAuditStore, type ApprovalAuditEvent, type ApprovalMode } from './approval-audit.ts'
 import {
   DEFAULT_HOOK_SETTINGS,
@@ -717,6 +718,41 @@ export interface ScopeGrantRequestResult {
   grants: ScopeGrant[]
 }
 
+// ---------------------------------------------------------------- 子代理授权（0.48.0）
+
+/** 一个作用域上当前有效的权限（来自可见域规则或 grant）。 */
+export interface EffectiveScopePermission {
+  scope: MemoryScope
+  permissions: GrantPermission[]
+  /** 权限来自哪里：可见域默认 / 显式规则 / grant。 */
+  source: 'policy' | 'grant'
+}
+
+/** 子代理创建时 memory_scopes 声明的一项。 */
+export interface SubagentScopeRequest {
+  scope: string
+  permissions: readonly GrantPermission[]
+}
+
+/** 把子代理申请拆成「父已有权限（直接放行）」和「超出父权限（需审批）」两部分。 */
+export interface SubagentGrantPlan {
+  /** 父会话当前有效权限全集（用于子集校验与审批提示）。 */
+  parentPermissions: EffectiveScopePermission[]
+  /** 落在父权限子集内、可以直接给子代理的项。 */
+  within: ScopeCapEntry[]
+  /** 超出父权限、需要用户 / 父代理批准的项。 */
+  beyond: ScopeCapEntry[]
+}
+
+export interface SubagentGrantCommitResult {
+  /** 写到子会话自己的 grant 文件里的授权。 */
+  childGrants: ScopeGrant[]
+  /** 若 retainInParent=true，同时写到父会话的 grant。 */
+  parentGrants: ScopeGrant[]
+  /** 子会话最终可继承的授权上限。 */
+  cap: DelegationCap
+}
+
 /**
  * 审批结论(0.21.0)。`allowedIds` 省略 = 本次请求的所有条目都允许;
  * 用户在审批卡里逐条勾选时只带被勾选的条目 id。
@@ -846,6 +882,11 @@ export class LocalMemoryService implements MemoryServiceApi {
   private readonly bindings: WorkspaceBindingsStore
   /** 会话级授权（Agent 申请、用户批准）；独立于 visibility 策略。 */
   private readonly grants: SessionGrantsStore
+  /**
+   * 子代理从父链可继承的授权上限（0.48.0）。没有文件 = 旧语义（全部继承）；
+   * 有文件则按 cap 收窄继承，子会话自己的 grant 不受限。
+   */
+  private readonly delegationCaps: DelegationCapStore
   /** 屏蔽（0.32.0）：Agent 主动藏起无关记忆；会话级 + 工作区级两层。 */
   private readonly blocks: MemoryBlocksStore
   /** 项目作用域归档（0.32.0）：绑定工作区，工作区删除/重加自动归档/恢复。 */
@@ -904,6 +945,7 @@ export class LocalMemoryService implements MemoryServiceApi {
     this.visibility = new SessionVisibilityStore({ root: this.cfg.storeDir })
     this.bindings = new WorkspaceBindingsStore({ root: this.cfg.storeDir })
     this.grants = new SessionGrantsStore({ root: this.cfg.storeDir })
+    this.delegationCaps = new DelegationCapStore({ root: this.cfg.storeDir })
     this.blocks = new MemoryBlocksStore({ root: this.cfg.storeDir })
     this.archive = new ScopeArchiveStore({ root: this.cfg.storeDir })
     this.approvalAudit = new ApprovalAuditStore({ root: this.cfg.storeDir })
@@ -2304,9 +2346,32 @@ export class LocalMemoryService implements MemoryServiceApi {
     return out
   }
 
+  /**
+   * 沿 parentSession 链收集 grant（0.48.0：按子会话的 delegation cap 收窄继承）。
+   * 链首（会话自己）的 grant 永远属于自己，不受 cap 限制；祖先的 grant 只在 cap
+   * 允许的 scope + permission 内继承。没有 cap 文件 = 旧语义（全部继承）。
+   */
   private resolveGrantChain(sessionId: string): ScopeGrant[] {
     const out: ScopeGrant[] = []
-    for (const id of this.sessionChain(sessionId)) out.push(...this.grants.list(id))
+    const chain = this.sessionChain(sessionId)
+    const cap = this.delegationCaps.get(sessionId)
+    chain.forEach((id, index) => {
+      const grants = this.grants.list(id)
+      for (const grant of grants) {
+        if (index === 0 || cap === undefined) {
+          // 会话自己的 grant 或没有上限：整条继承（旧语义）。
+          out.push(grant)
+          continue
+        }
+        // 祖先 grant：按 cap 逐权限收窄（一条 grant 可能同时含 read + write）。
+        const scope = this.canonicalScope(grant.scope)
+        const entry = cap.scopes.find((item) => this.canonicalScope(item.scope) === scope)
+        if (entry === undefined) continue
+        const allowed = grant.permissions.filter((permission) => entry.permissions.includes(permission))
+        if (allowed.length === 0) continue
+        out.push(allowed.length === grant.permissions.length ? grant : { ...grant, permissions: allowed })
+      }
+    })
     return out
   }
 
@@ -3271,6 +3336,150 @@ export class LocalMemoryService implements MemoryServiceApi {
       results.push({ scope: item.scope, permission: item.permission, status: 'granted' })
     }
     return { results, outcome: 'allowed-once', grants: granted }
+  }
+
+  // ---------------------------------------------------------------- 子代理授权（0.48.0）
+
+  /**
+   * 当前会话的「有效权限全集」：可见域规则允许的 + 已授权 grant 的。
+   * 收窄继承后，子代理能直接拿到的上限就是这份集合（父代理只能分出自己有的权限）。
+   */
+  effectiveScopePermissions(agent: unknown): EffectiveScopePermission[] {
+    const policy = this.visibilityPolicy(agent)
+    const out = new Map<string, EffectiveScopePermission>()
+    const level = policy.level
+    if (level === 'none') {
+      // none = 不限制；把当前已知作用域都列成可读写，避免误判「父无权」。
+      for (const scope of this.store.allScopes()) {
+        out.set(scope.scope, { scope: scope.scope as MemoryScope, permissions: ['read', 'write'], source: 'policy' })
+      }
+    }
+    for (const rule of policy.scopes) {
+      const scope = this.canonicalScope(rule.scope)
+      if (!this.scopeEnabled(scope)) continue
+      const permissions = new Set<GrantPermission>(['read'])
+      if (rule.write !== false) permissions.add('write')
+      out.set(scope, { scope, permissions: [...permissions], source: 'policy' })
+    }
+    for (const grant of this.validGrants(agent)) {
+      const scope = this.canonicalScope(grant.scope)
+      const existing = out.get(scope)
+      if (existing === undefined) {
+        out.set(scope, { scope, permissions: [...grant.permissions], source: 'grant' })
+      } else {
+        for (const permission of grant.permissions) {
+          if (!existing.permissions.includes(permission)) existing.permissions.push(permission)
+        }
+      }
+    }
+    return [...out.values()]
+  }
+
+  /**
+   * 把子代理创建时的 memory_scopes 申请拆成「父已有权限」与「超出部分」。
+   * 缺省申请 = 父会话当前有效权限全集（与旧的「全部继承」语义一致）。
+   */
+  planSubagentGrants(agent: unknown, requested?: readonly SubagentScopeRequest[]): SubagentGrantPlan {
+    const parentPermissions = this.effectiveScopePermissions(agent)
+    const byScope = new Map<string, Set<GrantPermission>>()
+    for (const item of parentPermissions) byScope.set(item.scope, new Set(item.permissions))
+    const wants = new Map<string, Set<GrantPermission>>()
+    if (requested === undefined || requested.length === 0) {
+      for (const item of parentPermissions) wants.set(item.scope, new Set(item.permissions))
+    } else {
+      for (const raw of requested) {
+        const scope = this.canonicalScope(raw.scope)
+        const permissions = new Set<GrantPermission>(
+          raw.permissions.filter((permission): permission is GrantPermission => permission === 'read' || permission === 'write'),
+        )
+        if (permissions.size === 0) permissions.add('read')
+        const prev = wants.get(scope) ?? new Set<GrantPermission>()
+        for (const permission of permissions) prev.add(permission)
+        wants.set(scope, prev)
+      }
+    }
+    const within: ScopeCapEntry[] = []
+    const beyond: ScopeCapEntry[] = []
+    for (const [scope, permissions] of wants) {
+      const allowed = byScope.get(scope) ?? new Set<GrantPermission>()
+      const inside = [...permissions].filter((permission) => allowed.has(permission))
+      const outside = [...permissions].filter((permission) => !allowed.has(permission))
+      if (inside.length > 0) within.push({ scope, permissions: inside })
+      if (outside.length > 0) beyond.push({ scope, permissions: outside })
+    }
+    return { parentPermissions, within, beyond }
+  }
+
+  /**
+   * 把审批通过的子代理授权落盘：收窄子会话的继承上限、可选地在父会话保留新权限。
+   * 子会话自己的 grant 也写入一份 —— 这样即使之后父会话撤销授权，子会话已拿到的
+   * 权限仍然有效（父代理批准即放权给该子代理）。
+   */
+  commitSubagentGrants(
+    parentAgent: unknown,
+    childSessionId: string,
+    grants: ReadonlyArray<{ scope: string; permissions: readonly GrantPermission[] }>,
+    options: { retainInParent?: boolean; grantedBy?: string } = {},
+  ): SubagentGrantCommitResult {
+    const parentSessionId = this.rawSessionIdOf(parentAgent)
+    const by = options.grantedBy ?? 'parent-agent'
+    const normalized = grants.map((item) => ({ scope: this.canonicalScope(item.scope), permissions: item.permissions }))
+    // 1) 收窄子会话的继承上限（只含本次提交的授权）。
+    const cap = this.delegationCaps.set({ sessionId: childSessionId, scopes: normalized, grantedBy: by })
+    // 2) 给子会话自己写 grant（own grant 不受 cap 限制）。
+    const childGrants: ScopeGrant[] = []
+    for (const item of normalized) {
+      for (const permission of item.permissions) {
+        const meta = this.meta.get(item.scope)
+        childGrants.push(this.grants.add(childSessionId, {
+          scope: item.scope,
+          permissions: [permission],
+          grantedBy: by,
+          ...(meta !== undefined ? { scopeGeneration: meta.generation } : {}),
+        }))
+      }
+    }
+    // 3) 父会话保留新审批的权限范围（主代理保留新权限）。
+    const parentGrants: ScopeGrant[] = []
+    if (options.retainInParent === true && parentSessionId !== undefined) {
+      for (const item of normalized) {
+        for (const permission of item.permissions) {
+          const meta = this.meta.get(item.scope)
+          parentGrants.push(this.grants.add(parentSessionId, {
+            scope: item.scope,
+            permissions: [permission],
+            grantedBy: 'user',
+            ...(meta !== undefined ? { scopeGeneration: meta.generation } : {}),
+          }))
+          this.recordPermissionNotice(parentSessionId, {
+            event: 'granted',
+            scope: item.scope,
+            permissions: [permission],
+            by: 'agent',
+          })
+        }
+      }
+    }
+    for (const item of normalized) {
+      this.approvalAudit.append({
+        at: Date.now(),
+        event: 'granted',
+        id: `subagent-${childSessionId}`,
+        sessionId: childSessionId,
+        tool: 'subagent',
+        action: 'grant',
+        mode: 'grant',
+        scopes: [item.scope],
+        permissions: [...item.permissions],
+        outcome: 'granted',
+      })
+    }
+    return { childGrants, parentGrants, cap }
+  }
+
+  /** 读取某会话的授权上限（面板 / 诊断）。 */
+  delegationCap(sessionId: string): DelegationCap | undefined {
+    return this.delegationCaps.get(sessionId)
   }
 
   /** 面板 / 诊断：当前会话的有效授权（含父会话继承）。 */

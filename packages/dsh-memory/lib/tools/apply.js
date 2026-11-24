@@ -13,6 +13,8 @@
  * 人看得懂的标签(会话标题只有这一层能拿到)。
  */
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { installSubagentToolShadows } from './subagent-tools.js'
+import { relayToParent, notifyChildGrantUpdated,                         } from './parent-gateway.js'
 import {
   memoryTools,
                         
@@ -80,12 +82,18 @@ export function apply(ctx     , config                   = {}) {
       return undefined
     }
   }
+  /** 0.48.0：子代理 → 主代理 授权申请网关（进程内待处理队列）。 */
+  const parentGrantRequests = new Map                            ()
   const opts                     = {
     getService: () => memory,
     defaultScope: config.defaultScope ?? 'session',
     projectScope: config.projectScope,
     contextDedup,
+    relayToParent: (exec, input) => relayToParent(ctx, exec, input, parentGrantRequests),
   }
+  /** 主代理授权成功后回执子代理（memory_scopes target_session 路径）。 */
+  const notifyChild = (parentAgent         , childSessionId        , scopes                                                                ) =>
+    notifyChildGrantUpdated(ctx, parentAgent, childSessionId, scopes)
   const tools = memoryTools(opts)
 
   /**
@@ -182,8 +190,14 @@ export function apply(ctx     , config                   = {}) {
     return [body, summary].filter((part) => part !== '').join('\n')
   })
 
-  register(tools.memory_scopes, (value, _args, exec) => {
+  register(tools.memory_scopes, (value, args, exec) => {
     const agent = (exec                                   )?.agent
+    // 0.48.0：父代理用 target_session 授权成功后，回一条消息给子代理。
+    // 渲染回调是同步的，fire-and-forget 发送即可（失败不影响授权本身）。
+    const result = value                                                                                                                                    
+    if (result.target_session !== undefined && result.outcome === 'allowed-once' && result.cap?.scopes !== undefined) {
+      try { void notifyChild(agent, result.target_session, result.cap.scopes) } catch { /* 回执失败不影响授权 */ }
+    }
     return renderScopesResult(value, (scope) => renderScope(scope, agent))
   })
 
@@ -201,6 +215,14 @@ export function apply(ctx     , config                   = {}) {
     const agent = (exec                                   )?.agent
     return renderHooksResult(value, (scope) => renderScope(scope, agent))
   })
+
+  // 0.48.0：子代理工具 shadow（每个 agent scope 上注册同名 subagent / subagent_fork，
+  // 复用宿主实现 + 记忆权限范围参数）。失败只记日志，绝不影响原有工具。
+  try {
+    ctx.effect(() => installSubagentToolShadows(ctx))
+  } catch (error) {
+    console.warn(`[dsh-memory] 子代理工具 shadow 未能加载: ${String(error)}`)
+  }
 }
 
 

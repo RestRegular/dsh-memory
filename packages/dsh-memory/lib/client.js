@@ -54,14 +54,16 @@ window.__ModuleLoader__.load({
       '.memp .linkbtn{background:none;border:none;padding:2px 4px;color:var(--dsw-alias-label-secondary);font-size:12px}',
       '.memp .linkbtn:hover{color:var(--dsw-alias-brand-primary);border:none}',
       // 概览
-      '.memp .stats{display:flex;gap:10px;flex-wrap:wrap}',
+      '.memp .stats{display:flex;gap:10px;flex-wrap:wrap;align-items:center}',
       '.memp .stat{min-width:104px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:8px 14px;background:var(--dsw-alias-bg-layer-1)}',
       '.memp .stat b{display:block;font-size:17px;font-weight:600;line-height:1.35}',
       '.memp .stat span{font-size:11px;color:var(--dsw-alias-label-secondary)}',
       // 0.44.0：统计整体 = 一个圆角矩形框，分左右两部分。左边是既有统计，右边是当前筛选展示统计。
       '.memp .stats-panel{display:flex;gap:14px;align-items:stretch;flex-wrap:wrap;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:8px 12px;background:var(--dsw-alias-bg-layer-1)}',
       // 外层已有圆角框，里面的统计卡不再各自画边框/底色，避免套娃。
-      '.memp .stats-panel .stat{border:none;background:none;padding:0 12px;border-right:1px solid var(--dsw-alias-border-l1);min-width:88px}',
+      // 左侧整组统计项垂直居中（对齐右侧多行筛选统计），每个 stat 自身也垂直居中。
+      '.memp .stats-panel .stats{align-items:center}',
+      '.memp .stats-panel .stat{border:none;background:none;padding:0 12px;border-right:1px solid var(--dsw-alias-border-l1);min-width:88px;display:flex;flex-direction:column;justify-content:center;align-items:flex-start}',
       '.memp .stats-panel .stat:last-child{border-right:none}',
       // 右半部分：当前筛选的展示统计（条数 / 各分类 / 被修正隐藏 / 待嵌入）。
       '.memp .filtered-stats{border-left:1px solid var(--dsw-alias-border-l1);padding-left:14px;display:flex;flex-direction:column;gap:5px;min-width:170px}',

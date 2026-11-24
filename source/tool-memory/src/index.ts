@@ -213,6 +213,34 @@ export interface ScopeGrantResultItemView {
 export interface ScopeGrantRequestResultView {
   results: ScopeGrantResultItemView[]
   outcome?: 'allowed-once' | 'rejected' | 'timeout' | 'unavailable'
+  /** 0.48.0：target_session 授权时回显目标会话与最终上限。 */
+  target_session?: string
+  cap?: { sessionId: string; scopes: SubagentScopePermissionView[] }
+  /** 0.48.0：转交主代理后的提示。 */
+  note?: string
+}
+
+// ---- 子代理授权（0.48.0）视图 ----
+
+export interface SubagentScopePermissionView {
+  scope: string
+  permissions: Array<'read' | 'write'>
+}
+
+export interface EffectiveScopePermissionView extends SubagentScopePermissionView {
+  source: 'policy' | 'grant'
+}
+
+export interface SubagentGrantPlanView {
+  parentPermissions: EffectiveScopePermissionView[]
+  within: SubagentScopePermissionView[]
+  beyond: SubagentScopePermissionView[]
+}
+
+export interface SubagentGrantCommitResultView {
+  childGrants: Array<{ id: string; scope: string; permissions: Array<'read' | 'write'> }>
+  parentGrants: Array<{ id: string; scope: string; permissions: Array<'read' | 'write'> }>
+  cap?: { sessionId: string; scopes: SubagentScopePermissionView[] }
 }
 
 /** 只有这一层需要的能力子集(provider 在宿主里提供,测试里可以 mock)。 */
@@ -251,6 +279,12 @@ export interface MemoryToolService {
     description?: string
     signal?: AbortSignal
   }): Promise<ScopeGrantRequestResultView>
+  /** 子代理授权（0.48.0）：当前会话有效权限全集。 */
+  effectiveScopePermissions?(agent: unknown): EffectiveScopePermissionView[]
+  /** 子代理授权（0.48.0）：拆分父权限子集 / 超出部分。 */
+  planSubagentGrants?(agent: unknown, requested?: ReadonlyArray<{ scope: string; permissions: readonly ('read' | 'write')[] }>): SubagentGrantPlanView
+  /** 子代理授权（0.48.0）：落盘子会话授权上限 + 父会话保留。 */
+  commitSubagentGrants?(agent: unknown, childSessionId: string, grants: ReadonlyArray<{ scope: string; permissions: readonly ('read' | 'write')[] }>, options?: { retainInParent?: boolean; grantedBy?: string }): SubagentGrantCommitResultView
   /** 无显式 scope 时的合并读取集合(会话 + 项目 + global)。 */
   resolveReadScopes?(agent: unknown): MemoryScope[]
   /**
@@ -450,6 +484,11 @@ export interface MemoryToolsOptions {
    * 没有会话 / 服务不可用 → 不去重，保持老行为。
    */
   contextDedup?(exec: unknown): ContextDedupView | undefined
+  /**
+   * 子代理范围外申请转交主代理（0.48.0）。返回 true = 已转交，工具不再走面板审批。
+   * 由宿主编排层注入（需要 ctx.subagents / ctx.agents），纯工具层不依赖宿主。
+   */
+  relayToParent?(exec: unknown, input: { scopes: Array<{ scope: string; permissions: Array<'read' | 'write'> }>; reason: string }): Promise<boolean>
 }
 
 const SCOPE_DESCRIPTION =
@@ -2063,6 +2102,12 @@ export interface ScopesArgs {
   permissions?: Array<'read' | 'write'>
   /** action='request' 时的申请理由（展示在审批卡上）。 */
   reason?: string
+  /**
+   * 0.48.0：action='request' 时把授权授予的目标会话 id（子代理）。
+   * 子代理申请范围外权限时会结束本轮并通知主代理；主代理复用本工具、带此参数
+   * 给子代理授权，同时父会话保留新权限。省略 = 授予当前会话。
+   */
+  target_session?: string
   /** action='edit' 要编辑的作用域键（目录里显示的那个，如 `handbook` / `project:<路径>`）。 */
   scope?: string
   /**
@@ -2124,6 +2169,7 @@ export function memoryScopesTool(opts: MemoryToolsOptions): ToolSpec<ScopesArgs,
         description: 'request：申请哪些权限，省略 = 只读；写权限必须显式加 "write"',
       },
       reason: { type: 'string', description: 'request：一句话申请理由，展示在审批卡上' },
+      target_session: { type: 'string', description: 'request：把授权授予的目标子会话 id（父代理给子代理授权时用）。省略 = 授予当前会话' },
       scope: { type: 'string', description: 'edit：要编辑的作用域键（目录里显示的那个，如 handbook / project:<路径>）。当前会话范围外时先用 action="request" 申请写权限' },
       scopeDescription: { type: 'string', description: 'edit：新的用途（一句话，最多 500 字）。空串 = 清空并回退到按类型的默认描述；与本参数一起省略 scopeName 则报错。' },
       scopeName: { type: 'string', description: 'edit：新的别名（只影响显示与引用，不改作用域键；项目 / 自定义作用域支持）。空串 = 移除别名；省略 = 这次不改别名。' },
@@ -2229,6 +2275,62 @@ export function memoryScopesTool(opts: MemoryToolsOptions): ToolSpec<ScopesArgs,
         const requested = permissions.length > 0 ? permissions : ['read' as const]
         const requests = scopes.map((scope) => ({ scope, permissions: requested }))
         const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
+        const targetSession = typeof args.target_session === 'string' ? args.target_session.trim() : ''
+
+        // 0.48.0：子代理申请范围外权限 → 不弹面板卡，转交主代理审批。
+        // 只有当申请确实超出「自己当前有效权限」且存在 relay 通道时才转交；
+        // 根代理 / 无 subagents 服务时保持原有面板审批行为。
+        if (targetSession === '' && opts.relayToParent !== undefined && typeof service.planSubagentGrants === 'function') {
+          try {
+            const plan = service.planSubagentGrants(agent, requests)
+            if (plan.beyond.length > 0) {
+              const relayed = await opts.relayToParent(exec, { scopes: requests as Array<{ scope: string; permissions: Array<'read' | 'write'> }>, reason })
+              if (relayed) {
+                return {
+                  results: requests.flatMap((request) => request.permissions.map((permission) => ({
+                    scope: request.scope, permission, status: 'approval-unavailable' as const,
+                  }))),
+                  outcome: 'unavailable' as const,
+                  note: '已通知主代理：本轮不弹面板审批，请等待主代理授权消息。',
+                }
+              }
+            }
+          } catch { /* relay 失败回退到面板审批 */ }
+        }
+
+        // 0.48.0：父代理给子代理授权（target_session）。先按普通审批给用户拿权限，
+        // 批准后同时写父会话（父保留）与子会话的授权上限。
+        if (targetSession !== '') {
+          if (typeof service.commitSubagentGrants !== 'function') {
+            throw new MemoryToolError('SCOPES_UNAVAILABLE', '当前 provider 不支持子代理授权（请升级 @restregular/dsh-memory）')
+          }
+          try {
+            const result = await service.requestScopeGrants(agent, {
+              requests,
+              ...(reason !== '' ? { reason } : {}),
+              ...(args.description !== undefined ? { description: args.description } : {}),
+              ...(exec as { signal?: AbortSignal } | undefined)?.signal !== undefined
+                ? { signal: (exec as { signal?: AbortSignal }).signal }
+                : {},
+            })
+            if (result.outcome !== undefined && result.outcome !== 'allowed-once') {
+              return { results: result.results, outcome: result.outcome }
+            }
+            const committed = service.commitSubagentGrants(agent, targetSession, requests, {
+              retainInParent: true,
+              grantedBy: 'parent-agent',
+            })
+            return {
+              results: result.results,
+              ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
+              target_session: targetSession,
+              ...(committed.cap !== undefined ? { cap: committed.cap as { sessionId: string; scopes: SubagentScopePermissionView[] } } : {}),
+            }
+          } catch (error) {
+            throw toolError(error)
+          }
+        }
+
         try {
           const result = await service.requestScopeGrants(agent, {
             requests,

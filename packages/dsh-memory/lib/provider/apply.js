@@ -613,6 +613,26 @@ export class CordisMemoryService extends Service {
     return this.impl.grantList(agent)
   }
 
+  /** 子代理授权（0.48.0）：当前会话有效权限全集。 */
+  effectiveScopePermissions(agent         )                                                              {
+    return this.impl.effectiveScopePermissions(agent)
+  }
+
+  /** 子代理授权（0.48.0）：拆分父权限子集 / 超出部分。 */
+  planSubagentGrants(agent         , requested                                                          )                                                       {
+    return this.impl.planSubagentGrants(agent, requested)
+  }
+
+  /** 子代理授权（0.48.0）：落盘子会话授权上限 + 父会话保留。 */
+  commitSubagentGrants(parentAgent         , childSessionId        , grants                                                           , options                                                            )                                                         {
+    return this.impl.commitSubagentGrants(parentAgent, childSessionId, grants, options)
+  }
+
+  /** 子代理授权（0.48.0）：读取某会话的授权上限。 */
+  delegationCap(sessionId        )                                                  {
+    return this.impl.delegationCap(sessionId)
+  }
+
   /** 面板：撤销一条会话授权。 */
   revokeGrant(sessionId        , id        )          {
     return this.impl.revokeGrant(sessionId, id)
