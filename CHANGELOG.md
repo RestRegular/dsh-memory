@@ -2,6 +2,11 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.51.2 — 移除规则代码审批卡的冗长提示
+
+- 规则代码（hook）审批卡不再显示「Agent 提交了一段脚本，批准后它会在 DSH 进程里运行……代码改动后会再次征求你的同意」那段描述；标题、代码正文、运行时机标签与允许/拒绝动作保持不变。
+- 全套 745 例 744 pass / 1 skipped。
+
 ## 0.51.1 — 拒绝原因回注模型 + 授权按钮改为可读/可写
 
 - **修复：拒绝原因没有告诉模型**。此前 `memory_scopes(request)` 被拒时，用户填的拒绝原因只进了 `approvals.jsonl` 审计，工具结果仍只回「用户拒绝」。现在原因沿 `VisibilityApprovalAnswer.reason` → `ScopeGrantRequestResult.reason` → 工具视图 `reason` 一路回传，`renderScopesResult` 在结果末尾输出「用户给出的拒绝原因：…」，模型能据此调整后续请求。

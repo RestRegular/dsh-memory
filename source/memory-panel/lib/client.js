@@ -7520,7 +7520,7 @@ window.__ModuleLoader__.load({
       const hookMode = pending.mode === 'hook'
       const actionLabel = hookMode ? '运行代码' : blockMode ? '屏蔽' : grantMode ? '访问' : action === 'write' ? '写入' : action === 'delete' ? '删除' : '读取'
       const actionHint = hookMode
-        ? 'Agent 提交了一段脚本，批准后它会在 DSH 进程里运行（在沙箱内，无网络 / 文件访问）。请先逐行看清下面的代码和运行时机，再决定是否允许。代码改动后会再次征求你的同意。'
+        ? ''
         : blockMode
         ? 'Agent 想把下列记忆从检索、注入与作用域目录里藏起来（不删除、可随时解除）。按作用域屏蔽、工作区级屏蔽，或目标是硬性规则时都需要你确认。'
         : grantMode
