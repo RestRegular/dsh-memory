@@ -2879,6 +2879,12 @@ window.__ModuleLoader__.load({
         desc: '下一轮开头提醒把本轮结论落盘；默认关闭，避免打断连续对话。',
         fields: [
           { k: 'enabled', label: '启用', type: 'bool', hint: '开启后每轮结束会给一条“有结论就记一条”的提醒。' },
+          { k: 'mode', label: '触发方式', type: 'select', hint: '每轮固定提醒，或按上一轮末尾是否调用 memory_save 判断。',
+            options: [
+              { value: 'always', label: '每轮固定提醒' },
+              { value: 'smart', label: '按最近工具调用判断' },
+            ] },
+          { k: 'checkLastCalls', label: '回看调用次数', type: 'num', min: 1, max: 50, step: 1, hint: '按最近工具调用判断时，检查上一轮末尾多少次调用；含 memory_save 就跳过本次提醒。默认 5 次。' },
           { k: 'prompt', label: '提醒提示词', type: 'text', rows: 5, placeholder: '上一轮若产生了可复用的结论……', hint: '下一轮开头注入的那句提醒。留空时恢复内置默认提示词。' },
         ],
       },
@@ -2925,7 +2931,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** 单个数值 / 开关字段:label 和 hint 都必须是可见文本,不能只放在 title 里。 */
+    /** 单个数值 / 开关 / 下拉字段:label 和 hint 都必须是可见文本,不能只放在 title 里。 */
     function SettingField({ field, value, onPatch }) {
       if (field.type === 'bool') {
         const checked = Boolean(value)
@@ -2943,6 +2949,19 @@ window.__ModuleLoader__.load({
             }),
             h('span', { className: 'setfield-state' }, checked ? '已开启' : '已关闭'),
           ),
+        )
+      }
+      if (field.type === 'select') {
+        const current = value === undefined || value === null ? field.options[0].value : value
+        return h('label', { className: 'setfield' },
+          h('span', { className: 'setfield-main' },
+            h('span', { className: 'setfield-label' }, field.label),
+            field.hint ? h('span', { className: 'setfield-hint' }, field.hint) : null,
+          ),
+          h('select', {
+            value: current,
+            onChange: (e) => onPatch(e.target.value),
+          }, field.options.map((opt) => h('option', { key: opt.value, value: opt.value }, opt.label))),
         )
       }
       return h('label', { className: 'setfield' },

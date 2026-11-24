@@ -31,6 +31,24 @@ test('normalizeInjectSettings: 默认值、越界夹紧、脏数据不炸', () =
   assert.equal(normalizeInjectSettings({ rules: { delta: false } }).rules.delta, false)
 })
 
+test('0.47.0: 轮末提醒模式与回看次数默认/夹紧/脏数据回退', () => {
+  assert.equal(defaultInjectSettings.turnEnd.mode, 'always')
+  assert.equal(defaultInjectSettings.turnEnd.checkLastCalls, 5)
+  // 老配置没有这两个字段时保持默认（固定提醒 + 5 次）。
+  const legacy = normalizeInjectSettings({ turnEnd: { enabled: true } })
+  assert.equal(legacy.turnEnd.mode, 'always')
+  assert.equal(legacy.turnEnd.checkLastCalls, 5)
+  // smart 模式与自定义次数生效。
+  const smart = normalizeInjectSettings({ turnEnd: { mode: 'smart', checkLastCalls: 8 } })
+  assert.equal(smart.turnEnd.mode, 'smart')
+  assert.equal(smart.turnEnd.checkLastCalls, 8)
+  // 非 smart 一律回 always；次数越界夹紧。
+  assert.equal(normalizeInjectSettings({ turnEnd: { mode: 'garbage' } }).turnEnd.mode, 'always')
+  assert.equal(normalizeInjectSettings({ turnEnd: { checkLastCalls: 0 } }).turnEnd.checkLastCalls, 1)
+  assert.equal(normalizeInjectSettings({ turnEnd: { checkLastCalls: 999 } }).turnEnd.checkLastCalls, 50)
+  assert.equal(normalizeInjectSettings({ turnEnd: { checkLastCalls: 'x' } }).turnEnd.checkLastCalls, 5)
+})
+
 test('normalizeInjectSettings: 老的扁平 inject 配置映射到 recall', () => {
   const settings = normalizeInjectSettings({ enabled: false, topK: 3, tokenBudget: 222 })
   assert.equal(settings.recall.enabled, false)

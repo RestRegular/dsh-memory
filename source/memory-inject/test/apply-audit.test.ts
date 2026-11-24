@@ -755,6 +755,77 @@ test('轮末提醒:设置里留空时回退内置默认文案', async () => {
   assert.ok(decision.messages[0].content[0].text.includes('先 memory_save 记一条再继续'))
 })
 
+test('轮末提醒 smart 模式:上一轮末尾含 memory_save 时跳过提醒', async () => {
+  const settings = promptOnlySettings({
+    turnEnd: { enabled: true, mode: 'smart', checkLastCalls: 5 },
+  })
+  const { handlers } = setup({ settings })
+  const onEvent = handlers.get('session/event')!
+
+  // 模拟一个多步轮次：末尾连续两次 memory_save（callId 不同，尾部 5 次内）。
+  await runPreStep(handlers, undefined, { turn: 1, step: 1 })
+  await runPreStep(handlers, undefined, { turn: 1, step: 2 })
+  onEvent({ id: 's1' }, { type: 'tool/call', data: { name: 'ops_bash', callId: 'c1', arguments: '{}' } })
+  onEvent({ id: 's1' }, { type: 'tool/call', data: { name: 'memory_save', callId: 'c2', arguments: '{}' } })
+  onEvent({ id: 's1' }, { type: 'tool/call', data: { name: 'memory_save', callId: 'c3', arguments: '{}' } })
+  handlers.get('agent/turn-stopping')!({})
+
+  const decision = await runPreStep(handlers, undefined, { turn: 2, step: 1 }) as { messages: any[] }
+  assert.equal(decision.messages.length, 0, '上一轮末尾已 memory_save，本次应跳过提醒')
+})
+
+test('轮末提醒 smart 模式:memory_save 在回看窗口之外时仍提醒', async () => {
+  const settings = promptOnlySettings({
+    turnEnd: { enabled: true, mode: 'smart', checkLastCalls: 3 },
+  })
+  const { handlers } = setup({ settings })
+  const onEvent = handlers.get('session/event')!
+
+  await runPreStep(handlers, undefined, { turn: 1, step: 1 })
+  await runPreStep(handlers, undefined, { turn: 1, step: 2 })
+  // memory_save 在前，后面还有 3 次其它工具调用 → 落在尾部 3 次之外。
+  onEvent({ id: 's1' }, { type: 'tool/call', data: { name: 'memory_save', callId: 'c1', arguments: '{}' } })
+  onEvent({ id: 's1' }, { type: 'tool/call', data: { name: 'ops_bash', callId: 'c2', arguments: '{}' } })
+  onEvent({ id: 's1' }, { type: 'tool/call', data: { name: 'ops_bash', callId: 'c3', arguments: '{}' } })
+  onEvent({ id: 's1' }, { type: 'tool/call', data: { name: 'ops_bash', callId: 'c4', arguments: '{}' } })
+  handlers.get('agent/turn-stopping')!({})
+
+  const decision = await runPreStep(handlers, undefined, { turn: 2, step: 1 }) as { messages: any[] }
+  assert.equal(decision.messages.length, 1, 'memory_save 已在回看窗口之外，本次应提醒')
+})
+
+test('轮末提醒 smart 模式:上一轮没有 memory_save 时仍提醒', async () => {
+  const settings = promptOnlySettings({
+    turnEnd: { enabled: true, mode: 'smart', checkLastCalls: 5 },
+  })
+  const { handlers } = setup({ settings })
+  const onEvent = handlers.get('session/event')!
+
+  await runPreStep(handlers, undefined, { turn: 1, step: 1 })
+  await runPreStep(handlers, undefined, { turn: 1, step: 2 })
+  onEvent({ id: 's1' }, { type: 'tool/call', data: { name: 'ops_bash', callId: 'c1', arguments: '{}' } })
+  handlers.get('agent/turn-stopping')!({})
+
+  const decision = await runPreStep(handlers, undefined, { turn: 2, step: 1 }) as { messages: any[] }
+  assert.equal(decision.messages.length, 1, '没有 memory_save，本次应提醒')
+})
+
+test('轮末提醒 always 模式:上一轮末尾有 memory_save 也照常提醒', async () => {
+  const settings = promptOnlySettings({
+    turnEnd: { enabled: true, mode: 'always', checkLastCalls: 5 },
+  })
+  const { handlers } = setup({ settings })
+  const onEvent = handlers.get('session/event')!
+
+  await runPreStep(handlers, undefined, { turn: 1, step: 1 })
+  await runPreStep(handlers, undefined, { turn: 1, step: 2 })
+  onEvent({ id: 's1' }, { type: 'tool/call', data: { name: 'memory_save', callId: 'c1', arguments: '{}' } })
+  handlers.get('agent/turn-stopping')!({})
+
+  const decision = await runPreStep(handlers, undefined, { turn: 2, step: 1 }) as { messages: any[] }
+  assert.equal(decision.messages.length, 1, 'always 模式应固定提醒')
+})
+
 test('策略段:系统提示用的是设置里的提示词,审计记生效文本', async () => {
   const prompt = '## 自定义记忆策略\n先查再问。'
   const settings = promptOnlySettings({ policy: { enabled: true, prompt } })

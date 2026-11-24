@@ -757,6 +757,12 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
         // 先挂持久化 store：compaction 的 clear 要能删到对应文件。
         attachSessionState(sessionId, workspaceOf(session))
 
+        // 轮末提醒 smart 模式：记录本轮工具调用名（turn-stopping 时判定并清空）。
+        // 放在 autoRecall 闸门前，保证自动召回关闭时也能判断上一轮末尾是否已 memory_save。
+        if (type === 'tool/call') {
+          currentTurnToolCalls.push(typeof data.name === 'string' ? data.name : 'tool')
+        }
+
         // 记忆工具调用先落一条锚点审计：即使自动召回关闭、或该工具没有命中
         // 任何触发标签，用户也能从审计面板/记忆视图精确跳回轨迹里的那一次调用。
         if (type === 'tool/call') rememberMemoryToolCall(sessionId, data)
@@ -782,6 +788,7 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
           callMeta.clear()
           memoryGetCalls.clear()
           memorySaveCalls.clear()
+          currentTurnToolCalls = []
           return
         }
 
@@ -959,11 +966,25 @@ export function apply(ctx: Context, config: MemoryInjectConfig = {}) {
   // 轮末提醒:本轮跑过多步(不是闲聊),下一轮第一步附带一句提醒。
   let maxStep = 0
   let pendingNudge = false
+  /**
+   * smart 模式用：当前这一轮里观察到的工具调用名（按时间顺序）。
+   * turn-stopping 时判定并清空，保证下一轮只统计它自己的调用。
+   */
+  let currentTurnToolCalls: string[] = []
   ctx.on('agent/turn-stopping', () => {
     // 轮末把待写的去重增量刷掉：即使下一轮开始前进程退出，状态也只丢一个窗口。
     injectionState.flushAll()
-    if (!enabled || !settingsOf().turnEnd.enabled) return
-    if (maxStep >= 2) pendingNudge = true
+    const calls = currentTurnToolCalls
+    currentTurnToolCalls = []
+    const turnEnd = settingsOf().turnEnd
+    if (!enabled || !turnEnd.enabled) return
+    if (maxStep < 2) return
+    if (turnEnd.mode === 'smart') {
+      const tail = calls.slice(-turnEnd.checkLastCalls)
+      // 上一轮末尾已经 memory_save 落过盘：不再提醒。
+      if (tail.includes('memory_save')) return
+    }
+    pendingNudge = true
   })
 
   ctx.on('agent/pre-step', async (input, next) => {

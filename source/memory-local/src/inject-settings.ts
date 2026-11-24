@@ -129,6 +129,14 @@ export const DEFAULT_AUTO_RECALL_TAGS: string[] = [
 export interface TurnEndSettings {
   /** 轮末提醒:下一轮开头提示"上一轮若有可复用结论就记一条"。默认关闭。 */
   enabled: boolean
+  /**
+   * 触发方式：
+   * - 'always'：每轮跑过多步就固定提醒一次（旧行为）。
+   * - 'smart'：检查上一轮最后 N 次工具调用，若含 memory_save 就跳过本次提醒。
+   */
+  mode: 'always' | 'smart'
+  /** smart 模式下回看上一轮末尾多少次工具调用，默认 5。 */
+  checkLastCalls: number
   /** 轮末提醒正文（面板可改；留空回退内置默认）。 */
   prompt: string
 }
@@ -195,7 +203,7 @@ export const defaultInjectSettings: InjectSettings = {
     tags: DEFAULT_AUTO_RECALL_TAGS,
     useMemoryTags: true,
   },
-  turnEnd: { enabled: false, prompt: DEFAULT_TURN_END_PROMPT },
+  turnEnd: { enabled: false, mode: 'always', checkLastCalls: 5, prompt: DEFAULT_TURN_END_PROMPT },
   sidebar: { enabled: false },
   organize: { prompt: DEFAULT_ORGANIZE_PROMPT },
 }
@@ -307,6 +315,8 @@ export function normalizeInjectSettings(raw: unknown, base: InjectSettings = def
     },
     turnEnd: {
       enabled: bool(turnEnd.enabled, base.turnEnd.enabled),
+      mode: turnEnd.mode === 'smart' ? 'smart' : 'always',
+      checkLastCalls: clampInt(turnEnd.checkLastCalls, 1, 50, base.turnEnd.checkLastCalls),
       prompt: resolvePrompt(turnEnd.prompt, DEFAULT_TURN_END_PROMPT),
     },
     sidebar: { enabled: bool(sidebar.enabled, base.sidebar.enabled) },
