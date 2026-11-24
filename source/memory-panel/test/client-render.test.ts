@@ -3398,7 +3398,7 @@ test('侧边栏阻塞提示:把待审批发布成宿主 approval 类型的 pendi
   assert.equal(testApi.approvalPresenceSync(), null, '卸载后不再保留同步器')
 })
 
-test('审批卡:grant 模式默认只勾只读,允许后只提交只读权限', async () => {
+test('审批卡:grant 模式默认按 Agent 申请的权限勾选,允许后只提交这些权限', async () => {
   const { exports, hooks } = await loadBundle()
   hooks.resetAll()
   const Dock = (exports.__test as { MemoryApprovalDock: (p: Record<string, unknown>) => unknown }).MemoryApprovalDock
@@ -3438,14 +3438,56 @@ test('审批卡:grant 模式默认只勾只读,允许后只提交只读权限', 
     assert.ok(text.includes('授权仅在本会话有效'), '说明授权范围')
     assert.ok(text.includes('只读') && text.includes('可写'), '两种权限都展示')
     const checks = collect(current).filter((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-approval-check'))
-    assert.deepEqual(checks.map((box) => box.props?.['aria-checked']), [true, false], '默认只勾只读')
+    assert.deepEqual(checks.map((box) => box.props?.['aria-checked']), [true, true], '默认按申请勾选读与写')
 
     const allow = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-approval-allow'))
-    assert.ok(String(textOf(allow)).includes('允许选中的 1 项（本会话）'))
+    assert.ok(String(textOf(allow)).includes('允许授权（本会话）'), '全选时按钮是允许授权')
     ;(allow!.props!.onClick as () => void)()
     await new Promise((resolve) => setTimeout(resolve, 0))
     const posted = JSON.parse(String(calls[1]?.init?.body ?? '{}')) as { id: string; outcome: string; allowedIds?: string[] }
-    assert.deepEqual(posted, { id: 'g1', outcome: 'allowed-once', allowedIds: ['grant:handbook:read'] })
+    assert.deepEqual(posted, { id: 'g1', outcome: 'allowed-once' }, '全选 = 老口径，不带 allowedIds')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
+})
+
+test('审批卡:grant 模式只申请写权限时默认只勾可写项', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const Dock = (exports.__test as { MemoryApprovalDock: (p: Record<string, unknown>) => unknown }).MemoryApprovalDock
+  const calls: Array<{ url: string; init?: { method?: string; body?: string } }> = []
+  const approval = {
+    id: 'g2',
+    sessionId: 's1',
+    tool: 'memory_scopes',
+    action: 'read',
+    mode: 'grant',
+    query: '改元数据',
+    items: [
+      { id: 'grant:handbook:write', scope: 'handbook', kind: 'grant', content: '写入 / 删除', tags: [], importance: 0, updatedAt: 1, reason: 'scope', grantPermission: 'write' },
+    ],
+    createdAt: 1,
+    expiresAt: 2,
+  }
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string, init?: { method?: string; body?: string }) => {
+    calls.push({ url, init })
+    if (init === undefined || init.method === 'GET') {
+      return { status: 200, json: async () => ({ ok: true, value: { approvals: [approval] } }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, value: { answered: true } }) }
+  }
+  try {
+    let current: RenderNode | null = null
+    const element = () => hooks.React.createElement(Dock, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const checks = collect(current).filter((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-approval-check'))
+    assert.deepEqual(checks.map((box) => box.props?.['aria-checked']), [true], '默认只勾 Agent 申请的写权限')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch
   }

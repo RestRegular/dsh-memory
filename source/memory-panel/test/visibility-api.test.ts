@@ -304,6 +304,30 @@ test('面板 /visibility:没有 session 参数返回 400', async () => {
   }
 })
 
+test('面板 /visibility:已归档作用域不出现在权限列表里', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-visibility-'))
+  const svc = makeService(dir)
+  const session = { id: 's1', header: { id: 's1', cwd: 'D:/w' } }
+  try {
+    await svc.save({ scope: 'handbook', kind: 'fact', content: '已归档作用域的正文' })
+    // scopeStats 的 archived 标记是 provider 的权威口径；这里直接包一层验证
+    // /visibility 的过滤，不必走真实宿主归档服务。
+    const originalStats = svc.scopeStats.bind(svc)
+    svc.scopeStats = () => originalStats().map((item) => (
+      item.scope === 'handbook' ? { ...item, archived: true } : item
+    ))
+    const res = fakeRes()
+    await handleRequest(ctxWith(svc, session), ROUTE, get(`${ROUTE}/visibility?session=s1`), res)
+    assert.equal(res.out.status, 200)
+    const scopes = res.out.body.value.scopes.map((s) => s.scope)
+    assert.ok(!scopes.includes('handbook'), '已归档作用域不出现在权限列表')
+    assert.ok(scopes.includes('global'), '未归档作用域照常出现')
+  } finally {
+    svc.flushSync()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('面板 /visibility:read/write 状态与工作区绑定落盘,默认范围包含绑定作用域', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-memory-panel-visibility-'))
   const svc = makeService(dir)

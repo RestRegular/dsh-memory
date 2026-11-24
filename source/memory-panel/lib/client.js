@@ -7472,7 +7472,7 @@ window.__ModuleLoader__.load({
         : blockMode
         ? 'Agent 想把下列记忆从检索、注入与作用域目录里藏起来（不删除、可随时解除）。按作用域屏蔽、工作区级屏蔽，或目标是硬性规则时都需要你确认。'
         : grantMode
-          ? 'Agent 申请访问可见域外的作用域。勾选要授予的权限（默认只读）；授权仅在本会话有效，子 Agent 会继承。'
+          ? 'Agent 申请访问可见域外的作用域。默认按 Agent 申请的权限勾选（可自行调整）；授权仅在本会话有效，子 Agent 会继承。'
           : action === 'write'
             ? 'Agent 想把一条记忆写入可见域外的作用域。允许只对本次调用生效；拒绝则不写入。'
             : action === 'delete'
@@ -7482,10 +7482,9 @@ window.__ModuleLoader__.load({
       // 模型写的用途说明(0.22.0;普通限制下工具层强制提供)。
       const description = typeof pending.description === 'string' ? pending.description.trim() : ''
       const allIds = items.map((item) => item.id)
-      // grant 模式默认只勾只读项（写权限必须用户主动勾）；普通读审批默认全选。
-      const defaultIds = grantMode
-        ? items.filter((item) => item.grantPermission !== 'write').map((item) => item.id)
-        : allIds
+      // grant 模式默认勾 Agent 申请的权限：申请读就只勾读，申请写就只勾写，
+      // 申请读写就两个都勾；用户仍可自行调整。普通读审批默认全选。
+      const defaultIds = allIds
       // 多条目才有逐条勾选的意义；grant 模式下 even 1 条也走勾选以明确权限。
       // block 模式同样逐条：用户可能只想藏其中一条，其余留着。
       const selectable = grantMode ? allIds.length > 0 : blockMode ? allIds.length > 1 : action === 'read' && allIds.length > 1

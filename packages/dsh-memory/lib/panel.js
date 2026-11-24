@@ -603,6 +603,9 @@ function visibilityPayload(ctx, memory, sessionId) {
   for (const item of Array.isArray(stats) ? stats : []) {
     if (item && typeof item.scope === 'string') byScope.set(item.scope, { ...item })
   }
+  // 已归档的作用域是会话 / 工作区生命周期状态，不是权限：冻结期间读写与申请
+  // 全部无效，恢复后自动复原。把它们列进「记忆权限」浮窗只会让人去勾一个
+  // 点了也没用的开关，所以这里直接过滤掉（scopeStats 已透传 archived 标记）。
   // 即使还没有任何记录 / 宿主没给 sessions,也要能把默认集合里的 scope 勾出来。
   const ensure = (scope) => {
     if (typeof scope === 'string' && scope !== '' && !byScope.has(scope)) {
@@ -629,6 +632,7 @@ function visibilityPayload(ctx, memory, sessionId) {
   for (const scope of bindings) ensure(scope)
   const rank = (scope) => scope === sessionScope ? 0 : scope === projectScope ? 1 : scope === 'global' ? 2 : 3
   const scopes = [...byScope.values()]
+    .filter((item) => item.archived !== true)
     .sort((a, b) => rank(a.scope) - rank(b.scope) || String(a.scope).localeCompare(String(b.scope)))
     .map((item) => {
       const rule = rules.get(item.scope)

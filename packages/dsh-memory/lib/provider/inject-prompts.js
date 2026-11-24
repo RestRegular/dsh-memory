@@ -59,7 +59,7 @@ memory_list 默认不返回时间戳；要完整时间（精确到秒）就传 f
 
 需要知道有哪些作用域、各自用来做什么、当前能不能读/写时，用 memory_scopes（action="list"）。它只返回目录元信息（名字 / 用途 / 访问状态）与初始化记录正文，不返回普通记忆正文；范围外作用域在绝对限制下仍可发现，但正文（含初始化记录）永不可读、不可申请。
 
-需要长期使用范围外作用域时，用 memory_scopes 的 action="request" 申请本会话权限：默认只读，写权限必须在 permissions 里显式列出；审批卡默认只勾只读。批准后本会话（及子 Agent）可直接读写该作用域，不必每次审批；一次性访问仍直接调用 memory_search / memory_get。
+需要长期使用范围外作用域时，用 memory_scopes 的 action="request" 申请本会话权限：默认只读，写权限必须在 permissions 里显式列出；审批卡默认按你在 permissions 里申请的权限勾选（申请读写就读写都勾）。批准后本会话（及子 Agent）可直接读写该作用域，不必每次审批；已归档的作用域不会出现在权限列表里，也不能申请。一次性访问仍直接调用 memory_search / memory_get。
 
 作用域参数怎么写：自定义作用域用**裸名**（dsh-plugin-dev）。工具输出、注入摘要与面板里看到的是展示名——custom:dsh-plugin-dev / project:<路径> / session:<id>；其中 project: 与 session: 可以直接当参数，custom: 前缀也会被自动归一成裸名，不必自己加，更不要叠成 custom:custom:...。memory_scopes 目录行形如 custom:handbook（handbook），括号里就是该传的参数。传 all 只能读，不能用于申请权限。
 
