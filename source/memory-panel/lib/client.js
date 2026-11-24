@@ -763,6 +763,10 @@ window.__ModuleLoader__.load({
       '.mem-approval-info-value{flex:1;min-width:0;line-height:20px}',
       '.mem-approval-info-text{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
       '.mem-approval-info-value.expanded .mem-approval-info-text{white-space:pre-wrap;word-break:break-word}',
+      // 0.51.3：值同时带 command/desc 类，而那两个类的 flex:none 定义在后面、同优先级
+      // 会盖掉这里的 flex:1 —— 条目按内容宽度撑开，内层 ellipsis 永远不触发。
+      // 用双类选择器提高优先级，强制值可收缩，省略号才会生效。
+      '.mem-approval-info-value.mem-approval-command,.mem-approval-info-value.mem-approval-desc{flex:1;min-width:0}',
       '.mem-approval-command{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:13px;line-height:20px;flex:none}',
       '.mem-approval-list{display:flex;flex-direction:column;gap:6px;overflow:auto;min-height:0;padding-bottom:2px}',
       '.mem-approval-item{display:flex;align-items:flex-start;gap:8px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 55%,transparent)}',

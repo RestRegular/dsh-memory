@@ -2,10 +2,16 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.51.3 — 修复申请理由 / 申请说明 long text 不省略的问题
+
+- **问题**：审批卡的「申请理由 / 申请说明」设了单行省略，但实测长文本没有截断成 `...`。根因是值容器同时带 `mem-approval-info-value` 与 `mem-approval-command` / `mem-approval-desc`，后者的 `flex:none` 定义在后面、优先级相同，盖掉了值容器的 `flex:1`，条目按内容宽度撑开，内层 `text-overflow:ellipsis` 永远不触发。
+- **修复**：加双类选择器 `.mem-approval-info-value.mem-approval-command,.mem-approval-info-value.mem-approval-desc{flex:1;min-width:0}` 提高优先级，强制值可收缩；展开态 `white-space:pre-wrap` 显示全文的口径不变。
+- 回归守卫：`client-render.test.ts` 的样式断言锁住双类选择器、`text-overflow:ellipsis` 与展开态规则。全套 745 例通过（changelog 解析用例另修）。
+
 ## 0.51.2 — 移除规则代码审批卡的冗长提示
 
-- 规则代码（hook）审批卡不再显示「Agent 提交了一段脚本，批准后它会在 DSH 进程里运行……代码改动后会再次征求你的同意」那段描述；标题、代码正文、运行时机标签与允许/拒绝动作保持不变。
-- 全套 745 例 744 pass / 1 skipped。
+- **移除**：规则代码（hook）审批卡不再显示「Agent 提交了一段脚本，批准后它会在 DSH 进程里运行……代码改动后会再次征求你的同意」那段描述；标题、代码正文、运行时机标签与允许/拒绝动作保持不变。
+- **回归**：全套 745 例 744 pass / 1 skipped。
 
 ## 0.51.1 — 拒绝原因回注模型 + 授权按钮改为可读/可写
 

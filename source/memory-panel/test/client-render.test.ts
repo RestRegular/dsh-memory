@@ -3684,6 +3684,11 @@ test('审批卡样式对齐系统审批弹窗:警告色 strip + 同一批主题 
   for (const cls of ['headline', 'hint', 'info', 'command', 'desc', 'bulk']) {
     assert.match(css, new RegExp(`\\.mem-approval-${cls}\\{[^}]*flex:none`), `详情行 ${cls} 必须锁住,不能被列表压缩`)
   }
+  // 0.51.3：申请理由/说明的 ellipsis 依赖值容器可收缩；command/desc 的 flex:none
+  // 定义在后面会盖掉 info-value 的 flex:1，必须用双类选择器提高优先级。
+  assert.match(css, /\.mem-approval-info-value\.mem-approval-command,\.mem-approval-info-value\.mem-approval-desc\{[^}]*flex:1[^}]*min-width:0/, '理由/说明值容器强制 flex:1，省略号才能生效')
+  assert.match(css, /\.mem-approval-info-text\{[^}]*text-overflow:ellipsis/, '理由/说明默认单行省略')
+  assert.match(css, /\.mem-approval-info-value\.expanded \.mem-approval-info-text\{[^}]*white-space:pre-wrap/, '展开后显示全文')
   assert.match(css, /\.mem-approval-list\{[^}]*min-height:0/, '只有条目列表可以收缩')
   // 0.22.3:26vh 那层上限会让矮窗口里的列表只剩十几像素;与宿主审批卡同口径,
   // 只受 composer 文本区最大高度约束。
