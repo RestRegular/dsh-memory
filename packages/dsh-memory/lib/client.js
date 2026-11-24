@@ -756,10 +756,14 @@ window.__ModuleLoader__.load({
       // 0.50.0：申请信息统一成「标签 + 值」的两列网格。Agent 写的叫「申请理由」，
       // 用户填的叫「拒绝原因」，两者不再混在一行里让人分不清是谁写的。
       '.mem-approval-info{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 40%,transparent);flex:none}',
-      '.mem-approval-info-row{display:flex;align-items:flex-start;gap:10px;font-size:12px;line-height:1.55}',
-      '.mem-approval-info-label{flex:none;width:56px;text-align:right;color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:20px}',
-      '.mem-approval-info-value{flex:1;min-width:0}',
-      '.mem-approval-command{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:13px;line-height:20px;word-break:break-word;white-space:pre-wrap;max-height:72px;overflow:auto;flex:none}',
+      // 0.51.0：申请理由 / 申请说明默认只占一行，超长省略为 ...；点标签或正文展开全文。
+      '.mem-approval-info-row{display:flex;align-items:flex-start;gap:10px;font-size:12px;line-height:20px;cursor:pointer}',
+      '.mem-approval-info-row:hover .mem-approval-info-label,.mem-approval-info-row:hover .mem-approval-info-value{color:var(--dsw-alias-state-business-primary,#4176e6)}',
+      '.mem-approval-info-label{flex:none;width:56px;text-align:right;color:var(--dsw-alias-label-secondary);font-size:11.5px;line-height:20px;white-space:nowrap}',
+      '.mem-approval-info-value{flex:1;min-width:0;line-height:20px}',
+      '.mem-approval-info-text{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.mem-approval-info-value.expanded .mem-approval-info-text{white-space:pre-wrap;word-break:break-word}',
+      '.mem-approval-command{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:13px;line-height:20px;flex:none}',
       '.mem-approval-list{display:flex;flex-direction:column;gap:6px;overflow:auto;min-height:0;padding-bottom:2px}',
       '.mem-approval-item{display:flex;align-items:flex-start;gap:8px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 55%,transparent)}',
       '.mem-approval-item.is-clickable{cursor:pointer;transition:border-color .12s ease,background .12s ease}',
@@ -773,7 +777,7 @@ window.__ModuleLoader__.load({
       '.mem-approval-id{font-family:var(--ds-font-family-code,ui-monospace,SFMono-Regular,Consolas,monospace);font-size:11px;color:var(--dsw-alias-label-secondary);padding:0;border:none;background:transparent;text-align:left;line-height:1.4;cursor:pointer;border-radius:4px}',
       '.mem-approval-id:hover{color:var(--dsw-alias-state-business-primary,#4176e6);text-decoration:underline}',
       '.mem-approval-id:focus-visible{outline:1px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:2px}',
-      '.mem-approval-desc{color:var(--dsw-alias-label-primary);font-size:12.5px;line-height:1.55;word-break:break-word;white-space:pre-wrap;max-height:90px;overflow:auto;flex:none}',
+      '.mem-approval-desc{color:var(--dsw-alias-label-primary);font-size:12.5px;line-height:20px;flex:none}',
       '.mem-approval-bulk{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--dsw-alias-label-secondary);flex:none}',
       '.mem-approval-bulk button{padding:0;border:none;background:transparent;color:var(--dsw-alias-state-business-primary,#4176e6);font-size:11.5px;cursor:pointer}',
       '.mem-approval-bulk button:hover:not(:disabled){text-decoration:underline}',
@@ -786,15 +790,19 @@ window.__ModuleLoader__.load({
       '.mem-approval-check:focus-visible{outline:1px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
       '.mem-approval-check .tick{font-size:11px;line-height:1}',
       '.mem-approval-err{padding:5px 8px;border-radius:8px;background:color-mix(in srgb,var(--dsw-alias-state-error-primary,#d33) 10%,transparent);color:var(--dsw-alias-state-error-primary,#d33);font-size:12px;line-height:1.5}',
-      // 0.50.0：拒绝原因输入（可选）。放在动作行上方一整行，标签与输入框上下排布，
-      // 用户想填就填、不填也能直接拒绝；只在展开详情时出现，折叠时保持卡片简洁。
-      '.mem-approval-reason{display:flex;flex-direction:column;gap:4px;padding:10px 16px 0}',
-      '.mem-approval-reason-label{display:flex;align-items:baseline;gap:6px;font-size:11.5px;color:var(--dsw-alias-label-secondary)}',
-      '.mem-approval-reason-label .optional{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:11px}',
-      '.mem-approval-reason-input{box-sizing:border-box;width:100%;min-height:38px;max-height:96px;padding:8px 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-family:inherit;font-size:12.5px;line-height:1.55;resize:vertical;outline:none;transition:border-color .12s ease}',
+      // 0.51.0：拒绝原因输入框与「拒绝」按钮合并成一个输入条，占满底部按钮区剩余宽度。
+      // 输入框无边框，只用 placeholder 提示；整条有浅边框，视觉上是一个整体控件。
+      '.mem-approval-actionrow{display:flex;align-items:stretch;gap:8px;padding:12px 16px}',
+      '.mem-approval-rejectbox{display:flex;align-items:center;flex:1;min-width:0;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:var(--dsw-alias-bg-layer-1);overflow:hidden}',
+      '.mem-approval-rejectbox:focus-within{border-color:var(--dsw-alias-state-business-primary,#4176e6)}',
+      '.mem-approval-reason-input{flex:1;min-width:0;height:32px;padding:0 6px 0 12px;border:none;outline:none;background:transparent;color:var(--dsw-alias-label-primary);font-family:inherit;font-size:12.5px;line-height:32px;resize:none}',
       '.mem-approval-reason-input::placeholder{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary))}',
-      '.mem-approval-reason-input:focus{border-color:var(--dsw-alias-state-business-primary,#4176e6)}',
-      '.mem-approval-actionrow{justify-content:flex-end;gap:8px;padding:14px 16px;display:flex}',
+      // 0.51.0：grant 模式每个作用域一个选项，行内「只读 / 可写」互斥单选。
+      '.mem-approval-grant-row{display:flex;align-items:center;gap:8px;padding:7px 8px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:color-mix(in srgb,var(--dsw-alias-bg-layer-1) 55%,transparent)}',
+      '.mem-approval-grant-name{flex:1;min-width:0;font-size:12px;color:var(--dsw-alias-label-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+      '.mem-approval-grant-choice{display:inline-flex;align-items:center;justify-content:center;height:26px;padding:0 10px;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:transparent;color:var(--dsw-alias-label-secondary);font-size:11.5px;cursor:pointer;flex:none}',
+      '.mem-approval-grant-choice.on{border-color:var(--dsw-alias-state-business-primary,#4176e6);background:color-mix(in srgb,var(--dsw-alias-state-business-primary,#4176e6) 10%,transparent);color:var(--dsw-alias-state-business-primary,#4176e6)}',
+      '.mem-approval-grant-choice:focus-visible{outline:1px solid var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary));outline-offset:1px}',
       '.mem-approval-reject{display:inline-flex;align-items:center;justify-content:center;height:32px;padding:0 16px;border:1px solid var(--dsw-alias-border-l2,var(--dsw-alias-border-l1));border-radius:8px;background:transparent;color:var(--dsw-alias-label-primary);font-size:13px;font-weight:500;cursor:pointer;transition:background .12s ease,border-color .12s ease,color .12s ease}',
       '.mem-approval-reject:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover-danger,color-mix(in srgb,var(--dsw-alias-state-error-primary,#d33) 10%,transparent));color:var(--dsw-alias-state-error-primary,#d33);border-color:transparent}',
       '.mem-approval-allow{display:inline-flex;align-items:center;justify-content:center;height:32px;padding:0 18px;border:1px solid var(--dsw-alias-state-business-primary,#4176e6);border-radius:8px;background:var(--dsw-alias-state-business-primary,#4176e6);color:var(--dsw-alias-label-primary-foreground);font-size:13px;font-weight:600;cursor:pointer;transition:filter .12s ease}',
@@ -9425,6 +9433,10 @@ window.__ModuleLoader__.load({
       const [collapsed, setCollapsed] = React.useState({})
       // approval id → 用户填写的拒绝原因(0.50.0，可选)。折叠 / 切会话时保留，回答后清掉。
       const [rejectReason, setRejectReason] = React.useState({})
+      // 0.51.0：`${审批 id}:query` / `${审批 id}:description` → 是否展开申请信息全文。
+      const [infoExpanded, setInfoExpanded] = React.useState({})
+      // 0.51.0：`${审批 id}|${scope}` → 用户在该作用域上选的授权（read / write）。
+      const [grantChoice, setGrantChoice] = React.useState({})
       const activeRef = React.useRef(true)
       const sessionRef = React.useRef(sessionId)
       sessionRef.current = sessionId
@@ -9453,6 +9465,8 @@ window.__ModuleLoader__.load({
         setPicked({})
         setCollapsed({})
         setRejectReason({})
+        setInfoExpanded({})
+        setGrantChoice({})
         setError('')
         setBusy('')
         if (typeof sessionId !== 'string' || sessionId === '') return undefined
@@ -9485,7 +9499,7 @@ window.__ModuleLoader__.load({
         : blockMode
         ? 'Agent 想把下列记忆从检索、注入与作用域目录里藏起来（不删除、可随时解除）。按作用域屏蔽、工作区级屏蔽，或目标是硬性规则时都需要你确认。'
         : grantMode
-          ? 'Agent 申请访问可见域外的作用域。默认按 Agent 申请的权限勾选（可自行调整）；授权仅在本会话有效，子 Agent 会继承。'
+          ? ''
           : action === 'write'
             ? 'Agent 想把一条记忆写入可见域外的作用域。允许只对本次调用生效；拒绝则不写入。'
             : action === 'delete'
@@ -9495,14 +9509,42 @@ window.__ModuleLoader__.load({
       // 模型写的用途说明(0.22.0;普通限制下工具层强制提供)。
       const description = typeof pending.description === 'string' ? pending.description.trim() : ''
       const allIds = items.map((item) => item.id)
+      // 0.51.0：grant 模式按作用域分组，每个作用域一个选项、行内「只读 / 可写」互斥单选。
+      // 每个 group 保留它申请的权限 id，默认选 Agent 申请里最高的那个（write > read）。
+      const grantGroups = []
+      if (grantMode) {
+        const byScope = new Map()
+        for (const item of items) {
+          const scope = typeof item.scope === 'string' ? item.scope : ''
+          let group = byScope.get(scope)
+          if (group === undefined) {
+            group = { scope, ids: {}, requested: [] }
+            byScope.set(scope, group)
+          }
+          const permission = item.grantPermission === 'write' ? 'write' : 'read'
+          group.ids[permission] = item.id
+          group.requested.push(permission)
+        }
+        for (const group of byScope.values()) {
+          // 默认选申请里的最高权限：同时申请读写时默认可写（可写包含只读）。
+          const defaultChoice = group.requested.includes('write') ? 'write' : 'read'
+          const key = `${pending.id}|${group.scope}`
+          const stored = grantChoice[key]
+          group.choice = stored === 'read' || stored === 'write' ? stored : defaultChoice
+          grantGroups.push(group)
+        }
+      }
+      const chooseGrant = (scope, permission) => setGrantChoice((prev) => ({ ...prev, [`${pending.id}|${scope}`]: permission }))
+      // grant 模式的最终提交集合 = 每个作用域当前选中的那个权限 id（只读 / 可写二选一）。
+      const grantSelectedIds = grantGroups.map((group) => group.ids[group.choice]).filter((id) => typeof id === 'string')
       // grant 模式默认勾 Agent 申请的权限：申请读就只勾读，申请写就只勾写，
       // 申请读写就两个都勾；用户仍可自行调整。普通读审批默认全选。
       const defaultIds = allIds
       // 多条目才有逐条勾选的意义；grant 模式下 even 1 条也走勾选以明确权限。
       // block 模式同样逐条：用户可能只想藏其中一条，其余留着。
-      const selectable = grantMode ? allIds.length > 0 : blockMode ? allIds.length > 1 : action === 'read' && allIds.length > 1
+      const selectable = grantMode ? grantGroups.length > 0 : blockMode ? allIds.length > 1 : action === 'read' && allIds.length > 1
       const stored = Array.isArray(picked[pending.id]) ? picked[pending.id].filter((id) => allIds.includes(id)) : null
-      const selectedIds = stored === null ? defaultIds : stored
+      const selectedIds = grantMode ? grantSelectedIds : (stored === null ? defaultIds : stored)
       const selectedSet = new Set(selectedIds)
       const selectedCount = selectedIds.length
 
@@ -9558,6 +9600,11 @@ window.__ModuleLoader__.load({
       }
       const allow = () => {
         if (selectable && selectedCount === 0) return
+        // grant 模式永远按每组选中的那一个权限 id 提交（单选，不需要全选老口径）。
+        if (grantMode) {
+          answer('allowed-once', grantSelectedIds.length === allIds.length ? undefined : grantSelectedIds)
+          return
+        }
         answer('allowed-once', selectable ? allIds.filter((id) => selectedSet.has(id)) : undefined)
       }
 
@@ -9587,13 +9634,11 @@ window.__ModuleLoader__.load({
           ? selectable && selectedCount !== allIds.length
             ? `屏蔽选中的 ${selectedCount} 项`
             : '确认屏蔽'
-          : grantMode && selectable && selectedCount !== allIds.length
-            ? `允许选中的 ${selectedCount} 项（本会话）`
-            : grantMode
-              ? '允许授权（本会话）'
-              : selectable && selectedCount !== allIds.length
-                ? `允许选中的 ${selectedCount} 条`
-                : '允许一次'
+          : grantMode
+            ? '允许授权（本会话）'
+            : selectable && selectedCount !== allIds.length
+              ? `允许选中的 ${selectedCount} 条`
+              : '允许一次'
 
       return h('div', {
         className: 'mem-approval',
@@ -9627,22 +9672,44 @@ window.__ModuleLoader__.load({
                   : grantMode
                     ? `工具 ${pending.tool || 'memory'} 申请访问可见域外的作用域`
                     : `工具 ${pending.tool || 'memory'} 请求${actionLabel}可见域外的记忆`),
-                h('div', { className: 'mem-approval-hint' }, actionHint),
-                // 0.50.0：申请信息分区成「标签 + 值」两列网格。标签明确是谁写的：
-                // 「Agent 申请 / 说明」= Agent 的请求理由，「屏蔽目标 / 申请理由」= 目标。
+                actionHint !== ''
+                  ? h('div', { className: 'mem-approval-hint' }, actionHint)
+                  : null,
+                // 0.51.0：申请理由 / 申请说明默认单行省略，点标签或正文展开全文。
                 h('div', { className: 'mem-approval-info' },
-                  h('div', { className: 'mem-approval-info-row' },
-                    h('span', { className: 'mem-approval-info-label' }, blockMode ? '屏蔽目标' : grantMode ? '申请理由' : 'Agent 申请'),
-                    h('span', { className: 'mem-approval-info-value mem-approval-command' }, pending.query || '（未提供）'),
-                  ),
+                  (() => {
+                    const key = `${pending.id}:query`
+                    const open = infoExpanded[key] === true
+                    const text = pending.query || '（未提供）'
+                    return h('div', {
+                      className: 'mem-approval-info-row',
+                      title: open ? '点击收起' : '点击展开全部理由',
+                      onClick: () => setInfoExpanded((prev) => ({ ...prev, [key]: !prev[key] })),
+                    },
+                      h('span', { className: 'mem-approval-info-label' }, blockMode ? '屏蔽目标' : '申请理由'),
+                      h('span', { className: 'mem-approval-info-value mem-approval-command' + (open ? ' expanded' : '') },
+                        h('span', { className: 'mem-approval-info-text' }, text),
+                      ),
+                    )
+                  })(),
                   description !== ''
-                    ? h('div', { className: 'mem-approval-info-row' },
-                        h('span', { className: 'mem-approval-info-label' }, 'Agent 说明'),
-                        h('span', { className: 'mem-approval-info-value mem-approval-desc', title: description }, description),
-                      )
+                    ? (() => {
+                        const key = `${pending.id}:description`
+                        const open = infoExpanded[key] === true
+                        return h('div', {
+                          className: 'mem-approval-info-row',
+                          title: open ? '点击收起' : '点击展开全部说明',
+                          onClick: () => setInfoExpanded((prev) => ({ ...prev, [key]: !prev[key] })),
+                        },
+                          h('span', { className: 'mem-approval-info-label' }, '申请说明'),
+                          h('span', { className: 'mem-approval-info-value mem-approval-desc' + (open ? ' expanded' : '') },
+                            h('span', { className: 'mem-approval-info-text' }, description),
+                          ),
+                        )
+                      })()
                     : null,
                 ),
-                selectable
+                selectable && !grantMode
                   ? h('div', { className: 'mem-approval-bulk' },
                       h('span', null, `已选 ${selectedCount} / ${allIds.length}`),
                       h('span', { className: 'spacer' }),
@@ -9658,7 +9725,28 @@ window.__ModuleLoader__.load({
                       }, '取消全选'),
                     )
                   : null,
-                h('div', { className: 'mem-approval-list' },
+                grantMode
+                  ? h('div', { className: 'mem-approval-list' },
+                      grantGroups.map((group) => h('div', {
+                        className: 'mem-approval-grant-row',
+                        key: group.scope,
+                      },
+                        h('span', {
+                          className: 'mem-approval-grant-name',
+                          title: scopeTitle(group.scope, scopeLabel(group.scope)),
+                        }, scopeLabel(group.scope)),
+                        ['read', 'write'].map((permission) => h('button', {
+                          type: 'button',
+                          key: permission,
+                          className: 'mem-approval-grant-choice' + (group.choice === permission ? ' on' : ''),
+                          'aria-pressed': group.choice === permission,
+                          'aria-label': `${scopeLabel(group.scope)} ${permission === 'write' ? '可写' : '只读'}`,
+                          disabled: busy === pending.id,
+                          onClick: () => chooseGrant(group.scope, permission),
+                        }, permission === 'write' ? '可写' : '只读')),
+                      )),
+                    )
+                  : h('div', { className: 'mem-approval-list' },
                   items.map((item) => {
                     const checked = !selectable || selectedSet.has(item.id)
                     return h('div', {
@@ -9737,36 +9825,31 @@ window.__ModuleLoader__.load({
                   }),
                 ),
               ),
-          // 0.50.0：拒绝原因（可选）。展开详情时出现；折叠时保持卡片简洁，
-          // 想填原因先点「展开」。textArea 有值就随「拒绝」一起提交。
-          !isCollapsed
-            ? h('div', { className: 'mem-approval-reason' },
-                h('label', { className: 'mem-approval-reason-label' },
-                  '拒绝原因',
-                  h('span', { className: 'optional' }, '（可选，填了会告诉 Agent）'),
-                ),
-                h('textarea', {
-                  className: 'mem-approval-reason-input',
-                  rows: 2,
-                  maxLength: 500,
-                  placeholder: '例如：这条记忆与当前任务无关 / 涉及敏感信息，暂不授权',
-                  value: typeof rejectReason[pending.id] === 'string' ? rejectReason[pending.id] : '',
-                  disabled: busy === pending.id,
-                  onChange: (event) => {
-                    const value = event && event.target && typeof event.target.value === 'string' ? event.target.value : ''
-                    setRejectReason((prev) => ({ ...prev, [pending.id]: value }))
-                  },
-                }),
-              )
-            : null,
           error ? h('div', { className: 'mem-approval-err' }, error) : null,
+          // 0.51.0：拒绝原因输入框与「拒绝」按钮合并成底部一个输入条，输入框占满剩余区域。
+          // 只用 placeholder 提示，不再有单独标签 / 说明文字；折叠时也保持可见。
           h('div', { className: 'mem-approval-actionrow' },
-            h('button', {
-              type: 'button',
-              className: 'mem-approval-reject',
-              disabled: busy === pending.id,
-              onClick: () => answer('rejected'),
-            }, '拒绝'),
+            h('div', { className: 'mem-approval-rejectbox' },
+              h('input', {
+                type: 'text',
+                className: 'mem-approval-reason-input',
+                maxLength: 500,
+                placeholder: '拒绝原因（可选）',
+                'aria-label': '拒绝原因（可选）',
+                value: typeof rejectReason[pending.id] === 'string' ? rejectReason[pending.id] : '',
+                disabled: busy === pending.id,
+                onChange: (event) => {
+                  const value = event && event.target && typeof event.target.value === 'string' ? event.target.value : ''
+                  setRejectReason((prev) => ({ ...prev, [pending.id]: value }))
+                },
+              }),
+              h('button', {
+                type: 'button',
+                className: 'mem-approval-reject',
+                disabled: busy === pending.id,
+                onClick: () => answer('rejected'),
+              }, '拒绝'),
+            ),
             h('button', {
               type: 'button',
               className: 'mem-approval-allow',

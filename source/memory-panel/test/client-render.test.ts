@@ -3353,14 +3353,18 @@ test('审批卡:拒绝原因可选填写，随「拒绝」提交，允许时不�
     hooks.runEffects()
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    // 申请理由与拒绝原因分成两块，标签明确区分谁写的。
+    // 0.51.0：申请理由标签统一为「申请理由」，说明改为「申请说明」；
+    // 拒绝原因不再有单独标签，只有输入框的 placeholder。
     const text = textOf(current)
-    assert.ok(text.includes('Agent 申请'), '查询标签改为 Agent 申请')
-    assert.ok(text.includes('Agent 说明') && text.includes('查一条规则'), 'Agent 说明单独成行')
-    assert.ok(text.includes('拒绝原因') && text.includes('可选'), '拒绝原因标注可选')
+    assert.ok(text.includes('申请理由'), '查询标签是申请理由')
+    assert.ok(text.includes('申请说明') && text.includes('查一条规则'), '申请说明单独成行')
 
-    const input = collect(current).find((n) => n.tag === 'textarea' && String(n.props?.className ?? '').includes('mem-approval-reason-input'))
-    assert.ok(input, '展开态有拒绝原因输入框')
+    const input = collect(current).find((n) => n.tag === 'input' && String(n.props?.className ?? '').includes('mem-approval-reason-input'))
+    assert.ok(input, '底部按钮区有拒绝原因输入框')
+    assert.equal(input?.props?.placeholder, '拒绝原因（可选）', '只用 placeholder 提示，无额外标签')
+    const box = collect(current).find((n) => String(n.props?.className ?? '').split(/\s+/).includes('mem-approval-rejectbox'))
+    assert.ok(box, '输入框与拒绝按钮包在同一个输入条里')
+    assert.ok(collect(box).some((n) => String(n.props?.className ?? '').includes('mem-approval-reject')), '拒绝按钮在输入条内')
     ;(input!.props!.onChange as (e: unknown) => void)({ target: { value: '  涉密，暂不授权  ' } })
     await new Promise((resolve) => setTimeout(resolve, 0))
 
@@ -3484,18 +3488,26 @@ test('审批卡:grant 模式默认按 Agent 申请的权限勾选,允许后只�
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     const text = textOf(current)
-    assert.ok(text.includes('申请访问可见域外的作用域'), 'grant 模式用申请文案')
-    assert.ok(text.includes('授权仅在本会话有效'), '说明授权范围')
-    assert.ok(text.includes('只读') && text.includes('可写'), '两种权限都展示')
-    const checks = collect(current).filter((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-approval-check'))
-    assert.deepEqual(checks.map((box) => box.props?.['aria-checked']), [true, true], '默认按申请勾选读与写')
+    assert.ok(!text.includes('授权仅在本会话有效'), '不再显示 grant 模式的第二段说明')
+    // 0.51.0：一个作用域一个选项，行内只读 / 可写互斥单选，默认选申请里的最高权限。
+    const rows = collect(current).filter((n) => String(n.props?.className ?? '').split(/\s+/).includes('mem-approval-grant-row'))
+    assert.equal(rows.length, 1, '一个作用域只有一个选项行')
+    assert.ok(textOf(rows[0]).includes('handbook'), '行内显示作用域')
+    const choices = collect(rows[0]).filter((n) => String(n.props?.className ?? '').includes('mem-approval-grant-choice'))
+    assert.deepEqual(choices.map((c) => textOf(c).trim()), ['只读', '可写'], '行内两种权限选择')
+    assert.deepEqual(choices.map((c) => c.props?.['aria-pressed']), [false, true], '默认选可写（读写申请取最高）')
 
+    // 切成只读后，只提交该作用域的只读权限 id。
+    ;(choices[0]!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const updated = collect(current).filter((n) => String(n.props?.className ?? '').includes('mem-approval-grant-choice'))
+    assert.deepEqual(updated.map((c) => c.props?.['aria-pressed']), [true, false], '切换成只读')
     const allow = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-approval-allow'))
-    assert.ok(String(textOf(allow)).includes('允许授权（本会话）'), '全选时按钮是允许授权')
+    assert.ok(String(textOf(allow)).includes('允许授权（本会话）'), '按钮保持允许授权')
     ;(allow!.props!.onClick as () => void)()
     await new Promise((resolve) => setTimeout(resolve, 0))
     const posted = JSON.parse(String(calls[1]?.init?.body ?? '{}')) as { id: string; outcome: string; allowedIds?: string[] }
-    assert.deepEqual(posted, { id: 'g1', outcome: 'allowed-once' }, '全选 = 老口径，不带 allowedIds')
+    assert.deepEqual(posted, { id: 'g1', outcome: 'allowed-once', allowedIds: ['grant:handbook:read'] }, '只提交选中的只读权限 id')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch
   }
@@ -3536,8 +3548,54 @@ test('审批卡:grant 模式只申请写权限时默认只勾可写项', async (
     hooks.runEffects()
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    const checks = collect(current).filter((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-approval-check'))
-    assert.deepEqual(checks.map((box) => box.props?.['aria-checked']), [true], '默认只勾 Agent 申请的写权限')
+    const choices = collect(current).filter((n) => String(n.props?.className ?? '').includes('mem-approval-grant-choice'))
+    assert.deepEqual(choices.map((c) => c.props?.['aria-pressed']), [false, true], '只申请写权限时默认选可写')
+  } finally {
+    ;(globalThis as Record<string, unknown>).fetch = savedFetch
+  }
+  hooks.resetAll()
+})
+
+test('审批卡:申请理由与申请说明默认单行省略，点击可展开全文', async () => {
+  const { exports, hooks } = await loadBundle()
+  hooks.resetAll()
+  const Dock = (exports.__test as { MemoryApprovalDock: (p: Record<string, unknown>) => unknown }).MemoryApprovalDock
+  const longReason = '需要读取团队约定的发布与回滚流程' + '补充细节'.repeat(30)
+  const longDesc = '这次调用是为了核对历史决策' + '以及注意事项'.repeat(30)
+  const approval = {
+    id: 'a1', sessionId: 's1', tool: 'memory_search', action: 'read',
+    query: longReason, description: longDesc,
+    items: [{ id: 'abcdef1234567890', scope: 'global', kind: 'rule', content: '范围外规则', tags: [], importance: 1, updatedAt: 1, reason: 'scope' }],
+    createdAt: 1, expiresAt: 2,
+  }
+  const savedFetch = (globalThis as Record<string, unknown>).fetch
+  ;(globalThis as Record<string, unknown>).fetch = async (url: string, init?: { method?: string }) => {
+    if (init === undefined || init.method === 'GET') {
+      return { status: 200, json: async () => ({ ok: true, value: { approvals: [approval] } }) }
+    }
+    return { status: 200, json: async () => ({ ok: true, value: { answered: true } }) }
+  }
+  try {
+    let current: RenderNode | null = null
+    const element = () => hooks.React.createElement(Dock, { sessionId: 's1' })
+    hooks.setRerender(() => { current = render(element(), hooks) })
+    current = render(element(), hooks)
+    hooks.runEffects()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const rows = collect(current).filter((n) => String(n.props?.className ?? '').split(/\s+/).includes('mem-approval-info-row'))
+    assert.equal(rows.length, 2, '理由与说明各一行')
+    const valueOf = (row: RenderNode) => collect(row).find((n) => String(n.props?.className ?? '').includes('mem-approval-info-value'))!
+    assert.ok(!String(valueOf(rows[0]).props?.className ?? '').includes('expanded'), '理由默认收起')
+    assert.ok(!String(valueOf(rows[1]).props?.className ?? '').includes('expanded'), '说明默认收起')
+    assert.ok(textOf(rows[0]).includes('申请理由'), '第一行标签是申请理由')
+    assert.ok(textOf(rows[1]).includes('申请说明'), '第二行标签是申请说明')
+
+    ;(rows[0]!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const after = collect(current).filter((n) => String(n.props?.className ?? '').split(/\s+/).includes('mem-approval-info-row'))
+    assert.ok(String(valueOf(after[0]).props?.className ?? '').includes('expanded'), '点理由行展开全文')
+    assert.ok(!String(valueOf(after[1]).props?.className ?? '').includes('expanded'), '说明仍收起')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch
   }
@@ -3670,7 +3728,7 @@ test('审批卡:全选/取消全选、展示 Agent 说明、点记忆 ID 跳到�
     hooks.runEffects()
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    assert.ok(textOf(current).includes('Agent 说明') && textOf(current).includes('查发布流程是否踩过坑'), '审批卡展示工具调用的 description（标签与正文分行）')
+    assert.ok(textOf(current).includes('申请说明') && textOf(current).includes('查发布流程是否踩过坑'), '审批卡展示工具调用的 description（标签与正文分行）')
     assert.ok(bulk('全选') && bulk('取消全选'), '逐条勾选之外还有全选 / 取消全选')
 
     ;(bulk('取消全选')!.props!.onClick as () => void)()
@@ -3750,16 +3808,16 @@ test('审批卡:整行点击即可选中条目,详情可折叠但动作行仍可
     assert.equal(toggle!.props?.['aria-expanded'], true)
     ;(toggle!.props!.onClick as () => void)()
     await new Promise((resolve) => setTimeout(resolve, 0))
-    assert.ok(!textOf(current).includes('Agent 申请'), '折叠后隐藏详情')
+    assert.ok(!textOf(current).includes('申请理由'), '折叠后隐藏详情')
     assert.ok(!textOf(current).includes('范围外规则 A'), '折叠后隐藏记忆摘要')
-    assert.ok(!textOf(current).includes('拒绝原因'), '折叠后隐藏拒绝原因输入框')
+    assert.ok(collect(current).some((n) => String(n.props?.className ?? '').includes('mem-approval-reason-input')), '折叠后拒绝原因输入框仍在底部')
     assert.ok(textOf(current).includes('等待审批'), 'strip 仍在')
     assert.ok(textOf(current).includes('拒绝') && textOf(current).includes('允许选中的 1 条'), '折叠后仍可直接审批')
     assert.equal(collect(current).find((n) => String(n.props?.className ?? '').includes('mem-approval-toggle'))?.props?.['aria-expanded'], false)
 
     ;((collect(current).find((n) => String(n.props?.className ?? '').includes('mem-approval-toggle'))!).props!.onClick as () => void)()
     await new Promise((resolve) => setTimeout(resolve, 0))
-    assert.ok(textOf(current).includes('Agent 申请'), '再点一次恢复展开')
+    assert.ok(textOf(current).includes('申请理由'), '再点一次恢复展开')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch
   }
