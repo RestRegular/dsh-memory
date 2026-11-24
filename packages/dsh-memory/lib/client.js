@@ -9509,8 +9509,9 @@ window.__ModuleLoader__.load({
       // 模型写的用途说明(0.22.0;普通限制下工具层强制提供)。
       const description = typeof pending.description === 'string' ? pending.description.trim() : ''
       const allIds = items.map((item) => item.id)
-      // 0.51.0：grant 模式按作用域分组，每个作用域一个选项、行内「只读 / 可写」互斥单选。
-      // 每个 group 保留它申请的权限 id，默认选 Agent 申请里最高的那个（write > read）。
+      // 0.51.1：grant 模式按作用域分组，每个作用域一个选项、行内「可读 / 可写」两个按钮。
+      // 状态用三态表示：none（都不选）/ read（只可读）/ write（可读 + 可写）。
+      // 硬约束：选可写必然带上可读；取消可读会一并取消可写。
       const grantGroups = []
       if (grantMode) {
         const byScope = new Map()
@@ -9526,17 +9527,34 @@ window.__ModuleLoader__.load({
           group.requested.push(permission)
         }
         for (const group of byScope.values()) {
-          // 默认选申请里的最高权限：同时申请读写时默认可写（可写包含只读）。
+          // 默认按 Agent 申请：申请了可写就选可写（自动含可读），否则只读。
           const defaultChoice = group.requested.includes('write') ? 'write' : 'read'
           const key = `${pending.id}|${group.scope}`
           const stored = grantChoice[key]
-          group.choice = stored === 'read' || stored === 'write' ? stored : defaultChoice
+          group.choice = stored === 'none' || stored === 'read' || stored === 'write' ? stored : defaultChoice
           grantGroups.push(group)
         }
       }
-      const chooseGrant = (scope, permission) => setGrantChoice((prev) => ({ ...prev, [`${pending.id}|${scope}`]: permission }))
-      // grant 模式的最终提交集合 = 每个作用域当前选中的那个权限 id（只读 / 可写二选一）。
-      const grantSelectedIds = grantGroups.map((group) => group.ids[group.choice]).filter((id) => typeof id === 'string')
+      // 点「可读」：已选则整个关掉（连带可写），未选则只选可读。
+      // 点「可写」：已选则退回只读，未选则选中可写（自动带上可读）。
+      const toggleGrant = (scope, permission) => setGrantChoice((prev) => {
+        const key = `${pending.id}|${scope}`
+        const current = prev[key] === 'none' || prev[key] === 'read' || prev[key] === 'write'
+          ? prev[key]
+          : (grantGroups.find((group) => group.scope === scope)?.choice ?? 'read')
+        let next
+        if (permission === 'read') next = current === 'none' ? 'read' : 'none'
+        else next = current === 'write' ? 'read' : 'write'
+        return { ...prev, [key]: next }
+      })
+      // 提交集合 = 每个作用域按当前三态展开的权限 id（write 时 read + write 都提交）。
+      const grantSelectedIds = grantGroups.flatMap((group) => {
+        if (group.choice === 'none') return []
+        const ids = []
+        if (typeof group.ids.read === 'string') ids.push(group.ids.read)
+        if (group.choice === 'write' && typeof group.ids.write === 'string') ids.push(group.ids.write)
+        return ids
+      }).filter((id) => typeof id === 'string')
       // grant 模式默认勾 Agent 申请的权限：申请读就只勾读，申请写就只勾写，
       // 申请读写就两个都勾；用户仍可自行调整。普通读审批默认全选。
       const defaultIds = allIds
@@ -9600,9 +9618,9 @@ window.__ModuleLoader__.load({
       }
       const allow = () => {
         if (selectable && selectedCount === 0) return
-        // grant 模式永远按每组选中的那一个权限 id 提交（单选，不需要全选老口径）。
+        // grant 模式按三态展开的权限 id 提交；none 会把该作用域整组排除。
         if (grantMode) {
-          answer('allowed-once', grantSelectedIds.length === allIds.length ? undefined : grantSelectedIds)
+          answer('allowed-once', grantSelectedIds.length === 0 ? undefined : grantSelectedIds)
           return
         }
         answer('allowed-once', selectable ? allIds.filter((id) => selectedSet.has(id)) : undefined)
@@ -9735,15 +9753,24 @@ window.__ModuleLoader__.load({
                           className: 'mem-approval-grant-name',
                           title: scopeTitle(group.scope, scopeLabel(group.scope)),
                         }, scopeLabel(group.scope)),
-                        ['read', 'write'].map((permission) => h('button', {
+                        h('button', {
                           type: 'button',
-                          key: permission,
-                          className: 'mem-approval-grant-choice' + (group.choice === permission ? ' on' : ''),
-                          'aria-pressed': group.choice === permission,
-                          'aria-label': `${scopeLabel(group.scope)} ${permission === 'write' ? '可写' : '只读'}`,
+                          className: 'mem-approval-grant-choice' + (group.choice !== 'none' ? ' on' : ''),
+                          'aria-pressed': group.choice !== 'none',
+                          'aria-label': `${scopeLabel(group.scope)} 可读`,
                           disabled: busy === pending.id,
-                          onClick: () => chooseGrant(group.scope, permission),
-                        }, permission === 'write' ? '可写' : '只读')),
+                          title: '取消可读会一并取消可写',
+                          onClick: () => toggleGrant(group.scope, 'read'),
+                        }, '可读'),
+                        h('button', {
+                          type: 'button',
+                          className: 'mem-approval-grant-choice' + (group.choice === 'write' ? ' on' : ''),
+                          'aria-pressed': group.choice === 'write',
+                          'aria-label': `${scopeLabel(group.scope)} 可写`,
+                          disabled: busy === pending.id,
+                          title: '选可写会自动带上可读',
+                          onClick: () => toggleGrant(group.scope, 'write'),
+                        }, '可写'),
                       )),
                     )
                   : h('div', { className: 'mem-approval-list' },

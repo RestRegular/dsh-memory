@@ -714,6 +714,8 @@ export interface ScopeGrantRequestItemResult {
 export interface ScopeGrantRequestResult {
   results: ScopeGrantRequestItemResult[]
   outcome?: VisibilityApprovalOutcome | 'unavailable'
+  /** 0.51.1：用户拒绝时填写的原因（可选），回给模型说明真实拒绝理由。 */
+  reason?: string
   /** 本次真正新写入 / 合并的会话授权。 */
   grants: ScopeGrant[]
 }
@@ -3334,7 +3336,12 @@ export class LocalMemoryService implements MemoryServiceApi {
       for (const item of pending) {
         results.push({ scope: item.scope, permission: item.permission, status })
       }
-      return { results, outcome: answer.outcome, grants: [] }
+      return {
+        results,
+        outcome: answer.outcome,
+        ...(answer.reason !== undefined ? { reason: answer.reason } : {}),
+        grants: [],
+      }
     }
 
     const approved = answer.allowedIds === undefined

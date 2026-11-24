@@ -215,6 +215,8 @@ export interface ScopeGrantResultItemView {
 export interface ScopeGrantRequestResultView {
   results: ScopeGrantResultItemView[]
   outcome?: 'allowed-once' | 'rejected' | 'timeout' | 'unavailable'
+  /** 0.51.1：用户拒绝时填写的原因（可选），渲染时附在结果末尾。 */
+  reason?: string
   /** 0.48.0：target_session 授权时回显目标会话与最终上限。 */
   target_session?: string
   cap?: { sessionId: string; scopes: SubagentScopePermissionView[] }
@@ -2367,6 +2369,7 @@ export function memoryScopesTool(opts: MemoryToolsOptions): ToolSpec<ScopesArgs,
           return {
             results: result.results,
             ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
+            ...(result.reason !== undefined ? { reason: result.reason } : {}),
           }
         } catch (error) {
           throw toolError(error)

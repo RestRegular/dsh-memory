@@ -186,7 +186,9 @@ export function renderScopesResult(value: ScopesToolResult, label: ScopeLabel): 
     const body = value.results.map((item) =>
       `- ${label(item.scope)}：${item.permission === 'read' ? '只读' : '写入 / 删除'} → ${statusText(item.status)}${reasonText(item.reason)}`,
     ).join('\n')
-    return `作用域权限申请结果：\n${body}`
+    // 0.51.1：把用户在拒绝框里填的原因回给模型，否则它只知道"用户拒绝"、不知道为什么。
+    const tail = value.reason !== undefined && value.reason !== '' ? `\n用户给出的拒绝原因：${value.reason}` : ''
+    return `作用域权限申请结果：\n${body}${tail}`
   }
   // edit（0.29.0）：只回「改成了什么」。没动过的字段不出现，空串表示清空 / 移除。
   if ('scope' in value) {

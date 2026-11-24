@@ -314,6 +314,19 @@ test('渲染：grant 结果显示授予 / 不可申请及原因', () => {
   assert.match(text, /secret-notes：写入 \/ 删除 → 不可申请（绝对限制）/)
 })
 
+test('渲染：grant 被拒时把用户填写的拒绝原因回给模型', () => {
+  const text = renderScopesResult({
+    results: [
+      { scope: 'handbook', permission: 'read', status: 'denied' },
+      { scope: 'handbook', permission: 'write', status: 'denied' },
+    ],
+    outcome: 'rejected',
+    reason: '再测试说明/理由比较长的情况',
+  }, (scope) => scope)
+  assert.match(text, /handbook：只读 → 用户拒绝/)
+  assert.match(text, /用户给出的拒绝原因：再测试说明\/理由比较长的情况/)
+})
+
 test('memory_save 把 scopeDescription / scopeRule 传给 provider', async () => {
   let captured: Record<string, unknown> | undefined
   const saveTool = memorySaveTool({

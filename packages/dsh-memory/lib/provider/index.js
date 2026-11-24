@@ -714,6 +714,8 @@ export function resolveConfig(config                    = {})                 {
                                           
                                         
                                                      
+                                            
+                 
                            
                       
  
@@ -3334,7 +3336,12 @@ export class LocalMemoryService                             {
       for (const item of pending) {
         results.push({ scope: item.scope, permission: item.permission, status })
       }
-      return { results, outcome: answer.outcome, grants: [] }
+      return {
+        results,
+        outcome: answer.outcome,
+        ...(answer.reason !== undefined ? { reason: answer.reason } : {}),
+        grants: [],
+      }
     }
 
     const approved = answer.allowedIds === undefined

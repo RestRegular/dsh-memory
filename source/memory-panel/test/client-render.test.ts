@@ -3489,25 +3489,35 @@ test('审批卡:grant 模式默认按 Agent 申请的权限勾选,允许后只�
 
     const text = textOf(current)
     assert.ok(!text.includes('授权仅在本会话有效'), '不再显示 grant 模式的第二段说明')
-    // 0.51.0：一个作用域一个选项，行内只读 / 可写互斥单选，默认选申请里的最高权限。
+    // 0.51.1：一个作用域一个选项，行内可读 / 可写两个按钮，选可写自动带上可读。
     const rows = collect(current).filter((n) => String(n.props?.className ?? '').split(/\s+/).includes('mem-approval-grant-row'))
     assert.equal(rows.length, 1, '一个作用域只有一个选项行')
     assert.ok(textOf(rows[0]).includes('handbook'), '行内显示作用域')
     const choices = collect(rows[0]).filter((n) => String(n.props?.className ?? '').includes('mem-approval-grant-choice'))
-    assert.deepEqual(choices.map((c) => textOf(c).trim()), ['只读', '可写'], '行内两种权限选择')
-    assert.deepEqual(choices.map((c) => c.props?.['aria-pressed']), [false, true], '默认选可写（读写申请取最高）')
+    assert.deepEqual(choices.map((c) => textOf(c).trim()), ['可读', '可写'], '行内两种权限按钮')
+    assert.deepEqual(choices.map((c) => c.props?.['aria-pressed']), [true, true], '读写申请默认可读 + 可写')
 
-    // 切成只读后，只提交该作用域的只读权限 id。
-    ;(choices[0]!.props!.onClick as () => void)()
+    // 取消可写 → 退回只读，提交只读 id。
+    ;(choices[1]!.props!.onClick as () => void)()
     await new Promise((resolve) => setTimeout(resolve, 0))
-    const updated = collect(current).filter((n) => String(n.props?.className ?? '').includes('mem-approval-grant-choice'))
-    assert.deepEqual(updated.map((c) => c.props?.['aria-pressed']), [true, false], '切换成只读')
+    const afterWrite = collect(current).filter((n) => String(n.props?.className ?? '').includes('mem-approval-grant-choice'))
+    assert.deepEqual(afterWrite.map((c) => c.props?.['aria-pressed']), [true, false], '取消可写后只读仍选中')
+    // 再取消可读 → 连带清空可写，整组不选。
+    ;(afterWrite[0]!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const afterRead = collect(current).filter((n) => String(n.props?.className ?? '').includes('mem-approval-grant-choice'))
+    assert.deepEqual(afterRead.map((c) => c.props?.['aria-pressed']), [false, false], '取消可读后两个都不选')
+
     const allow = collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-approval-allow'))
-    assert.ok(String(textOf(allow)).includes('允许授权（本会话）'), '按钮保持允许授权')
-    ;(allow!.props!.onClick as () => void)()
+    assert.equal(allow?.props?.disabled, true, '整组不选时允许按钮禁用')
+
+    // 重新选上可读，提交时只带该作用域的只读 id。
+    ;(afterRead[0]!.props!.onClick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    ;(collect(current).find((n) => n.tag === 'button' && String(n.props?.className ?? '').includes('mem-approval-allow'))!.props!.onClick as () => void)()
     await new Promise((resolve) => setTimeout(resolve, 0))
     const posted = JSON.parse(String(calls[1]?.init?.body ?? '{}')) as { id: string; outcome: string; allowedIds?: string[] }
-    assert.deepEqual(posted, { id: 'g1', outcome: 'allowed-once', allowedIds: ['grant:handbook:read'] }, '只提交选中的只读权限 id')
+    assert.deepEqual(posted, { id: 'g1', outcome: 'allowed-once', allowedIds: ['grant:handbook:read'] }, '只提交该作用域的只读 id')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch
   }
@@ -3549,7 +3559,7 @@ test('审批卡:grant 模式只申请写权限时默认只勾可写项', async (
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     const choices = collect(current).filter((n) => String(n.props?.className ?? '').includes('mem-approval-grant-choice'))
-    assert.deepEqual(choices.map((c) => c.props?.['aria-pressed']), [false, true], '只申请写权限时默认选可写')
+    assert.deepEqual(choices.map((c) => c.props?.['aria-pressed']), [true, true], '只申请写权限时默认可读 + 可写（可写自动含可读）')
   } finally {
     ;(globalThis as Record<string, unknown>).fetch = savedFetch
   }

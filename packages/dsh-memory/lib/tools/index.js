@@ -215,6 +215,8 @@ import { resolveTimeWindow, withinTimeWindow,                 } from '../provide
                                               
                                      
                                                                    
+                                         
+                 
                                               
                          
                                                                     
@@ -2367,6 +2369,7 @@ export function memoryScopesTool(opts                    )                      
           return {
             results: result.results,
             ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
+            ...(result.reason !== undefined ? { reason: result.reason } : {}),
           }
         } catch (error) {
           throw toolError(error)
