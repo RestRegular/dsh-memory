@@ -2,6 +2,15 @@
 
 本项目的版本记录。安装 id 与 npm 版本一一对应。
 
+## 0.47.0 — 轮末提醒可设为每轮固定或按最近工具调用判断
+
+- **新功能**：面板「记忆 → 设置 → 轮末提醒」卡片新增两个设置（只在这张卡里）：
+  - **触发方式**（`turnEnd.mode`）：`每轮固定提醒`（`always`，默认，旧行为）或 `按最近工具调用判断`（`smart`）。
+  - **回看调用次数**（`turnEnd.checkLastCalls`）：smart 模式下检查上一轮末尾多少次工具调用，默认 **5** 次（可设 1–50）。
+- **smart 口径**：轮末（`agent/turn-stopping`）检查上一轮末尾 `checkLastCalls` 次工具调用；若其中出现过 `memory_save`，说明结论已落盘，**跳过本次提醒**（下一轮开头不再追加那句「有结论就记一条」）。没有 `memory_save` 或它在回看窗口之外时照常提醒。工具调用跟踪放在自动召回闸门前，自动召回关闭时也能正确判断。
+- **兼容性**：老 `settings.json` 没有新字段时按 `always` + 5 次处理；`mode` 非 `smart` 一律回 `always`，`checkLastCalls` 越界夹紧 / 脏数据回退 5。`always` 模式行为与旧版完全一致。
+- 回归守卫：`inject-settings.test.ts` 新增默认/夹紧/脏数据用例，`apply-audit.test.ts` 新增 4 条端到端用例（末尾含 save 跳过 / save 在窗口外仍提醒 / 无 save 仍提醒 / always 模式照常提醒）。全套 736 例 735 pass / 1 skipped。
+
 ## 0.46.0 — 审批卡按申请权限勾选 + 权限列表不列已归档作用域
 
 - **审批卡**：`memory_scopes(action="request")` 的权限审批卡不再一律只勾只读，改为默认按 Agent 在 `permissions` 里申请的权限勾选——申请读就只勾读，申请写就只勾写，申请读写就两个都勾；用户仍可自行调整后批准。全选时按钮回到「允许授权（本会话）」老口径，不带 `allowedIds`。

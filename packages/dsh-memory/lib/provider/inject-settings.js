@@ -129,6 +129,14 @@ export const DEFAULT_AUTO_RECALL_TAGS           = [
                                   
                                            
                   
+     
+          
+                                   
+                                                      
+     
+                          
+                                      
+                        
                                
                 
  
@@ -195,7 +203,7 @@ export const defaultInjectSettings                 = {
     tags: DEFAULT_AUTO_RECALL_TAGS,
     useMemoryTags: true,
   },
-  turnEnd: { enabled: false, prompt: DEFAULT_TURN_END_PROMPT },
+  turnEnd: { enabled: false, mode: 'always', checkLastCalls: 5, prompt: DEFAULT_TURN_END_PROMPT },
   sidebar: { enabled: false },
   organize: { prompt: DEFAULT_ORGANIZE_PROMPT },
 }
@@ -307,6 +315,8 @@ export function normalizeInjectSettings(raw         , base                 = def
     },
     turnEnd: {
       enabled: bool(turnEnd.enabled, base.turnEnd.enabled),
+      mode: turnEnd.mode === 'smart' ? 'smart' : 'always',
+      checkLastCalls: clampInt(turnEnd.checkLastCalls, 1, 50, base.turnEnd.checkLastCalls),
       prompt: resolvePrompt(turnEnd.prompt, DEFAULT_TURN_END_PROMPT),
     },
     sidebar: { enabled: bool(sidebar.enabled, base.sidebar.enabled) },
